@@ -1,0 +1,15 @@
+{
+  "name": "vk-ad-skip-api",
+  "version": "1.0.0",
+  "main": "server.js",
+  "repository": "git@github.com:odedohbest/vk-ad-skip-api.git",
+  "author": "odedohbest <odedohbest@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "sequelize": "^6.32.1"
+  },
+  "devDependencies": {
+    "sequelize-cli": "^6.6.1"
+  }
+}
