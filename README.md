@@ -1,0 +1,1 @@
+# native-ad-skip-api
