@@ -1,9 +1,13 @@
-const db = require('../db');
+// const db = require('../db');
+const Video = require('../models/video')
 
-function findOrCreate(video_native_id) {
-    return db.Video.findOrCreate({
-        where: {
-            native_id: video_native_id
-        }
-    });
+const findOrCreate = async (video_native_id) => {
+  // TODO: Video.findOrCreate is not a function
+  const [user, created] = await Video.findOrCreate({
+    where: {
+      native_id: video_native_id
+    }
+  });
 }
+
+module.exports = { findOrCreate }
