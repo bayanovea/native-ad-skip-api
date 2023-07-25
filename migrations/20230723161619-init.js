@@ -30,7 +30,7 @@ module.exports = {
         autoIncrement: true
       },
       video_id: {
-        type: Sequelize.CHAR(20),
+        type: Sequelize.INTEGER,
         references: {
           model: 'video',
           key: 'id'
@@ -57,7 +57,7 @@ module.exports = {
         autoIncrement: true
       },
       video_id: {
-        type: Sequelize.CHAR(20),
+        type: Sequelize.INTEGER,
         references: {
           model: 'video',
           key: 'id'
