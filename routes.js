@@ -1,67 +1,97 @@
 const express = require('express');
 const router = express.Router();
-const videoRepository = require('./repository/video_repository');
-const videoCalculatedRepository = require('./repository/video_calculated_repository');
-const Markup = require('./models/Markup');
+const db = require('./db');
 
-router.get('/video-calculated', (req, res) => {
-    if (!req.query.video_id || typeof req.query.video_id !== 'string') {
-        res.status(400).send('Bad request');
-        return;
-    }
+router.get('/video-calculated', async (req, res) => {
+    try {
+        if (!req.query.video_id || typeof req.query.video_id !== 'string') {
+            res.status(400).send('Bad request');
+            return;
+        }
 
-    videoCalculatedRepository.findByNativeVideoId(req.query.video_id)
-        .then((video) => {
-            if (!video) {
-                res.status(404).send('Not found');
-                return;
-            }
-
-            res.json(video);
-        })
-        .catch((err) => {
-            console.error(err);
-            res.status(500).send('Internal server error');
+        const video = await db.Video.findOne({
+            where: { native_id: req.query.video_id }
         });
+
+        if (!video) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        const markups = await db.Markup.findAll({
+            where: { video_id: String(video.id) }
+        });
+
+        let resData = [];
+
+        for (const markup of markups) {
+            const markupTimeIntervals = await db.MarkupTimeInterval.findAll({
+                where: { markup_id: String(markup.id) }
+            });
+
+            for (const markupTimeInterval of markupTimeIntervals) {
+                resData.push({
+                    category: markup.category?.category,
+                    start: markupTimeInterval.start,
+                    end: markupTimeInterval.end
+                });
+            }
+        }
+
+        console.log(resData);
+        res.status(200).send(resData);
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).send('Internal Server Error');
+    }
 });
 
-router.post('/markup', (req, res) => {
-    if (!req.body.video_id || typeof req.body.video_id !== 'string') {
-        res.status(400).send('Bad request');
-        return;
-    }
-    if (!req.body.user_id || typeof req.body.user_id !== 'number') {
-        res.status(400).send('Bad request');
-        return;
-    }
-    if (!req.body.data || typeof req.body.data !== 'object') {
-        res.status(400).send('Bad request');
-        return;
-    }
-    if (!req.body.data.intervals) {
-        res.status(400).send('Bad request');
-        return;
-    }
-    
-    let video = videoRepository.findOrCreate(req.body.video_id);
+router.post('/markup', async (req, res) => {
+    try {
+        if (!req.body.video_id || typeof req.body.video_id !== 'string') {
+            res.status(400).send('Bad request');
+            return;
+        }
+        if (!req.body.user_id || typeof req.body.user_id !== 'number') {
+            res.status(400).send('Bad request');
+            return;
+        }
+        if (!req.body.data || typeof req.body.data !== 'object') {
+            res.status(400).send('Bad request');
+            return;
+        }
+        if (!req.body.data.intervals) {
+            res.status(400).send('Bad request');
+            return;
+        }
 
-    sequelize.transaction(async (t) => {
-        const Markup = Markup.create({
+        const [video, created] = await db.Video.findOrCreate({
+            where: { native_id: req.body.video_id }
+        });
+
+        const markup = await db.Markup.create({
             video_id: video.id,
             user_id: req.body.user_id,
             category_id: req.body.category_id
         });
-    
-        data.intervals.forEach(interval => {
-            const MarkupInterval = MarkupInterval.create({
-                markup_id: Markup.id,
+
+        for (const interval of req.body.data.intervals) {
+            const markupInterval = await db.MarkupTimeInterval.create({
+                markup_id: markup.id,
                 start: interval.start,
                 end: interval.end
             });
-        });
-    });
 
-    res.status(201).send('Created');
+            console.log(markupInterval);
+        }
+
+        res.status(201).send('Created');
+
+    } catch (error) {
+        console.error('Failed to create a new record : ', error);
+        res.status(500).send('Internal Server Error');
+    }
 });
 
 module.exports = router;
