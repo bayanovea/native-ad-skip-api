@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const db = require('./db');
 
+router.get('/', (req, res, next) => {
+    res.send({
+        status: 'ok'
+    })
+})
+
 router.get('/video-calculated', async (req, res) => {
     try {
         if (!req.query.video_id || typeof req.query.video_id !== 'string') {
@@ -31,7 +37,7 @@ router.get('/video-calculated', async (req, res) => {
 
             for (const markupTimeInterval of markupTimeIntervals) {
                 resData.push({
-                    category: markup.category?.category,
+                    category_id: markup.category_id,
                     start: markupTimeInterval.start,
                     end: markupTimeInterval.end
                 });
