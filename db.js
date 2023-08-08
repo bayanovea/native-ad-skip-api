@@ -21,13 +21,13 @@ const Markup = db.define("markup", {
 });
 
 const MarkupCategory = db.define("markup_category", {
-    category: DataTypes.ENUM('sponsor', 'subscribe')
+    category: DataTypes.ENUM('intro', 'sponsor', 'self_promotion', 'credits')
 });
 
 const MarkupTimeInterval = db.define("markup_time_interval", {
     markup_id: DataTypes.INTEGER,
-    start: DataTypes.INTEGER,
-    end: DataTypes.INTEGER
+    start: DataTypes.FLOAT,
+    end: DataTypes.FLOAT
 });
 
 const Video = db.define("video", {
