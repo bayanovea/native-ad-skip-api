@@ -76,9 +76,23 @@ VideoCalculated.belongsTo(Video, {
     as: 'video'
 });
 
+/**
+ * Миграция, создаёт категории
+ * @returns {Promise<void>}
+ */
+const migrateCategories = async () => {
+    await MarkupCategory.create({ category: 'intro' })
+    await MarkupCategory.create({ category: 'sponsor' })
+    await MarkupCategory.create({ category: 'self_promotion' })
+    await MarkupCategory.create({ category: 'credits' })
+}
 
-db.sync().then(() => {
+db.sync().then(async () => {
     console.log('Tables schemas synced');
+    const categories = await MarkupCategory.findAll()
+    if (!categories.length) {
+        migrateCategories()
+    }
 }).catch((error) => {
     console.error('Tables schemas sync error: ', error);
 });
