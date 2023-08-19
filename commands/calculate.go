@@ -113,6 +113,8 @@ func main() {
 	}
 
 	// Insert video_calculated to DB
+	var allData []map[string]interface{}
+
 	for categoryId, level1 := range intervals {
 		for _, level2 := range level1 {
 			data := map[string]interface{}{
@@ -120,24 +122,25 @@ func main() {
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
 			}
-
-			jsonData, err := json.Marshal(data)
-			if err != nil {
-				log.Fatalf("Ошибка при преобразовании в JSON: %v", err)
-			}
-
-			insertVideoCalculatedSql := `
-				INSERT INTO video_calculateds (video_id, data, "createdAt", "updatedAt")
-				VALUES ($1, $2, now(), now())
-	  		`
-
-			insert, err := db.Query(insertVideoCalculatedSql, videoId, jsonData)
-			if err != nil {
-				panic(err)
-			}
-			defer insert.Close()
+			allData = append(allData, data)
 		}
 	}
+
+	jsonData, err := json.Marshal(allData)
+	if err != nil {
+		log.Fatalf("Ошибка при преобразовании в JSON: %v", err)
+	}
+
+	insertVideoCalculatedSql := `
+		INSERT INTO video_calculateds (video_id, data, "createdAt", "updatedAt")
+		VALUES ($1, $2, now(), now())
+	`
+
+	insert, err := db.Query(insertVideoCalculatedSql, videoId, jsonData)
+	if err != nil {
+		panic(err)
+	}
+	defer insert.Close()
 }
 
 func connectDb() *sql.DB {

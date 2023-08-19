@@ -24,29 +24,17 @@ router.get('/video-calculated', async (req, res) => {
             return;
         }
 
-        const markups = await db.Markup.findAll({
+        const videoCalculated = await db.VideoCalculated.findOne({
             where: { video_id: String(video.id) }
         });
 
-        let resData = [];
-
-        for (const markup of markups) {
-            const markupTimeIntervals = await db.MarkupTimeInterval.findAll({
-                where: { markup_id: String(markup.id) }
-            });
-
-            for (const markupTimeInterval of markupTimeIntervals) {
-                resData.push({
-                    category_id: markup.category_id,
-                    start: markupTimeInterval.start,
-                    end: markupTimeInterval.end
-                });
-            }
+        if (!videoCalculated) {
+            res.status(204).send();
+            return;
         }
 
-        console.log(resData);
-        res.status(200).send(resData);
-
+        console.log(videoCalculated.data);
+        res.status(200).send(videoCalculated.data);
     } catch (error) {
         console.error(error);
         res.status(500).send('Internal Server Error');
