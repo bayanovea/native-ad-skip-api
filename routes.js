@@ -47,7 +47,7 @@ router.post('/markup', async (req, res) => {
             res.status(400).send('Bad request');
             return;
         }
-        if (!req.body.user_id || typeof req.body.user_id !== 'number') {
+        if (!req.body.user_id || typeof req.body.user_id !== 'string') {
             res.status(400).send('Bad request');
             return;
         }
