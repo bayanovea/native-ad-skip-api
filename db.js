@@ -17,7 +17,11 @@ db.authenticate()
 const Markup = db.define("markup", {
     video_id: DataTypes.INTEGER,
     user_id: DataTypes.CHAR(36),
-    category_id: DataTypes.INTEGER
+    category_id: DataTypes.INTEGER,
+    is_new: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    }
 });
 
 const MarkupCategory = db.define("markup_category", {
