@@ -24,23 +24,60 @@ type IntervalAggregated struct {
 }
 
 func main() {
-	if err := godotenv.Load("../.env"); err != nil {
+	if err := godotenv.Load("./.env"); err != nil {
 		panic(err)
 	}
 
 	db := connectDb()
 	defer db.Close()
 
+	videoIds := getVideoIds(db)
+
+	for _, videoId := range videoIds {
+		fmt.Println("Calculate video", videoId)
+		clearOldVideoCalculated(db, videoId)
+		intervals := calculateIntervals(db, videoId)
+		insertVideoCalculated(db, videoId, intervals)
+		updateIsNew(db, videoId)
+	}
+}
+
+/**
+ * Get video ids from command line argument or if it is empty, get all video ids with new markups
+ */
+func getVideoIds(db *sql.DB) []string {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		panic("Please provide videoId")
+		return getVideoIdsWithNewMarkups(db)
 	}
-	videoId := args[0]
 
-	clearOldVideoCalculated(db, videoId)
-	intervals := calculateIntervals(db, videoId)
-	insertVideoCalculated(db, videoId, intervals)
+	return []string{args[0]}
+}
+
+func getVideoIdsWithNewMarkups(db *sql.DB) []string {
+	getVideoIdsSql := `
+		SELECT DISTINCT video_id FROM markups
+		WHERE is_new = true
+	`
+
+	rows, err := db.Query(getVideoIdsSql)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+
+	var videoIds []string
+	for rows.Next() {
+		var videoId string
+		if err := rows.Scan(&videoId); err != nil {
+			panic(err)
+		}
+
+		videoIds = append(videoIds, videoId)
+	}
+
+	return videoIds
 }
 
 func clearOldVideoCalculated(db *sql.DB, videoId string) {
@@ -142,8 +179,6 @@ func calculateIntervals(db *sql.DB, videoId string) map[int]map[int]IntervalAggr
 		}
 	}
 
-	fmt.Println(intervals)
-
 	return intervals
 }
 
@@ -176,6 +211,20 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 		panic(err)
 	}
 	defer insert.Close()
+}
+
+// TODO: Can be a problem if new markups will be added during calculation. Now we update all markups by videoId, need to update for specific markups.
+func updateIsNew(db *sql.DB, videoId string) {
+	sql := `
+		UPDATE markups SET is_new = false
+		WHERE video_id = $1 AND is_new = true
+	`
+
+	res, err := db.Query(sql, videoId)
+	if err != nil {
+		panic(err)
+	}
+	defer res.Close()
 }
 
 func connectDb() *sql.DB {
