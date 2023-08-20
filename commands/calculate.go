@@ -38,7 +38,12 @@ func main() {
 	}
 	videoId := args[0]
 
-	// Clear video_calculated table by current video
+	clearOldVideoCalculated(db, videoId)
+	intervals := calculateIntervals(db, videoId)
+	insertVideoCalculated(db, videoId, intervals)
+}
+
+func clearOldVideoCalculated(db *sql.DB, videoId string) {
 	deleteOldCalculationsSql := `
 		DELETE FROM video_calculateds
 		WHERE video_id = $1
@@ -48,15 +53,39 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+}
 
-	// Calculate intervals
+/*
+Calculate algorithm:
+1. Get all intervals for video
+2. Group intervals by category and startRounded value, where startRounded - every 3 seconds. For example: 0, 3, 6, ... 2 will be in 0, 4 will be in 3.
+3. Calculate AVERAGE start and MEDIAN end values for each group. For half values, round down.
+
+intervals format:
+
+	{
+		cayegoryId: {  // Represents the category identifier
+			startRounded: {  // Represents the rounded start value
+				startAverage,
+				endAverage,
+				[
+					Interval1,
+					Interval2,
+					...
+				]
+			}
+		},
+		...
+	}
+*/
+func calculateIntervals(db *sql.DB, videoId string) map[int]map[int]IntervalAggregated {
 	getIntervalsSql := `
-  SELECT intervals.start, intervals.end, categories.id category_id FROM markup_time_intervals intervals
-    LEFT JOIN markups ON markups.id = intervals.markup_id
-    LEFT JOIN markup_categories categories ON categories.id = markups.category_id
-    WHERE markups.video_id = $1
-    ORDER BY intervals.start
-  `
+  	SELECT intervals.start, intervals.end, categories.id category_id FROM markup_time_intervals intervals
+		LEFT JOIN markups ON markups.id = intervals.markup_id
+		LEFT JOIN markup_categories categories ON categories.id = markups.category_id
+		WHERE markups.video_id = $1
+		ORDER BY intervals.start
+	`
 
 	videos, err := db.Query(getIntervalsSql, videoId)
 	if err != nil {
@@ -66,6 +95,7 @@ func main() {
 
 	intervals := make(map[int]map[int]IntervalAggregated)
 
+	// Group intervals by category and startRounded value
 	for videos.Next() {
 		var start int
 		var end int
@@ -91,9 +121,9 @@ func main() {
 		intervals[categoryId][startRounded] = aggregated
 	}
 
+	// Calculate average values
 	for categoryId, level1 := range intervals {
 		for startRounded, level2 := range level1 {
-
 			startSum := 0
 			endNumbers := make([]int, 0, len(level2.intervals))
 
@@ -112,7 +142,12 @@ func main() {
 		}
 	}
 
-	// Insert video_calculated to DB
+	fmt.Println(intervals)
+
+	return intervals
+}
+
+func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated) {
 	var allData []map[string]interface{}
 
 	for categoryId, level1 := range intervals {
