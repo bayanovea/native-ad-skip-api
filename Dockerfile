@@ -19,4 +19,4 @@ RUN go build -o commands/calculate commands/calculate.go
 
 EXPOSE 3000
 
-# CMD ["yarn", "start"]
+CMD ["tail", "-f", "/dev/null"]
