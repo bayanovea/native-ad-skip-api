@@ -30,4 +30,4 @@ jobs:
 
     - name: Deploy to DO
       run: |
-        tar czf - . | ssh -o StrictHostKeyChecking=no root@167.172.32.24 "docker build -t native-ad-skip-api - && docker run --network="host" -d native-ad-skip-api"
+        tar czf - . | ssh -o StrictHostKeyChecking=no root@167.172.32.24 "docker build -t native-ad-skip-api - && docker run --network="host" -e DB_NAME='$DB_NAME' -e DB_USER='$DB_USER' -e DB_PASSWORD='$DB_PASSWORD' -e DB_HOST='$DB_HOST' -e NODE_APP_PORT='$NODE_APP_PORT' -d native-ad-skip-api"
