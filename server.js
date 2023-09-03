@@ -1,16 +1,11 @@
 const path = require('path')
-require('dotenv').config({
-    path: path.join(__dirname, process.env.NODE_ENV === 'production' ? '.env.production' : '.env')
-    // path: __dirname + process.env.NODE_ENV === 'production' ? '/.env.production' : '/.env'
-});
-
 const express = require('express');
 const bodyParser = require('body-parser')
 const db = require('./db');
 const routes = require('./routes');
 
 const app = express();
-const port = process.env.PORT;
+const port = process.env.NODE_APP_PORT;
 
 // body parser
 app.use(bodyParser.json())

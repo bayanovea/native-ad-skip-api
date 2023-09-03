@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 
-	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -24,10 +23,6 @@ type IntervalAggregated struct {
 }
 
 func main() {
-	if err := godotenv.Load("./.env"); err != nil {
-		panic(err)
-	}
-
 	db := connectDb()
 	defer db.Close()
 
