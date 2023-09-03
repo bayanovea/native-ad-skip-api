@@ -24,4 +24,4 @@ jobs:
 
     - name: Deploy to DO
       run: |
-        tar czf - . | ssh root@167.172.32.24 "docker build -t vk-ad-skip-api - && docker run -d vk-ad-skip-api"
+        tar czf - . | ssh -o StrictHostKeyChecking=no root@167.172.32.24 "docker build -t vk-ad-skip-api - && docker run -d vk-ad-skip-api"
