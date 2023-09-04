@@ -35,7 +35,7 @@ jobs:
         DB_HOST: ${{ secrets.DB_HOST }}
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
       run: |
-        ssh -o StrictHostKeyChecking=no root@167.172.32.24 <<'ENDSSH'
+        ssh -o StrictHostKeyChecking=no root@167.172.32.24 <<ENDSSH
           cd /tmp
           tar xzf codebase.tar.gz
           docker build -t native-ad-skip-api .
