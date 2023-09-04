@@ -35,17 +35,4 @@ jobs:
         DB_HOST: ${{ secrets.DB_HOST }}
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
         IMAGE_NAME: vk-ad-skip-api
-      run: |
-        ssh -o StrictHostKeyChecking=no root@167.172.32.24 <<ENDSSH
-          # Stop previous container
-          CONTAINER_ID=\$(docker ps -aq --filter "ancestor=$IMAGE_NAME")
-          if [ ! -z "\$CONTAINER_ID" ]; then
-            docker stop \$CONTAINER_ID
-          fi
-    
-          cd /tmp
-          tar xzf codebase.tar.gz
-          docker build -t $IMAGE_NAME .
-          docker run --network="host" -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_HOST="$DB_HOST" -e NODE_APP_PORT="$NODE_APP_PORT" -d $IMAGE_NAME
-          rm -rf /tmp/codebase.tar.gz
-        ENDSSH      
+      run: ssh -o StrictHostKeyChecking=no root@167.172.32.24 "CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=$IMAGE_NAME'); if [ ! -z '\$CONTAINER_ID' ]; then docker stop \$CONTAINER_ID; fi; cd /tmp; tar xzf codebase.tar.gz; docker build -t $IMAGE_NAME .; docker run --network='host' -e DB_NAME='$DB_NAME' -e DB_USER='$DB_USER' -e DB_PASSWORD='$DB_PASSWORD' -e DB_HOST='$DB_HOST' -e NODE_APP_PORT='$NODE_APP_PORT' -d $IMAGE_NAME; rm -rf /tmp/codebase.tar.gz;"
