@@ -7,7 +7,7 @@ ENV GOPATH /go
 ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
 
 # Dependencies
-RUN apk add --no-cache git go dcron && \
+RUN apk add --no-cache git go cron && \
     mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
 
 # JS install
@@ -26,4 +26,4 @@ RUN crontab /etc/cron.d/my-crontab
 RUN touch /var/log/cron.log
 
 EXPOSE 3000
-CMD ["dcron", "-f"]
+CMD ["cron", "-f"]
