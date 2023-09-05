@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-buster
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ ENV GOPATH /go
 ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
 
 # Dependencies
-RUN apk add --no-cache git go dcron && \
+RUN apt-get update && apt-get install -y git golang cron && \
     mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
 
 # JS install
@@ -25,5 +25,5 @@ RUN chmod 0644 /etc/cron.d/my-crontab
 RUN crontab /etc/cron.d/my-crontab
 RUN touch /var/log/cron.log
 
-CMD ["dcron", "-f"]
 EXPOSE 3000
+CMD ["cron", "-f"]
