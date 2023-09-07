@@ -1,1 +1,1 @@
-* * * * * root /usr/bin/go run /app/commands/calculate.go >> /tmp/mycron.log 2>&1
+* * * * * root /app/commands/calculate >> /tmp/mycron.log 2>&1
