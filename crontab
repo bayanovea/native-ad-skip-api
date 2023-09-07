@@ -1,1 +1,1 @@
-0 * * * * go run commands/calculate.go
+* * * * * go run commands/calculate.go
