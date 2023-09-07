@@ -15,7 +15,10 @@ COPY package*.json ./
 RUN yarn install
 
 COPY . .
+
+# supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+RUN touch /tmp/supervisor.sock && chmod 700 /tmp/supervisor.sock
 
 # GoLang build
 RUN go build -o commands/calculate commands/calculate.go
@@ -24,7 +27,8 @@ RUN go build -o commands/calculate commands/calculate.go
 COPY crontab /etc/cron.d/my-crontab
 RUN chmod 0644 /etc/cron.d/my-crontab \
     && crontab /etc/cron.d/my-crontab \
-    && touch /var/log/cron.log
+    && touch /var/log/cron.log \
+    && touch /var/log/cron_error.log
 
 EXPOSE 3000
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
