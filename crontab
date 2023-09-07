@@ -1,1 +1,1 @@
-* * * * * root go run commands/calculate.go
+* * * * * root touch /tmp/cron-test
