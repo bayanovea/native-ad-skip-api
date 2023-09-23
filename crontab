@@ -1,1 +1,1 @@
-* * * * * /app/commands/calculate >> /tmp/mycron.log 2>&1
+0 * * * * /app/commands/calculate >> /tmp/mycron.log 2>&1
