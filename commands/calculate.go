@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -223,6 +224,10 @@ func updateIsNew(db *sql.DB, videoId string) {
 }
 
 func connectDb() *sql.DB {
+	if err := godotenv.Load("/app/.env"); err != nil {
+		log.Fatalf("Can not load .env файл: %v", err)
+	}
+
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 		"password=%s dbname=%s sslmode=disable",
 		os.Getenv("DB_HOST"), 5432, os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"))
