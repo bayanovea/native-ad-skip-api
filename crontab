@@ -1,1 +1,1 @@
-* * * * * root /app/commands/calculate >> /tmp/mycron.log 2>&1
+* * * * * /app/commands/calculate >> /tmp/mycron.log 2>&1
