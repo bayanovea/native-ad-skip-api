@@ -16,6 +16,10 @@ RUN yarn install
 
 COPY . .
 
+# env
+COPY init_env.sh /usr/local/bin/init_env.sh
+RUN chmod +x /usr/local/bin/init_env.sh
+
 # supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN touch /tmp/supervisor.sock && chmod 700 /tmp/supervisor.sock
