@@ -32,8 +32,8 @@ func main() {
 	for _, videoId := range videoIds {
 		fmt.Println("Calculate video", videoId)
 		clearOldVideoCalculated(db, videoId)
-		intervals := calculateIntervals(db, videoId)
-		insertVideoCalculated(db, videoId, intervals)
+		intervals, markupIds := calculateIntervals(db, videoId)
+		insertVideoCalculated(db, videoId, intervals, markupIds)
 		updateIsNew(db, videoId)
 	}
 }
@@ -111,9 +111,9 @@ intervals format:
 		...
 	}
 */
-func calculateIntervals(db *sql.DB, videoId string) map[int]map[int]IntervalAggregated {
+func calculateIntervals(db *sql.DB, videoId string) (map[int]map[int]IntervalAggregated, []int) {
 	getIntervalsSql := `
-  	SELECT intervals.start, intervals.end, categories.id category_id FROM markup_time_intervals intervals
+  	SELECT intervals.start, intervals.end, categories.id category_id, markups.id markup_id FROM markup_time_intervals intervals
 		LEFT JOIN markups ON markups.id = intervals.markup_id
 		LEFT JOIN markup_categories categories ON categories.id = markups.category_id
 		WHERE markups.video_id = $1
@@ -126,17 +126,20 @@ func calculateIntervals(db *sql.DB, videoId string) map[int]map[int]IntervalAggr
 	}
 	defer videos.Close()
 
+	markupIdsMap := make(map[int]bool)
 	intervals := make(map[int]map[int]IntervalAggregated)
 
 	// Group intervals by category and startRounded value
 	for videos.Next() {
-		var start int
-		var end int
-		var categoryId int
+		var start, end, categoryId, markupId int
 
-		err := videos.Scan(&start, &end, &categoryId)
+		err := videos.Scan(&start, &end, &categoryId, &markupId)
 		if err != nil {
 			panic(err)
+		}
+
+		if _, ok := markupIdsMap[markupId]; !ok {
+			markupIdsMap[markupId] = true
 		}
 
 		startRounded := start - (start % 3)
@@ -175,10 +178,15 @@ func calculateIntervals(db *sql.DB, videoId string) map[int]map[int]IntervalAggr
 		}
 	}
 
-	return intervals
+	markupIds := make([]int, 0, len(markupIdsMap))
+	for markupId := range markupIdsMap {
+		markupIds = append(markupIds, markupId)
+	}
+
+	return intervals, markupIds
 }
 
-func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated) {
+func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated, markupIds []int) {
 	var allData []map[string]interface{}
 
 	for categoryId, level1 := range intervals {
@@ -197,16 +205,23 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 		log.Fatalf("Ошибка при преобразовании в JSON: %v", err)
 	}
 
+	meta := map[string]interface{}{
+		"markup_ids": markupIds,
+	}
+	jsonMeta, err := json.Marshal(meta)
+	if err != nil {
+		log.Fatalf("Ошибка при преобразовании в JSON: %v", err)
+	}
+
 	insertVideoCalculatedSql := `
-		INSERT INTO video_calculateds (video_id, data, "createdAt", "updatedAt")
-		VALUES ($1, $2, now(), now())
+		INSERT INTO video_calculateds (video_id, data, meta, "createdAt", "updatedAt")
+		VALUES ($1, $2, $3, now(), now())
 	`
 
-	insert, err := db.Query(insertVideoCalculatedSql, videoId, jsonData)
+	_, err = db.Exec(insertVideoCalculatedSql, videoId, jsonData, jsonMeta)
 	if err != nil {
 		panic(err)
 	}
-	defer insert.Close()
 }
 
 // TODO: Can be a problem if new markups will be added during calculation. Now we update all markups by videoId, need to update for specific markups.

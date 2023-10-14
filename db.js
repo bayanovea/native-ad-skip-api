@@ -42,7 +42,8 @@ const Video = db.define("video", {
 
 const VideoCalculated = db.define("video_calculated", {
     video_id: DataTypes.INTEGER,
-    data: DataTypes.JSON
+    data: DataTypes.JSON,
+    type: DataTypes.JSON
 });
 
 /** Rels **/
