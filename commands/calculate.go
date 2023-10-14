@@ -28,14 +28,16 @@ func main() {
 	defer db.Close()
 
 	videoIds := getVideoIds(db)
+	pool := NewGoroutinePool(10)
 
 	for _, videoId := range videoIds {
-		fmt.Println("Calculate video", videoId)
-		clearOldVideoCalculated(db, videoId)
-		intervals, markupIds := calculateIntervals(db, videoId)
-		insertVideoCalculated(db, videoId, intervals, markupIds)
-		updateIsNew(db, videoId)
+		id := videoId
+		pool.Execute(func() {
+			caclulateVideo(id, db)
+		})
 	}
+
+	pool.Close()
 }
 
 /**
@@ -74,6 +76,17 @@ func getVideoIdsWithNewMarkups(db *sql.DB) []string {
 	}
 
 	return videoIds
+}
+
+func caclulateVideo(videoId string, db *sql.DB) {
+	fmt.Println("Calculate video start: ", videoId)
+
+	clearOldVideoCalculated(db, videoId)
+	intervals, markupIds := calculateIntervals(db, videoId)
+	insertVideoCalculated(db, videoId, intervals, markupIds)
+	updateIsNew(db, videoId)
+
+	fmt.Println("Calculate video finish: ", videoId)
 }
 
 func clearOldVideoCalculated(db *sql.DB, videoId string) {
