@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('./db');
+const middleware = require('./middleware');
 
 /**
  * Check
@@ -100,7 +101,7 @@ router.post('/markup', async (req, res) => {
 /**
  * Get markups by filter
  */
-router.get('/markups', async (req, res) => {
+router.get('/markups', middleware.verifyBearerToken,async (req, res) => {
     try {
         let markups = await db.MarkupRepository.findByRequest(req);
         console.log(markups)
@@ -114,7 +115,7 @@ router.get('/markups', async (req, res) => {
 /**
  * Delete markup
  */
-router.delete('/markup/:id', async (req, res) => {
+router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
     try {
         const markupId = req.params.id;
 
