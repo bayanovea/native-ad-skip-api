@@ -81,6 +81,58 @@ VideoCalculated.belongsTo(Video, {
     as: 'video'
 });
 
+/** 
+ * Repositories 
+ * 
+ * TODO: Move to separate file
+ **/
+
+const MarkupRepository = {
+    findByRequest: async function(req) {
+        let queryParams = [];
+        let queryValues = [];
+        let sql = `
+            SELECT * FROM markups m 
+            WHERE 1=1
+        `;
+
+        if (req.query.id) {
+            queryParams.push('id = ?');
+            queryValues.push(req.query.id);
+        }
+        if (req.query.video_id) {
+            queryParams.push('video_id = ?');
+            queryValues.push(req.query.video_id);
+        }
+        if (req.query.user_id) {
+            queryParams.push('user_id = ?');
+            queryValues.push(req.query.user_id);
+        }
+        if (req.query.category_id) {
+            queryParams.push('category_id = ?');
+            queryValues.push(req.query.category_id);
+        }
+        if (req.query.is_new) {
+            queryParams.push('is_new = ?');
+            queryValues.push(req.query.is_new);
+        }
+
+        if (queryParams.length) {
+            sql += ' AND ' + queryParams.join(' AND ');
+        }
+
+        try {
+            const markups = await db.query(sql, {
+                replacements: queryValues,
+                type: db.QueryTypes.SELECT
+            });
+            return markups;
+        } catch (error) {
+            console.error("Ошибка выполнения запроса:", error);
+        }
+    }
+};
+
 /**
  * Миграция, создаёт категории
  * @returns {Promise<void>}
@@ -114,9 +166,12 @@ process.on('SIGINT', () => {
 
 module.exports = {
     db,
+    // Models
     Markup,
     MarkupCategory,
     MarkupTimeInterval,
     Video,
-    VideoCalculated
+    VideoCalculated,
+    // Repositories
+    MarkupRepository
 };

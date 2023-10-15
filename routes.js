@@ -2,12 +2,18 @@ const express = require('express');
 const router = express.Router();
 const db = require('./db');
 
+/**
+ * Check
+ */
 router.get('/', (req, res, next) => {
     res.send({
         status: 'ok'
     })
 })
 
+/**
+ * Get calculated data by video 
+ */
 router.get('/video-calculated', async (req, res) => {
     try {
         if (!req.query.video_id || typeof req.query.video_id !== 'string') {
@@ -41,6 +47,9 @@ router.get('/video-calculated', async (req, res) => {
     }
 });
 
+/**
+ * Create markup
+ */
 router.post('/markup', async (req, res) => {
     try {
         if (!req.body.video_id || typeof req.body.video_id !== 'string') {
@@ -84,6 +93,60 @@ router.post('/markup', async (req, res) => {
 
     } catch (error) {
         console.error('Failed to create a new record : ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
+/**
+ * Get markups by filter
+ */
+router.get('/markups', async (req, res) => {
+    try {
+        let markups = await db.MarkupRepository.findByRequest(req);
+        console.log(markups)
+        res.status(200).send(markups);
+    } catch (error) {
+        console.error('Failed to get markups : ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
+/**
+ * Delete markup
+ */
+router.delete('/markup/:id', async (req, res) => {
+    try {
+        const markupId = req.params.id;
+
+        let markup = await db.Markup.findByPk(markupId)
+        if (!markup) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        await db.db.transaction(async (transaction) => {
+            await db.MarkupTimeInterval.destroy({
+                where: { markup_id: markupId },
+                transaction
+            });
+
+            await db.Markup.destroy({
+                where: { id: markupId },
+                transaction
+            });
+    
+            await db.Markup.update(
+                { is_new: true },
+                { 
+                    where: { video_id: markup.video_id },
+                    transaction
+                },
+            );
+        });
+
+        res.status(201).send('Deleted');
+    } catch (error) {
+        console.error('Failed to get markups : ', error);
         res.status(500).send('Internal Server Error');
     }
 });
