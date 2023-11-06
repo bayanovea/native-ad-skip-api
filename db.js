@@ -88,50 +88,75 @@ VideoCalculated.belongsTo(Video, {
  **/
 
 const MarkupRepository = {
+    /**
+     * req.field_name is filter by field from list ['id', 'video_id', 'user_id', 'category_id', 'is_new'].
+     * req.order_by format is "field1, field2, -field3, -field4". Minus means DESC.
+     */
     findByRequest: async function(req) {
-        let queryParams = [];
-        let queryValues = [];
-        let sql = `
-            SELECT * FROM markups m 
-            WHERE 1=1
-        `;
+        let query = {
+            sql: `
+                SELECT * FROM markups m 
+                WHERE 1=1
+            `,
+            replacements: []
+        };
 
-        if (req.query.id) {
-            queryParams.push('id = ?');
-            queryValues.push(req.query.id);
-        }
-        if (req.query.video_id) {
-            queryParams.push('video_id = ?');
-            queryValues.push(req.query.video_id);
-        }
-        if (req.query.user_id) {
-            queryParams.push('user_id = ?');
-            queryValues.push(req.query.user_id);
-        }
-        if (req.query.category_id) {
-            queryParams.push('category_id = ?');
-            queryValues.push(req.query.category_id);
-        }
-        if (req.query.is_new) {
-            queryParams.push('is_new = ?');
-            queryValues.push(req.query.is_new);
-        }
-
-        if (queryParams.length) {
-            sql += ' AND ' + queryParams.join(' AND ');
-        }
+        query = this._getWhere(req, query);
+        query = this._getOrderBy(req, query);
 
         try {
-            const markups = await db.query(sql, {
-                replacements: queryValues,
+            const markups = await db.query(query.sql, {
+                replacements: query.replacements,
                 type: db.QueryTypes.SELECT
             });
             return markups;
         } catch (error) {
             console.error("Ошибка выполнения запроса:", error);
         }
-    }
+    },
+
+    _getWhere: function(req, query) {
+        const fields = ['id', 'video_id', 'user_id', 'category_id', 'is_new'];
+
+        fields.forEach(field => {
+            if (req.query[field]) {
+                query.sql += ` AND ${field} = ?`;
+                query.replacements.push(req.query[field]);
+            }
+        });
+
+        return query;
+    },
+
+    _getOrderBy: function(req, query) {
+        const fields = ['id', 'video_id', 'user_id', 'category_id', 'is_new'];
+    
+        let orderBy = req.query['order_by'];
+    
+        if (orderBy) {
+            let orderFields = orderBy.split(',');
+    
+            let orderStatements = orderFields.map(field => {
+                field = field.trim();
+                if (fields.includes(field.replace('-', ''))) {
+                    if (field.includes('-')) {
+                        field = field.replace('-', '');
+                        return `${field} DESC`;
+                    } else {
+                        return `${field} ASC`;
+                    }
+                }
+            }).filter(Boolean); // remove any undefined values
+    
+            if (orderStatements.length) {
+                query.sql += ` ORDER BY ${orderStatements.join(', ')}`;
+            }
+        }
+    
+        return query;
+    },
 };
+
 
 /**
  * Миграция, создаёт категории
