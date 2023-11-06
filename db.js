@@ -88,8 +88,12 @@ VideoCalculated.belongsTo(Video, {
  **/
 
 const MarkupRepository = {
+    fields: ['id', 'video_id', 'user_id', 'category_id', 'is_new', 'createdAt', 'updatedAt'],
+
     /**
-     * req.field_name is filter by field from list ['id', 'video_id', 'user_id', 'category_id', 'is_new'].
+     * All supported fields see in this.fields
+     * 
+     * req.field_name is filter by field
      * req.order_by format is "field1, field2, -field3, -field4". Minus means DESC.
      */
     findByRequest: async function(req) {
@@ -116,9 +120,7 @@ const MarkupRepository = {
     },
 
     _getWhere: function(req, query) {
-        const fields = ['id', 'video_id', 'user_id', 'category_id', 'is_new'];
-
-        fields.forEach(field => {
+        this.fields.forEach(field => {
             if (req.query[field]) {
                 query.sql += ` AND ${field} = ?`;
                 query.replacements.push(req.query[field]);
@@ -129,30 +131,28 @@ const MarkupRepository = {
     },
 
     _getOrderBy: function(req, query) {
-        const fields = ['id', 'video_id', 'user_id', 'category_id', 'is_new'];
-    
         let orderBy = req.query['order_by'];
-    
+
         if (orderBy) {
             let orderFields = orderBy.split(',');
-    
+
             let orderStatements = orderFields.map(field => {
                 field = field.trim();
-                if (fields.includes(field.replace('-', ''))) {
+                if (this.fields.includes(field.replace('-', ''))) {
                     if (field.includes('-')) {
                         field = field.replace('-', '');
-                        return `${field} DESC`;
+                        return `"${field}" DESC`;
                     } else {
-                        return `${field} ASC`;
+                        return `"${field}" ASC`;
                     }
                 }
             }).filter(Boolean); // remove any undefined values
-    
+
             if (orderStatements.length) {
                 query.sql += ` ORDER BY ${orderStatements.join(', ')}`;
             }
         }
-    
+
         return query;
     },
 };
