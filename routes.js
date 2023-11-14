@@ -121,29 +121,29 @@ router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
 
         let markup = await db.Markup.findByPk(markupId)
         if (!markup) {
-            res.status(404).send('Not found');
+            res.status(404).send('Not found ' . markupId );
             return;
         }
 
-        await db.db.transaction(async (transaction) => {
-            await db.MarkupTimeInterval.destroy({
-                where: { markup_id: markupId },
-                transaction
-            });
+        // await db.db.transaction(async (transaction) => {
+        //     await db.MarkupTimeInterval.destroy({
+        //         where: { markup_id: markupId },
+        //         transaction
+        //     });
 
-            await db.Markup.destroy({
-                where: { id: markupId },
-                transaction
-            });
+        //     await db.Markup.destroy({
+        //         where: { id: markupId },
+        //         transaction
+        //     });
     
-            await db.Markup.update(
-                { is_new: true },
-                { 
-                    where: { video_id: markup.video_id },
-                    transaction
-                },
-            );
-        });
+        //     await db.Markup.update(
+        //         { is_new: true },
+        //         { 
+        //             where: { video_id: markup.video_id },
+        //             transaction
+        //         },
+        //     );
+        // });
 
         res.status(201).send('Deleted');
     } catch (error) {
