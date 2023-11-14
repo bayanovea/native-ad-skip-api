@@ -115,7 +115,7 @@ router.get('/markups', middleware.verifyBearerToken,async (req, res) => {
 /**
  * Delete markup
  */
-router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
+router.delete('/markup/:id', async (req, res) => {
     try {
         const markupId = req.params.id;
 
@@ -125,25 +125,25 @@ router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
             return;
         }
 
-        // await db.db.transaction(async (transaction) => {
-        //     await db.MarkupTimeInterval.destroy({
-        //         where: { markup_id: markupId },
-        //         transaction
-        //     });
+        await db.db.transaction(async (transaction) => {
+            await db.MarkupTimeInterval.destroy({
+                where: { markup_id: markupId },
+                transaction
+            });
 
-        //     await db.Markup.destroy({
-        //         where: { id: markupId },
-        //         transaction
-        //     });
+            await db.Markup.destroy({
+                where: { id: markupId },
+                transaction
+            });
     
-        //     await db.Markup.update(
-        //         { is_new: true },
-        //         { 
-        //             where: { video_id: markup.video_id },
-        //             transaction
-        //         },
-        //     );
-        // });
+            await db.Markup.update(
+                { is_new: true },
+                { 
+                    where: { video_id: markup.video_id },
+                    transaction
+                },
+            );
+        });
 
         res.status(201).send('Deleted');
     } catch (error) {
