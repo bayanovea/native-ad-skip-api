@@ -136,7 +136,7 @@ router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
                 transaction
             });
 
-            let videoMarkups = db.Markup.findAll({
+            let videoMarkups = await db.Markup.findAll({
                 where: { video_id: markup.video_id },
                 transaction
             });
@@ -156,7 +156,7 @@ router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
                     where: { video_id: markup.video_id },
                     transaction
                 });
-            }        
+            }
         });
 
         res.status(201).send('Deleted');
