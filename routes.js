@@ -135,14 +135,28 @@ router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
                 where: { id: markupId },
                 transaction
             });
-    
-            await db.Markup.update(
-                { is_new: true },
-                { 
+
+            let videoMarkups = db.Markup.findAll({
+                where: { video_id: markup.video_id },
+                transaction
+            });
+
+            if (videoMarkups.length > 0) {
+                // Update rest markups as new for recalculating without deleted markup
+                await db.Markup.update(
+                    { is_new: true },
+                    { 
+                        where: { video_id: markup.video_id },
+                        transaction
+                    },
+                );
+            } else {
+                // Don't need to recalculate video because there are no markups, so delete calculated data
+                await db.VideoCalculated.destroy({
                     where: { video_id: markup.video_id },
                     transaction
-                },
-            );
+                });
+            }        
         });
 
         res.status(201).send('Deleted');
