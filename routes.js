@@ -101,22 +101,21 @@ router.post('/markup', async (req, res) => {
 /**
  * Get markups by filter
  */
-router.get('/markups', async (req, res) => {
-    res.status(200).send('qqq');
-    // try {
-    //     let markups = await db.MarkupRepository.findByRequest(req);
-    //     console.log(markups)
-    //     res.status(200).send(markups);
-    // } catch (error) {
-    //     console.error('Failed to get markups : ', error);
-    //     res.status(500).send('Internal Server Error');
-    // }
+router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
+    try {
+        let markups = await db.MarkupRepository.findByRequest(req);
+        console.log(markups)
+        res.status(200).send(markups);
+    } catch (error) {
+        console.error('Failed to get markups : ', error);
+        res.status(500).send('Internal Server Error');
+    }
 });
 
 /**
  * Delete markup
  */
-router.delete('/markup/:id', async (req, res) => {
+router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
     try {
         const markupId = req.params.id;
 
