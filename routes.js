@@ -115,7 +115,7 @@ router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
 /**
  * Delete markup
  */
-router.delete('/markup/:id', middleware.verifyBearerToken, async (req, res) => {
+router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => {
     try {
         const markupId = req.params.id;
 
