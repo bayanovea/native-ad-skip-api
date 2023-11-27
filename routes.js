@@ -166,6 +166,62 @@ router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => 
     }
 });
 
+/**
+ * Delete markup via GET (DUPLICATE)
+ * 
+ * TODO: NEED THIS DUPLICATE BECAUSE OF GRAFANA, AFTER FIXING GRAFANA NEED TO DELETE THIS
+ */
+router.get('/markups/:id/delete', middleware.verifyBearerToken, async (req, res) => {
+    try {
+        const markupId = req.params.id;
+
+        let markup = await db.Markup.findByPk(markupId)
+        if (!markup) {
+            res.status(404).send('Not found ' . markupId );
+            return;
+        }
+
+        await db.db.transaction(async (transaction) => {
+            await db.MarkupTimeInterval.destroy({
+                where: { markup_id: markupId },
+                transaction
+            });
+
+            await db.Markup.destroy({
+                where: { id: markupId },
+                transaction
+            });
+
+            let videoMarkups = await db.Markup.findAll({
+                where: { video_id: markup.video_id },
+                transaction
+            });
+
+            if (videoMarkups.length > 0) {
+                // Update rest markups as new for recalculating without deleted markup
+                await db.Markup.update(
+                    { is_new: true },
+                    { 
+                        where: { video_id: markup.video_id },
+                        transaction
+                    },
+                );
+            } else {
+                // Don't need to recalculate video because there are no markups, so delete calculated data
+                await db.VideoCalculated.destroy({
+                    where: { video_id: markup.video_id },
+                    transaction
+                });
+            }
+        });
+
+        res.status(201).send('Deleted');
+    } catch (error) {
+        console.error('Failed to delete markup : ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
 router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, res) => {
     try {
         let videoId = req.params.id;
