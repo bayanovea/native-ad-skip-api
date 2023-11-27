@@ -174,6 +174,12 @@ router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => 
 router.get('/markups/:id/delete', middleware.verifyBearerToken, async (req, res) => {
     try {
         const markupId = req.params.id;
+        const verifyBearerToken = req.query.verifyBearerToken;
+
+        if (verifyBearerToken !== process.env.VERIFY_BEARER_TOKEN) {
+            res.status(401).send('Unauthorized');
+            return;
+        }
 
         let markup = await db.Markup.findByPk(markupId)
         if (!markup) {
