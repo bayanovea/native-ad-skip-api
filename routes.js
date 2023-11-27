@@ -171,7 +171,7 @@ router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => 
  * 
  * TODO: NEED THIS DUPLICATE BECAUSE OF GRAFANA, AFTER FIXING GRAFANA NEED TO DELETE THIS
  */
-router.get('/markups/:id/delete', middleware.verifyBearerToken, async (req, res) => {
+router.get('/markups/:id/delete', async (req, res) => {
     try {
         const markupId = req.params.id;
         const verifyBearerToken = req.query.verifyBearerToken;
