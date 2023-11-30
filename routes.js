@@ -81,16 +81,11 @@ router.post('/markup', async (req, res) => {
         });
 
         for (const interval of req.body.data.intervals) {
-            // Currently we support only integer values
-            if (isNaN(interval.start) || isNaN(interval.end)) {
-                res.status(400).send('Bad request');
-                return;
-            }
-
             const markupInterval = await db.MarkupTimeInterval.create({
                 markup_id: markup.id,
-                start: interval.start,
-                end: interval.end
+                // Currently we support only integer values
+                start: Math.round(interval.start),
+                end: Math.round(interval.end)
             });
         }
 
