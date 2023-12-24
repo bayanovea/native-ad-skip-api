@@ -40,7 +40,6 @@ router.get('/video-calculated', async (req, res) => {
             return;
         }
 
-        console.log(videoCalculated.data);
         res.status(200).send(videoCalculated.data);
     } catch (error) {
         console.error(error);
@@ -92,7 +91,7 @@ router.post('/markup', async (req, res) => {
         res.status(201).send('Created');
 
     } catch (error) {
-        console.error('Failed to create a new record : ', error);
+        console.error('Failed to create a new markup: ', error);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -103,10 +102,9 @@ router.post('/markup', async (req, res) => {
 router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
     try {
         let markups = await db.MarkupRepository.findByRequest(req);
-        console.log(markups)
         res.status(200).send(markups);
     } catch (error) {
-        console.error('Failed to get markups : ', error);
+        console.error('Failed to get markups: ', error);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -160,7 +158,7 @@ router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => 
 
         res.status(201).send('Deleted');
     } catch (error) {
-        console.error('Failed to delete markup : ', error);
+        console.error('Failed to delete markup: ', error);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -222,7 +220,7 @@ router.get('/markups/:id/delete', async (req, res) => {
 
         res.status(201).send('Deleted');
     } catch (error) {
-        console.error('Failed to delete markup : ', error);
+        console.error('Failed to delete markup: ', error);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -276,9 +274,18 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
 
         res.status(201).send('Deleted');
     } catch (error) {
-        console.error('Failed to delete video\'s markups : ', error);
+        console.error('Failed to delete video\'s markups: ', error);
         res.status(500).send('Internal Server Error');
     }
 });
+
+/**
+ * Check logs
+ */
+router.get('/gdfgestshgergevcv3rwrf2e2e', (req, res, next) => {
+    console.error('qqq1');
+    console.log('qqq2');
+    throw new Error('qqq3');
+})
 
 module.exports = router;
