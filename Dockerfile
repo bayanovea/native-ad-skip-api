@@ -16,9 +16,9 @@ RUN yarn install
 
 COPY . .
 
-# env
-COPY init_env.sh /usr/local/bin/init_env.sh
-RUN chmod +x /usr/local/bin/init_env.sh
+# init scripts
+RUN chmod +x infrastructure/init/init_env.sh
+RUN chmod +x infrastructure/init/run_yarn.sh
 
 # supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

@@ -7,7 +7,6 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development nodemon server.js --watch .",
-    "serve": "NODE_ENV=development node server.js",
     "start": "NODE_ENV=production node server.js"
   },
   "dependencies": {
