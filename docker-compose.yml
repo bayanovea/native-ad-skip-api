@@ -6,6 +6,6 @@ services:
     ports:
       - "3022:3022"
     extra_hosts:
-      - "database:${HOST_IP}"
+      - "database:134.122.73.229"
     environment:
       - GOPATH=/go
