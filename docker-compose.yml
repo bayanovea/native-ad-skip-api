@@ -9,7 +9,7 @@ services:
       - "database:134.122.73.229"
     environment:
       - GOPATH=/go
-      - DB_NAME=${DB_NAME}
+      - DB_NAME=test1
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=${DB_HOST}
