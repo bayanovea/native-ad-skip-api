@@ -4,8 +4,15 @@ services:
   app:
     build: .
     ports:
-      - "3022:3022"
+      - "30220:30220"
     extra_hosts:
       - "database:134.122.73.229"
     environment:
       - GOPATH=/go
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - NODE_APP_PORT=${NODE_APP_PORT}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - HOST_IP=${HOST_IP}
