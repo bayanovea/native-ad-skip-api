@@ -34,5 +34,5 @@ RUN chmod 0644 /etc/cron.d/my-crontab \
     && touch /var/log/cron.log \
     && touch /var/log/cron_error.log
 
-EXPOSE 30220
+EXPOSE 3022
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
