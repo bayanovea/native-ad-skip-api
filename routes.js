@@ -280,6 +280,14 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
 });
 
 /**
+ * Prometheus internal endpoint   
+ */
+router.get('/metrics', (req, res, next) => {
+    res.set('Content-Type', metricsMiddleware.promClient.register.contentType);
+    res.end(metricsMiddleware.promClient.register.metrics());
+})
+
+/**
  * Check logs
  */
 router.get('/gdfgestshgergevcv3rwrf2e2e', (req, res, next) => {
