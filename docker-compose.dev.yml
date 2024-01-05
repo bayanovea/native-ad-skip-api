@@ -15,5 +15,9 @@ services:
       - "9090:9090"
     volumes:
       - ./config/prometheus.dev.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/data
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+volumes:
+  prometheus_data:
