@@ -11,6 +11,11 @@ const port = process.env.NODE_APP_PORT;
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
 
+// metrics middleware
+const promBundle = require('express-prom-bundle');
+const metricsMiddleware = promBundle({includeMethod: true, includePath: true});
+app.use(metricsMiddleware);
+
 // session
 app.set('trust proxy', true)
 

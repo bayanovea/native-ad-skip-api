@@ -9,3 +9,11 @@ services:
       - .env
     environment:
       - GOPATH=/go
+  prometheus:
+    image: prom/prometheus:v2.45.2
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.dev.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'

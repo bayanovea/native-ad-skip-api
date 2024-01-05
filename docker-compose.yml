@@ -16,3 +16,11 @@ services:
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
+  prometheus:
+    image: prom/prometheus:v2.45.2
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
