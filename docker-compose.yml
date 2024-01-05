@@ -18,6 +18,7 @@ services:
       - HOST_IP=${HOST_IP}
   prometheus:
     image: prom/prometheus:v2.45.2
+    network_mode: "host"
     ports:
       - "9090:9090"
     volumes:
