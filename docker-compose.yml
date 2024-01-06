@@ -7,6 +7,8 @@ services:
       - "3022:3022"
     extra_hosts:
       - "database:134.122.73.229"
+    networks:
+      - main-network
     environment:
       - GOPATH=/go
       - DB_NAME=${DB_NAME}
@@ -20,6 +22,8 @@ services:
     image: prom/prometheus:v2.45.2
     ports:
       - "9090:9090"
+    networks:
+      - main-network
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/data
@@ -28,3 +32,8 @@ services:
       - '--storage.tsdb.retention.time=30d'
 volumes:
   prometheus_data:
+
+networks:
+  main-network:
+    external: true
+    driver: bridge
