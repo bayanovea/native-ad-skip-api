@@ -27,7 +27,7 @@ router.get('/video-calculated', async (req, res) => {
         });
 
         if (!video) {
-            res.status(404).send('Not found');
+            res.status(204).send();
             return;
         }
 
