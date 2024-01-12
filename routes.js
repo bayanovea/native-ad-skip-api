@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('./db');
 const middleware = require('./middleware');
+const prometheusWrapper = require('./prometheus-wrapper');
 
 /**
  * Check
@@ -22,11 +23,14 @@ router.get('/video-calculated', async (req, res) => {
             return;
         }
 
+        const nativeFullVideoId = req.query.video_id;
+
         const video = await db.Video.findOne({
-            where: { native_id: req.query.video_id }
+            where: { native_id: nativeFullVideoId }
         });
 
         if (!video) {
+            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
             res.status(204).send();
             return;
         }
@@ -36,10 +40,12 @@ router.get('/video-calculated', async (req, res) => {
         });
 
         if (!videoCalculated) {
+            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
             res.status(204).send();
             return;
         }
 
+        prometheusWrapper.incrementVideoCalculatedFound(nativeFullVideoId);
         res.status(200).send(videoCalculated.data);
     } catch (error) {
         console.error(error);
