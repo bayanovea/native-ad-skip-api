@@ -52,6 +52,8 @@ router.get('/video-calculated', async (req, res) => {
  */
 router.post('/markup', async (req, res) => {
     try {
+        const blockedUserIds = ['689613b1-e95c-410a-8879-6745c72a0a9a'];
+
         if (!req.body.video_id || typeof req.body.video_id !== 'string') {
             res.status(400).send('Bad request');
             return;
@@ -66,6 +68,11 @@ router.post('/markup', async (req, res) => {
         }
         if (!req.body.data.intervals) {
             res.status(400).send('Bad request');
+            return;
+        }
+
+        if (blockedUserIds.includes(req.body.user_id)) {
+            res.status(201).send('Created'); // fake response
             return;
         }
 
