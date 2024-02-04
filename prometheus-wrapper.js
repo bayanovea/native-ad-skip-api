@@ -11,6 +11,10 @@ function incrementVideoCalculatedNotFound(fullNativeVideoId) {
     _incrementCounter('video_calculated_not_found', { owner_id: nativeOwnerIdPart, video_id: nativeVideoIdPart });
 }
 
+function incrementRequestWithoutVersion(method, originalVideoId) {
+    _incrementCounter('request_without_version', { method: nativeOwnerIdPart, originalVideoId: originalVideoId });
+}
+
 function _incrementCounter(name, labels) {
   const counter = _getOrCreateCounter(name, name, Object.keys(labels));
   counter.inc(labels);
@@ -26,5 +30,6 @@ function _getOrCreateCounter(name, help, labelNames) {
 
 module.exports = {
     incrementVideoCalculatedFound,
-    incrementVideoCalculatedNotFound
+    incrementVideoCalculatedNotFound,
+    incrementRequestWithoutVersion
 };
