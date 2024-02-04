@@ -23,11 +23,28 @@ router.get('/video-calculated', async (req, res) => {
             return;
         }
 
-        const nativeFullVideoId = req.query.video_id;
+        let nativeFullVideoId = req.query.video_id;
+        let video;
+        
+        if (req.query.v) {
+            video = await db.Video.findOne({
+                where: { native_id: nativeFullVideoId }
+            });
+        } else { // Crutch for old versions when frontend always send video id without minus
+            prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
 
-        const video = await db.Video.findOne({
-            where: { native_id: nativeFullVideoId }
-        });
+            let nativeFullVideoIdMinus = '-' + nativeFullVideoId;
+
+            video = await db.Video.findOne({
+                where: { native_id: nativeFullVideoIdMinus }
+            });
+
+            if (!video) {
+                video = await db.Video.findOne({
+                    where: { native_id : nativeFullVideoId }
+                });
+            }
+        }
 
         if (!video) {
             prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
@@ -59,8 +76,9 @@ router.get('/video-calculated', async (req, res) => {
 router.post('/markup', async (req, res) => {
     try {
         const blockedUserIds = ['689613b1-e95c-410a-8879-6745c72a0a9a'];
+        let videoId = req.body.video_id;
 
-        if (!req.body.video_id || typeof req.body.video_id !== 'string') {
+        if (!videoId || typeof videoId !== 'string') {
             res.status(400).send('Bad request');
             return;
         }
@@ -82,8 +100,14 @@ router.post('/markup', async (req, res) => {
             return;
         }
 
+        // Crutch for old versions when frontend always send video id without minus
+        if (!req.body.pluginVersion) {
+            prometheusWrapper.incrementRequestWithoutVersion('POST /markup', videoId);
+            videoId = '-' + videoId;
+        }
+
         const [video, created] = await db.Video.findOrCreate({
-            where: { native_id: req.body.video_id }
+            where: { native_id: videoId }
         });
 
         const markup = await db.Markup.create({
