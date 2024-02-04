@@ -12,7 +12,7 @@ function incrementVideoCalculatedNotFound(fullNativeVideoId) {
 }
 
 function incrementRequestWithoutVersion(method, originalVideoId) {
-    _incrementCounter('request_without_version', { method: nativeOwnerIdPart, originalVideoId: originalVideoId });
+    _incrementCounter('request_without_version', { method: method, originalVideoId: originalVideoId });
 }
 
 function _incrementCounter(name, labels) {
