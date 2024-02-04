@@ -101,7 +101,7 @@ router.post('/markup', async (req, res) => {
         }
 
         // Crutch for old versions when frontend always send video id without minus
-        if (!req.body.pluginVersion) {
+        if (!req.body.v) {
             prometheusWrapper.incrementRequestWithoutVersion('POST /markup', videoId);
             videoId = '-' + videoId;
         }
