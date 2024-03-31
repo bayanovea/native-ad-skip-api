@@ -203,17 +203,21 @@ func calculateIntervals(db *sql.DB, videoId string) (map[int]map[int]IntervalAgg
 
 func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated, markupIds []int) {
 	var allData []map[string]interface{}
+	var segmentsMeta = []map[string]interface{}{}
 
+	segmentId := 0
 	for categoryId, level1 := range intervals {
-		for i, level2 := range level1 {
+		for _, level2 := range level1 {
 			data := map[string]interface{}{
-				"id":          i,
+				"id":          segmentId,
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
-				"markup_ids":  level2.markupIds,
 			}
 			allData = append(allData, data)
+
+			segmentsMeta = append(segmentsMeta, map[string]interface{}{"segment_id": segmentId, "markup_ids": level2.markupIds})
+			segmentId++
 		}
 	}
 
@@ -224,6 +228,7 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 
 	meta := map[string]interface{}{
 		"markup_ids": markupIds,
+		"segments":   segmentsMeta,
 	}
 	jsonMeta, err := json.Marshal(meta)
 	if err != nil {
