@@ -21,6 +21,7 @@ type IntervalAggregated struct {
 	startAverage int
 	endAverage   int
 	intervals    []Interval
+	markupIds    []int
 }
 
 func main() {
@@ -167,6 +168,7 @@ func calculateIntervals(db *sql.DB, videoId string) (map[int]map[int]IntervalAgg
 
 		aggregated := intervals[categoryId][startRounded]
 		aggregated.intervals = append(aggregated.intervals, Interval{start, end})
+		aggregated.markupIds = append(aggregated.markupIds, markupId)
 		intervals[categoryId][startRounded] = aggregated
 	}
 
@@ -203,11 +205,13 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 	var allData []map[string]interface{}
 
 	for categoryId, level1 := range intervals {
-		for _, level2 := range level1 {
+		for i, level2 := range level1 {
 			data := map[string]interface{}{
+				"id":          i,
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
+				"markup_ids":  level2.intervals,
 			}
 			allData = append(allData, data)
 		}
