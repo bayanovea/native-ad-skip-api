@@ -47,6 +47,13 @@ const VideoCalculated = db.define("video_calculated", {
     meta: DataTypes.JSON
 });
 
+const Vote = db.define("vote", {
+    user_id: DataTypes.CHAR(36),
+    video_id: DataTypes.INTEGER,
+    video_calculated_segment_id: DataTypes.INTEGER,
+    vote: DataTypes.SMALLINT
+});
+
 /** Rels **/
 
 Markup.belongsTo(Video, {
@@ -78,6 +85,11 @@ Video.hasMany(Markup, {
 });
 
 VideoCalculated.belongsTo(Video, {
+    foreignKey: 'video_id',
+    as: 'video'
+});
+
+Vote.belongsTo(Video, {
     foreignKey: 'video_id',
     as: 'video'
 });

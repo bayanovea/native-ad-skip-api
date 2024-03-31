@@ -316,6 +316,63 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
     }
 });
 
+router.post('/vote', async (req, res) => {
+    try {
+        const videoId = req.body.video_id;
+        const videoCalculatedSegmentId = req.body.video_calculated_segment_id;
+        const userId = req.body.user_id;
+        const vote = req.body.vote;
+    
+        if (!videoId || typeof videoId !== 'string') {
+            res.status(400).send('Bad request');
+            return;
+        }
+
+        if (!id || typeof id !== 'integer') {
+            res.status(400).send('Bad request');
+            return;
+        }
+
+        if (!userId || typeof userId !== 'string') {
+            res.status(400).send('Bad request');
+            return;
+        }
+
+        if (typeof vote !== 'integer' || vote < -1 || vote > 1) {
+            res.status(400).send('Bad request');
+            return;
+        }
+
+        const video = await db.Video.findOne({
+            where: { native_id: videoId }
+        });
+        if (!video) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        await db.Vote.destroy({
+            where: {
+                user_id: userId,
+                video_id: video.id,
+                video_calculated_segment_id: videoCalculatedSegmentId
+            }
+        });
+
+        await db.Vote.create({
+            user_id: userId,
+            video_id: video.id,
+            video_calculated_segment_id: videoCalculatedSegmentId,
+            vote: vote
+        });
+
+        res.status(204).send();
+    } catch (error) {
+        console.error('Failed to vote: ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
 /**
  * Prometheus internal endpoint   
  */
