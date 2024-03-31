@@ -359,6 +359,11 @@ router.post('/vote', async (req, res) => {
             }
         });
 
+        if (vote === 0) {
+            res.status(204).send();
+            return;
+        }
+
         await db.Vote.create({
             user_id: userId,
             video_id: video.id,
