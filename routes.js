@@ -319,7 +319,7 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
 router.post('/vote', async (req, res) => {
     try {
         const videoId = req.body.video_id;
-        const videoCalculatedSegmentId = req.body.video_calculated_segment_id;
+        const segmentId = req.body.segment_id;
         const userId = req.body.user_id;
         const vote = req.body.vote;
     
@@ -328,8 +328,8 @@ router.post('/vote', async (req, res) => {
             return;
         }
 
-        if (!id || typeof id !== 'integer') {
-            res.status(400).send('Bad request');
+        if (typeof segmentId !== 'number') {
+            res.status(400).send(typeof segmentId);
             return;
         }
 
@@ -338,7 +338,7 @@ router.post('/vote', async (req, res) => {
             return;
         }
 
-        if (typeof vote !== 'integer' || vote < -1 || vote > 1) {
+        if (typeof vote !== 'number' || vote < -1 || vote > 1) {
             res.status(400).send('Bad request');
             return;
         }
@@ -355,7 +355,7 @@ router.post('/vote', async (req, res) => {
             where: {
                 user_id: userId,
                 video_id: video.id,
-                video_calculated_segment_id: videoCalculatedSegmentId
+                video_calculated_segment_id: segmentId
             }
         });
 
@@ -367,7 +367,7 @@ router.post('/vote', async (req, res) => {
         await db.Vote.create({
             user_id: userId,
             video_id: video.id,
-            video_calculated_segment_id: videoCalculatedSegmentId,
+            video_calculated_segment_id: segmentId,
             vote: vote
         });
 

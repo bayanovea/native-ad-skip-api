@@ -210,6 +210,7 @@ module.exports = {
     MarkupTimeInterval,
     Video,
     VideoCalculated,
+    Vote,
     // Repositories
     MarkupRepository
 };
