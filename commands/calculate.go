@@ -205,19 +205,18 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 	var allData []map[string]interface{}
 	var segmentsMeta = []map[string]interface{}{}
 
-	segmentId := 0
+	i := 0
 	for categoryId, level1 := range intervals {
 		for _, level2 := range level1 {
 			data := map[string]interface{}{
-				"id":          segmentId,
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
 			}
 			allData = append(allData, data)
 
-			segmentsMeta = append(segmentsMeta, map[string]interface{}{"segment_id": segmentId, "markup_ids": level2.markupIds})
-			segmentId++
+			segmentsMeta = append(segmentsMeta, map[string]interface{}{"id": i, "markup_ids": level2.markupIds})
+			i++
 		}
 	}
 

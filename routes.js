@@ -319,27 +319,39 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
 router.post('/vote', async (req, res) => {
     try {
         const videoId = req.body.video_id;
-        const segmentId = req.body.segment_id;
         const userId = req.body.user_id;
+        const categoryId = req.body.category_id;
+        const start = req.body.start;
+        const end = req.body.end;
         const vote = req.body.vote;
     
         if (!videoId || typeof videoId !== 'string') {
-            res.status(400).send('Bad request');
-            return;
-        }
-
-        if (typeof segmentId !== 'number') {
-            res.status(400).send(typeof segmentId);
+            res.status(400).send('Bad request: video_id');
             return;
         }
 
         if (!userId || typeof userId !== 'string') {
-            res.status(400).send('Bad request');
+            res.status(400).send('Bad request: user_id');
+            return;
+        }
+
+        if (!categoryId || typeof categoryId !== 'number') {
+            res.status(400).send('Bad request: category_id');
+            return;
+        }
+
+        if (typeof start !== 'number' || start < 0) {
+            res.status(400).send('Bad request: start');
+            return;
+        }
+
+        if (typeof end !== 'number' || end < 0) {
+            res.status(400).send('Bad request: end');
             return;
         }
 
         if (typeof vote !== 'number' || vote < -1 || vote > 1) {
-            res.status(400).send('Bad request');
+            res.status(400).send('Bad request: vote');
             return;
         }
 
@@ -351,11 +363,34 @@ router.post('/vote', async (req, res) => {
             return;
         }
 
+        const calculatedVideo = await db.VideoCalculated.findOne({
+            where: { video_id: video.id }
+        });
+        if (!calculatedVideo) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        let segment;
+        calculatedVideo.data.forEach(item => {
+            if (item.category_id === categoryId && item.start === start && item.end === end) {
+                segment = item;
+                return;
+            }
+        });
+
+        if (!segment) {
+            res.status(404).send('Not found');
+            return;
+        }
+
         await db.Vote.destroy({
             where: {
                 user_id: userId,
                 video_id: video.id,
-                video_calculated_segment_id: segmentId
+                category_id: categoryId,
+                start: start,
+                end: end
             }
         });
 
@@ -367,7 +402,9 @@ router.post('/vote', async (req, res) => {
         await db.Vote.create({
             user_id: userId,
             video_id: video.id,
-            video_calculated_segment_id: segmentId,
+            category_id: categoryId,
+            start: start,
+            end: end,
             vote: vote
         });
 
