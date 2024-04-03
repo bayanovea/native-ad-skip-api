@@ -50,7 +50,9 @@ const VideoCalculated = db.define("video_calculated", {
 const Vote = db.define("vote", {
     user_id: DataTypes.CHAR(36),
     video_id: DataTypes.INTEGER,
-    video_calculated_segment_id: DataTypes.INTEGER,
+    category_id: DataTypes.INTEGER,
+    start: DataTypes.FLOAT,
+    end: DataTypes.FLOAT,
     vote: DataTypes.SMALLINT
 });
 
@@ -92,6 +94,10 @@ VideoCalculated.belongsTo(Video, {
 Vote.belongsTo(Video, {
     foreignKey: 'video_id',
     as: 'video'
+});
+Vote.belongsTo(MarkupCategory, {
+    foreignKey: 'category_id',
+    as: 'category'
 });
 
 /** 
