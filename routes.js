@@ -428,6 +428,36 @@ router.post('/vote', async (req, res) => {
 });
 
 /**
+ * TODO: Method GET because of Grafana
+ */
+router.get('/votes/:id/delete', async (req, res) => {
+    try {
+        const voteId = req.params.id;
+        const verifyBearerToken = req.query.verifyBearerToken;
+
+        if (verifyBearerToken !== process.env.VERIFY_BEARER_TOKEN) {
+            res.status(401).send('Unauthorized');
+            return;
+        }
+
+        let vote = await db.Vote.destroy({
+            where: { id: voteId }
+        });
+
+        if (!vote) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        res.status(201).send('Deleted');
+    } catch (error) {
+        console.error('Failed to delete vote: ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
+
+/**
  * Prometheus internal endpoint   
  */
 router.get('/metrics', (req, res, next) => {
