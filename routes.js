@@ -215,7 +215,7 @@ router.get('/markups/:id/delete', async (req, res) => {
         const markupId = req.params.id;
         const verifyBearerToken = req.query.verifyBearerToken;
 
-        if (verifyBearerToken !== process.env.VERIFY_BEARER_TOKEN) {
+        if (verifyBearerToken !== process.env.AUTH_TOKEN) {
             res.status(401).send('Unauthorized');
             return;
         }
@@ -435,7 +435,7 @@ router.get('/votes/:id/delete', async (req, res) => {
         const voteId = req.params.id;
         const verifyBearerToken = req.query.verifyBearerToken;
 
-        if (verifyBearerToken !== process.env.VERIFY_BEARER_TOKEN) {
+        if (verifyBearerToken !== process.env.AUTH_TOKEN) {
             res.status(401).send('Unauthorized');
             return;
         }
