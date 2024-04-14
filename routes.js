@@ -86,6 +86,10 @@ router.post('/markup', async (req, res) => {
             res.status(400).send('Bad request');
             return;
         }
+        if (req.body.prv_user_id && (typeof req.body.prv_user_id !== 'number' || req.body.prv_user_id < 0)) {
+            res.status(400).send('Bad request');
+            return;
+        }
         if (!req.body.data || typeof req.body.data !== 'object') {
             res.status(400).send('Bad request');
             return;
@@ -113,6 +117,7 @@ router.post('/markup', async (req, res) => {
         const markup = await db.Markup.create({
             video_id: video.id,
             user_id: req.body.user_id,
+            prv_user_id: req.body.prv_user_id,
             category_id: req.body.category_id
         });
 
@@ -320,6 +325,7 @@ router.post('/vote', async (req, res) => {
     try {
         const videoId = req.body.video_id;
         const userId = req.body.user_id;
+        const prvUserId = req.body.prv_user_id;
         const categoryId = req.body.category_id;
         const start = req.body.start;
         const end = req.body.end;
@@ -332,6 +338,11 @@ router.post('/vote', async (req, res) => {
 
         if (!userId || typeof userId !== 'string') {
             res.status(400).send('Bad request: user_id');
+            return;
+        }
+
+        if (prvUserId && (typeof prvUserId !== 'number' || prvUserId < 0)) {
+            res.status(400).send('Bad request: prv_user_id');
             return;
         }
 
@@ -401,6 +412,7 @@ router.post('/vote', async (req, res) => {
 
         await db.Vote.create({
             user_id: userId,
+            prv_user_id: prvUserId,
             video_id: video.id,
             category_id: categoryId,
             start: start,
