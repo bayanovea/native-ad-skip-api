@@ -18,6 +18,10 @@ db.authenticate()
 const Markup = db.define("markup", {
     video_id: DataTypes.INTEGER,
     user_id: DataTypes.CHAR(36),
+    vk_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
     category_id: DataTypes.INTEGER,
     is_new: {
         type: DataTypes.BOOLEAN,
@@ -49,6 +53,10 @@ const VideoCalculated = db.define("video_calculated", {
 
 const Vote = db.define("vote", {
     user_id: DataTypes.CHAR(36),
+    vk_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
     video_id: DataTypes.INTEGER,
     category_id: DataTypes.INTEGER,
     start: DataTypes.FLOAT,
