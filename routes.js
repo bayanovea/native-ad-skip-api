@@ -139,6 +139,116 @@ router.post('/markup', async (req, res) => {
 });
 
 /**
+ * Edit markup
+ */
+router.put('/markups', async (req, res) => {
+    try {
+        let videoId = req.body.video_id;
+        let categoryId = req.body.category_id;
+        let start = req.body.start;
+        let end = req.body.end;
+        let newStart = req.body.new_start;
+        let newEnd = req.body.new_end;
+
+        if (!videoId || typeof videoId !== 'string') {
+            res.status(400).send('Bad request: video_id');
+            return;
+        }
+        if (!req.body.user_id || typeof req.body.user_id !== 'string') {
+            res.status(400).send('Bad request: user_id');
+            return;
+        }
+        if (req.body.prv_user_id && (typeof req.body.prv_user_id !== 'number' || req.body.prv_user_id < 0)) {
+            res.status(400).send('Bad request: prv_user_id');
+            return;
+        }
+        if (!categoryId || typeof categoryId !== 'number') {
+            res.status(400).send('Bad request: category_id');
+            return;
+        }
+
+        if (typeof start !== 'number' || start < 0) {
+            res.status(400).send('Bad request: start');
+            return;
+        }
+        if (typeof end !== 'number' || end < 0) {
+            res.status(400).send('Bad request: end');
+            return;
+        }
+        if (typeof newStart !== 'number' || newStart < 0) {
+            res.status(400).send('Bad request: new_start');
+            return;
+        }
+        if (typeof newEnd !== 'number' || newEnd < 0) {
+            res.status(400).send('Bad request: new_end');
+            return;
+        }
+
+        let video = await db.Video.findOne({
+            where: { native_id: videoId }
+        });
+
+        if (!video) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        let markups = await db.Markup.findAll({
+            where: { 
+                video_id: video.id,
+                user_id: req.body.user_id,
+                category_id: categoryId,
+            }
+        });
+
+        if (markups.length === 0) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        let markupIds = markups.map(markup => markup.id);
+
+        let markupInterval = await db.MarkupTimeInterval.findOne({
+            where: {
+                markup_id: markupIds,
+                start: start,
+                end: end
+            }
+        });
+
+        if (!markupInterval) {
+            res.status(404).send('Not found');
+            return;
+        }
+
+        await db.db.transaction(async (transaction) => {
+            await db.MarkupTimeInterval.update({
+                start: newStart,
+                end: newEnd,
+                is_new: true
+            }, {
+                where: {
+                    id: markupInterval.id
+                }
+            });
+    
+            await db.Markup.update({
+                is_new: true
+            }, {
+                where: {
+                    id: markupInterval.markup_id
+                }
+            });
+        });
+
+        res.status(200).send('Updated');
+    } catch (error) {
+        console.error('Failed to update markup: ', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
+/**
  * Get markups by filter
  */
 router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
