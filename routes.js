@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('./db');
 const middleware = require('./middleware');
 const prometheusWrapper = require('./prometheus-wrapper');
+const { body } = require('express-validator');
+const validateRequest = require('./middleware/validate-request');
 
 /**
  * Check
@@ -16,13 +18,13 @@ router.get('/', (req, res, next) => {
 /**
  * Get calculated data by video 
  */
-router.get('/video-calculated', async (req, res) => {
+router.get('/video-calculated',
+    [
+        body('video_id').notEmpty().isString(),
+        validateRequest
+    ],
+async (req, res) => {
     try {
-        if (!req.query.video_id || typeof req.query.video_id !== 'string') {
-            res.status(400).send('Bad request');
-            return;
-        }
-
         let nativeFullVideoId = req.query.video_id;
         let video;
         
@@ -73,31 +75,29 @@ router.get('/video-calculated', async (req, res) => {
 /**
  * Create markup
  */
-router.post('/markup', async (req, res) => {
+router.post('/markup', [
+        body('video_id').notEmpty().isString(),
+        body('user_id').notEmpty().isString(),
+        body('prv_user_id').optional().isInt({ min: 1 }),
+        body('category_id').notEmpty().isInt({ min: 1 }),
+        body('data').custom((value) => {
+            if (typeof value !== 'object') {
+                throw new Error('data must be an object');
+            }
+            return true;
+        }),
+        body('data.intervals').custom((value) => {
+            if (!Array.isArray(value)) {
+                throw new Error('data.intervals must be an array');
+            }
+            return true;
+        }),
+        validateRequest
+    ],
+async (req, res) => {
     try {
         const blockedUserIds = ['689613b1-e95c-410a-8879-6745c72a0a9a'];
         let videoId = req.body.video_id;
-
-        if (!videoId || typeof videoId !== 'string') {
-            res.status(400).send('Bad request');
-            return;
-        }
-        if (!req.body.user_id || typeof req.body.user_id !== 'string') {
-            res.status(400).send('Bad request');
-            return;
-        }
-        if (req.body.prv_user_id && (typeof req.body.prv_user_id !== 'number' || req.body.prv_user_id < 0)) {
-            res.status(400).send('Bad request');
-            return;
-        }
-        if (!req.body.data || typeof req.body.data !== 'object') {
-            res.status(400).send('Bad request');
-            return;
-        }
-        if (!req.body.data.intervals) {
-            res.status(400).send('Bad request');
-            return;
-        }
 
         if (blockedUserIds.includes(req.body.user_id)) {
             res.status(201).send('Created'); // fake response
@@ -131,7 +131,6 @@ router.post('/markup', async (req, res) => {
         }
 
         res.status(201).send('Created');
-
     } catch (error) {
         console.error('Failed to create a new markup: ', error);
         res.status(500).send('Internal Server Error');
@@ -141,51 +140,21 @@ router.post('/markup', async (req, res) => {
 /**
  * Edit markup
  */
-router.put('/markups', async (req, res) => {
+router.put('/markups', [
+        body('video_id').notEmpty().isString(),
+        body('user_id').notEmpty().isString(),
+        body('prv_user_id').optional().isInt({ min: 1 }),
+        body('category_id').notEmpty().isInt({ min: 1 }),
+        body('start').notEmpty().isInt({ min: 0 }),
+        body('end').notEmpty().isInt({ min: 0 }),
+        body('new_start').notEmpty().isInt({ min: 0 }),
+        body('new_end').notEmpty().isInt({ min: 0 }),
+        validateRequest
+    ],
+async (req, res) => {
     try {
-        let videoId = req.body.video_id;
-        let categoryId = req.body.category_id;
-        let start = req.body.start;
-        let end = req.body.end;
-        let newStart = req.body.new_start;
-        let newEnd = req.body.new_end;
-
-        if (!videoId || typeof videoId !== 'string') {
-            res.status(400).send('Bad request: video_id');
-            return;
-        }
-        if (!req.body.user_id || typeof req.body.user_id !== 'string') {
-            res.status(400).send('Bad request: user_id');
-            return;
-        }
-        if (req.body.prv_user_id && (typeof req.body.prv_user_id !== 'number' || req.body.prv_user_id < 0)) {
-            res.status(400).send('Bad request: prv_user_id');
-            return;
-        }
-        if (!categoryId || typeof categoryId !== 'number') {
-            res.status(400).send('Bad request: category_id');
-            return;
-        }
-
-        if (typeof start !== 'number' || start < 0) {
-            res.status(400).send('Bad request: start');
-            return;
-        }
-        if (typeof end !== 'number' || end < 0) {
-            res.status(400).send('Bad request: end');
-            return;
-        }
-        if (typeof newStart !== 'number' || newStart < 0) {
-            res.status(400).send('Bad request: new_start');
-            return;
-        }
-        if (typeof newEnd !== 'number' || newEnd < 0) {
-            res.status(400).send('Bad request: new_end');
-            return;
-        }
-
         let video = await db.Video.findOne({
-            where: { native_id: videoId }
+            where: { native_id: req.body.video_id }
         });
 
         if (!video) {
@@ -197,7 +166,7 @@ router.put('/markups', async (req, res) => {
             where: { 
                 video_id: video.id,
                 user_id: req.body.user_id,
-                category_id: categoryId,
+                category_id: req.body.category_id,
             }
         });
 
@@ -211,8 +180,8 @@ router.put('/markups', async (req, res) => {
         let markupInterval = await db.MarkupTimeInterval.findOne({
             where: {
                 markup_id: markupIds,
-                start: start,
-                end: end
+                start: req.body.start,
+                end: req.body.end
             }
         });
 
@@ -223,8 +192,8 @@ router.put('/markups', async (req, res) => {
 
         await db.db.transaction(async (transaction) => {
             await db.MarkupTimeInterval.update({
-                start: newStart,
-                end: newEnd,
+                start: req.body.new_start,
+                end: req.body.new_end,
                 is_new: true
             }, {
                 where: {
@@ -323,9 +292,8 @@ router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => 
 router.get('/markups/:id/delete', async (req, res) => {
     try {
         const markupId = req.params.id;
-        const verifyBearerToken = req.query.verifyBearerToken;
 
-        if (verifyBearerToken !== process.env.AUTH_TOKEN) {
+        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
             res.status(401).send('Unauthorized');
             return;
         }
@@ -431,53 +399,26 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
     }
 });
 
-router.post('/vote', async (req, res) => {
+router.post('/vote', [
+        body('video_id').notEmpty().isString(),
+        body('user_id').notEmpty().isString(),
+        body('prv_user_id').optional().isInt({ min: 1 }),
+        body('category_id').notEmpty().isInt({ min: 1 }),
+        body('start').notEmpty().isInt({ min: 0 }),
+        body('end').notEmpty().isInt({ min: 0 }),
+        body('vote').notEmpty().isInt({ min: -1, max: 1 }),
+        validateRequest
+    ],
+async (req, res) => {
     try {
-        const videoId = req.body.video_id;
         const userId = req.body.user_id;
-        const prvUserId = req.body.prv_user_id;
         const categoryId = req.body.category_id;
         const start = req.body.start;
         const end = req.body.end;
         const vote = req.body.vote;
-    
-        if (!videoId || typeof videoId !== 'string') {
-            res.status(400).send('Bad request: video_id');
-            return;
-        }
-
-        if (!userId || typeof userId !== 'string') {
-            res.status(400).send('Bad request: user_id');
-            return;
-        }
-
-        if (prvUserId && (typeof prvUserId !== 'number' || prvUserId < 0)) {
-            res.status(400).send('Bad request: prv_user_id');
-            return;
-        }
-
-        if (!categoryId || typeof categoryId !== 'number') {
-            res.status(400).send('Bad request: category_id');
-            return;
-        }
-
-        if (typeof start !== 'number' || start < 0) {
-            res.status(400).send('Bad request: start');
-            return;
-        }
-
-        if (typeof end !== 'number' || end < 0) {
-            res.status(400).send('Bad request: end');
-            return;
-        }
-
-        if (typeof vote !== 'number' || vote < -1 || vote > 1) {
-            res.status(400).send('Bad request: vote');
-            return;
-        }
 
         const video = await db.Video.findOne({
-            where: { native_id: videoId }
+            where: { native_id: req.body.video_id }
         });
         if (!video) {
             res.status(404).send('Not found');
@@ -522,7 +463,7 @@ router.post('/vote', async (req, res) => {
 
         await db.Vote.create({
             user_id: userId,
-            prv_user_id: prvUserId,
+            prv_user_id: req.body.prv_user_id,
             video_id: video.id,
             category_id: categoryId,
             start: start,
@@ -543,9 +484,8 @@ router.post('/vote', async (req, res) => {
 router.get('/votes/:id/delete', async (req, res) => {
     try {
         const voteId = req.params.id;
-        const verifyBearerToken = req.query.verifyBearerToken;
 
-        if (verifyBearerToken !== process.env.AUTH_TOKEN) {
+        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
             res.status(401).send('Unauthorized');
             return;
         }
