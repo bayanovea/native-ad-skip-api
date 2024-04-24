@@ -1,8 +1,9 @@
-const path = require('path')
 const express = require('express');
 const bodyParser = require('body-parser')
-const db = require('./db');
-const routes = require('./routes');
+const routes = require('./routes/routes');
+const videoRoutes = require('./routes/videos');
+const markupRoutes = require('./routes/markups');
+const voteRoutes = require('./routes/votes');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -31,6 +32,9 @@ app.use(function (req, res, next) {
 
 // routes
 app.use('/', routes);
+app.use('/', videoRoutes);
+app.use('/', markupRoutes);
+app.use('/', voteRoutes);
 
 app.listen(port, () => {
     console.log(`I am alive, http://localhost:${port}`);

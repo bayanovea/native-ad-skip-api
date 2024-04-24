@@ -1,0 +1,35 @@
+const express = require('express');
+const router = express.Router();
+const { body } = require('express-validator');
+const db = require('../db');
+const middleware = require('../middleware');
+const prometheusWrapper = require('../prometheus-wrapper');
+const validateRequest = require('../middleware/validate-request');
+
+/**
+ * Check
+ */
+router.get('/', (req, res, next) => {
+    res.send({
+        status: 'ok'
+    })
+})
+
+/**
+ * Prometheus internal endpoint   
+ */
+router.get('/metrics', (req, res, next) => {
+    res.set('Content-Type', metricsMiddleware.promClient.register.contentType);
+    res.end(metricsMiddleware.promClient.register.metrics());
+})
+
+/**
+ * Check logs
+ */
+router.get('/gdfgestshgergevcv3rwrf2e2e', (req, res, next) => {
+    console.error('qqq1');
+    console.log('qqq2');
+    throw new Error('qqq3');
+})
+
+module.exports = router;

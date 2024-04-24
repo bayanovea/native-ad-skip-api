@@ -1,99 +1,33 @@
 const express = require('express');
 const router = express.Router();
-const db = require('./db');
-const middleware = require('./middleware');
-const prometheusWrapper = require('./prometheus-wrapper');
 const { body } = require('express-validator');
-const validateRequest = require('./middleware/validate-request');
-
-/**
- * Check
- */
-router.get('/', (req, res, next) => {
-    res.send({
-        status: 'ok'
-    })
-})
-
-/**
- * Get calculated data by video 
- */
-router.get('/video-calculated',
-    [
-        body('video_id').notEmpty().isString(),
-        validateRequest
-    ],
-async (req, res) => {
-    try {
-        let nativeFullVideoId = req.query.video_id;
-        let video;
-        
-        if (req.query.v) {
-            video = await db.Video.findOne({
-                where: { native_id: nativeFullVideoId }
-            });
-        } else { // Crutch for old versions when frontend always send video id without minus
-            prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
-
-            let nativeFullVideoIdMinus = '-' + nativeFullVideoId;
-
-            video = await db.Video.findOne({
-                where: { native_id: nativeFullVideoIdMinus }
-            });
-
-            if (!video) {
-                video = await db.Video.findOne({
-                    where: { native_id : nativeFullVideoId }
-                });
-            }
-        }
-
-        if (!video) {
-            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
-            res.status(204).send();
-            return;
-        }
-
-        const videoCalculated = await db.VideoCalculated.findOne({
-            where: { video_id: String(video.id) }
-        });
-
-        if (!videoCalculated) {
-            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
-            res.status(204).send();
-            return;
-        }
-
-        prometheusWrapper.incrementVideoCalculatedFound(nativeFullVideoId);
-        res.status(200).send(videoCalculated.data);
-    } catch (error) {
-        console.error(error);
-        res.status(500).send('Internal Server Error');
-    }
-});
+const db = require('../db');
+const middleware = require('../middleware');
+const prometheusWrapper = require('../prometheus-wrapper');
+const validateRequest = require('../middleware/validate-request');
 
 /**
  * Create markup
  */
 router.post('/markup', [
-        body('video_id').notEmpty().isString(),
-        body('user_id').notEmpty().isString(),
-        body('prv_user_id').optional().isInt({ min: 1 }),
-        body('category_id').notEmpty().isInt({ min: 1 }),
-        body('data').custom((value) => {
-            if (typeof value !== 'object') {
-                throw new Error('data must be an object');
-            }
-            return true;
-        }),
-        body('data.intervals').custom((value) => {
-            if (!Array.isArray(value)) {
-                throw new Error('data.intervals must be an array');
-            }
-            return true;
-        }),
-        validateRequest
-    ],
+    body('video_id').notEmpty().isString(),
+    body('user_id').notEmpty().isString(),
+    body('prv_user_id').optional().isInt({ min: 1 }),
+    body('category_id').notEmpty().isInt({ min: 1 }),
+    body('data').custom((value) => {
+        if (typeof value !== 'object') {
+            throw new Error('data must be an object');
+        }
+        return true;
+    }),
+    body('data.intervals').custom((value) => {
+        if (!Array.isArray(value)) {
+            throw new Error('data.intervals must be an array');
+        }
+        return true;
+    }),
+    validateRequest
+],
 async (req, res) => {
     try {
         const blockedUserIds = ['689613b1-e95c-410a-8879-6745c72a0a9a'];
@@ -138,19 +72,19 @@ async (req, res) => {
 });
 
 /**
- * Edit markup
- */
+* Edit markup
+*/
 router.put('/markups', [
-        body('video_id').notEmpty().isString(),
-        body('user_id').notEmpty().isString(),
-        body('prv_user_id').optional().isInt({ min: 1 }),
-        body('category_id').notEmpty().isInt({ min: 1 }),
-        body('start').notEmpty().isInt({ min: 0 }),
-        body('end').notEmpty().isInt({ min: 0 }),
-        body('new_start').notEmpty().isInt({ min: 0 }),
-        body('new_end').notEmpty().isInt({ min: 0 }),
-        validateRequest
-    ],
+    body('video_id').notEmpty().isString(),
+    body('user_id').notEmpty().isString(),
+    body('prv_user_id').optional().isInt({ min: 1 }),
+    body('category_id').notEmpty().isInt({ min: 1 }),
+    body('start').notEmpty().isInt({ min: 0 }),
+    body('end').notEmpty().isInt({ min: 0 }),
+    body('new_start').notEmpty().isInt({ min: 0 }),
+    body('new_end').notEmpty().isInt({ min: 0 }),
+    validateRequest
+],
 async (req, res) => {
     try {
         let video = await db.Video.findOne({
@@ -200,7 +134,7 @@ async (req, res) => {
                     id: markupInterval.id
                 }
             });
-    
+
             await db.Markup.update({
                 is_new: true
             }, {
@@ -345,6 +279,9 @@ router.get('/markups/:id/delete', async (req, res) => {
     }
 });
 
+/**
+ * Delete video's markups
+ */
 router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, res) => {
     try {
         let videoId = req.params.id;
@@ -398,130 +335,5 @@ router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, r
         res.status(500).send('Internal Server Error');
     }
 });
-
-router.post('/vote', [
-        body('video_id').notEmpty().isString(),
-        body('user_id').notEmpty().isString(),
-        body('prv_user_id').optional().isInt({ min: 1 }),
-        body('category_id').notEmpty().isInt({ min: 1 }),
-        body('start').notEmpty().isInt({ min: 0 }),
-        body('end').notEmpty().isInt({ min: 0 }),
-        body('vote').notEmpty().isInt({ min: -1, max: 1 }),
-        validateRequest
-    ],
-async (req, res) => {
-    try {
-        const userId = req.body.user_id;
-        const categoryId = req.body.category_id;
-        const start = req.body.start;
-        const end = req.body.end;
-        const vote = req.body.vote;
-
-        const video = await db.Video.findOne({
-            where: { native_id: req.body.video_id }
-        });
-        if (!video) {
-            res.status(404).send('Not found');
-            return;
-        }
-
-        const calculatedVideo = await db.VideoCalculated.findOne({
-            where: { video_id: video.id }
-        });
-        if (!calculatedVideo) {
-            res.status(404).send('Not found');
-            return;
-        }
-
-        let segment;
-        calculatedVideo.data.forEach(item => {
-            if (item.category_id === categoryId && item.start === start && item.end === end) {
-                segment = item;
-                return;
-            }
-        });
-
-        if (!segment) {
-            res.status(404).send('Not found');
-            return;
-        }
-
-        await db.Vote.destroy({
-            where: {
-                user_id: userId,
-                video_id: video.id,
-                category_id: categoryId,
-                start: start,
-                end: end
-            }
-        });
-
-        if (vote === 0) {
-            res.status(204).send();
-            return;
-        }
-
-        await db.Vote.create({
-            user_id: userId,
-            prv_user_id: req.body.prv_user_id,
-            video_id: video.id,
-            category_id: categoryId,
-            start: start,
-            end: end,
-            vote: vote
-        });
-
-        res.status(204).send();
-    } catch (error) {
-        console.error('Failed to vote: ', error);
-        res.status(500).send('Internal Server Error');
-    }
-});
-
-/**
- * TODO: Method GET because of Grafana
- */
-router.get('/votes/:id/delete', async (req, res) => {
-    try {
-        const voteId = req.params.id;
-
-        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
-            res.status(401).send('Unauthorized');
-            return;
-        }
-
-        let vote = await db.Vote.destroy({
-            where: { id: voteId }
-        });
-
-        if (!vote) {
-            res.status(404).send('Not found');
-            return;
-        }
-
-        res.status(201).send('Deleted');
-    } catch (error) {
-        console.error('Failed to delete vote: ', error);
-        res.status(500).send('Internal Server Error');
-    }
-});
-
-
-/**
- * Prometheus internal endpoint   
- */
-router.get('/metrics', (req, res, next) => {
-    res.set('Content-Type', metricsMiddleware.promClient.register.contentType);
-    res.end(metricsMiddleware.promClient.register.metrics());
-})
-
-/**
- * Check logs
- */
-router.get('/gdfgestshgergevcv3rwrf2e2e', (req, res, next) => {
-    console.error('qqq1');
-    console.log('qqq2');
-    throw new Error('qqq3');
-})
 
 module.exports = router;
