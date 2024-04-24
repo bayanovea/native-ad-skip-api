@@ -1,10 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { body } = require('express-validator');
-const db = require('../db');
-const middleware = require('../middleware');
-const prometheusWrapper = require('../prometheus-wrapper');
-const validateRequest = require('../middleware/validate-request');
 
 /**
  * Check
