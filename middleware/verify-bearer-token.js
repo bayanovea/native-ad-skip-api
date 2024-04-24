@@ -17,6 +17,4 @@ function verifyBearerToken(req, res, next) {
     next();
 }
 
-module.exports = {
-  verifyBearerToken
-};
+module.exports = verifyBearerToken;

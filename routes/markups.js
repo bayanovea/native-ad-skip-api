@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const db = require('../db');
-const middleware = require('../middleware');
 const prometheusWrapper = require('../prometheus-wrapper');
 const validateRequest = require('../middleware/validate-request');
+const verifyBearerToken = require('../middleware/verify-bearer-token');
 
 /**
  * Create markup
@@ -154,7 +154,7 @@ async (req, res) => {
 /**
  * Get markups by filter
  */
-router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
+router.get('/markups', verifyBearerToken, async (req, res) => {
     try {
         let markups = await db.MarkupRepository.findByRequest(req);
         res.status(200).send(markups);
@@ -167,7 +167,7 @@ router.get('/markups', middleware.verifyBearerToken, async (req, res) => {
 /**
  * Delete markup
  */
-router.delete('/markups/:id', middleware.verifyBearerToken, async (req, res) => {
+router.delete('/markups/:id', verifyBearerToken, async (req, res) => {
     try {
         const markupId = req.params.id;
 
@@ -282,7 +282,7 @@ router.get('/markups/:id/delete', async (req, res) => {
 /**
  * Delete video's markups
  */
-router.delete('/videos/:id/markups', middleware.verifyBearerToken, async (req, res) => {
+router.delete('/videos/:id/markups', verifyBearerToken, async (req, res) => {
     try {
         let videoId = req.params.id;
 
