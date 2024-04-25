@@ -35,6 +35,18 @@ app.use('/', routes);
 app.use('/', videoRoutes);
 app.use('/', markupRoutes);
 app.use('/', voteRoutes);
+app.use((error, req, res, next) => {
+    console.error('Error: ', {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: req.body,
+        params: req.params,
+        query: req.query,
+        error: error
+    });
+    res.status(500).send('Internal Server Error');
+});
 
 app.listen(port, () => {
     console.log(`I am alive, http://localhost:${port}`);
