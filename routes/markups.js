@@ -14,6 +14,7 @@ router.post('/markup', [
     body('video_id').notEmpty().isString(),
     body('user_id').notEmpty().isString(),
     body('prv_user_id').optional().isInt({ min: 1 }),
+    body('prv_uid').optional().isInt({ min: 1 }), // TODO: Temporary solution; remove once all frontends are updated.
     body('category_id').notEmpty().isInt({ min: 1 }),
     body('data').custom((value) => {
         if (typeof value !== 'object') {
@@ -48,10 +49,16 @@ handler(async (req, res) => {
         where: { native_id: videoId }
     });
 
+    // TODO: Temporary solution; remove once all frontends are updated.
+    let prvUserId = req.body.prv_user_id;
+    if (!prvUserId) {
+        prvUserId = req.body.prv_uid;
+    }
+
     const markup = await db.Markup.create({
         video_id: video.id,
         user_id: req.body.user_id,
-        prv_user_id: req.body.prv_user_id,
+        prv_user_id: prvUserId,
         category_id: req.body.category_id
     });
 
