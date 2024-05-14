@@ -108,82 +108,6 @@ Vote.belongsTo(MarkupCategory, {
     as: 'category'
 });
 
-/** 
- * Repositories 
- * 
- * TODO: Move to separate file
- **/
-
-const MarkupRepository = {
-    fields: ['id', 'video_id', 'user_id', 'category_id', 'is_new', 'createdAt', 'updatedAt'],
-
-    /**
-     * All supported fields see in this.fields
-     * 
-     * req.field_name is filter by field
-     * req.order_by format is "field1, field2, -field3, -field4". Minus means DESC.
-     */
-    findByRequest: async function(req) {
-        let query = {
-            sql: `
-                SELECT * FROM markups m 
-                WHERE 1=1
-            `,
-            replacements: []
-        };
-
-        query = this._getWhere(req, query);
-        query = this._getOrderBy(req, query);
-
-        try {
-            const markups = await db.query(query.sql, {
-                replacements: query.replacements,
-                type: db.QueryTypes.SELECT
-            });
-            return markups;
-        } catch (error) {
-            console.error("Ошибка выполнения запроса:", error);
-        }
-    },
-
-    _getWhere: function(req, query) {
-        this.fields.forEach(field => {
-            if (req.query[field]) {
-                query.sql += ` AND ${field} = ?`;
-                query.replacements.push(req.query[field]);
-            }
-        });
-
-        return query;
-    },
-
-    _getOrderBy: function(req, query) {
-        let orderBy = req.query['order_by'];
-
-        if (orderBy) {
-            let orderFields = orderBy.split(',');
-
-            let orderStatements = orderFields.map(field => {
-                field = field.trim();
-                if (this.fields.includes(field.replace('-', ''))) {
-                    if (field.includes('-')) {
-                        field = field.replace('-', '');
-                        return `"${field}" DESC`;
-                    } else {
-                        return `"${field}" ASC`;
-                    }
-                }
-            }).filter(Boolean); // remove any undefined values
-
-            if (orderStatements.length) {
-                query.sql += ` ORDER BY ${orderStatements.join(', ')}`;
-            }
-        }
-
-        return query;
-    },
-};
-
 
 /**
  * Миграция, создаёт категории
@@ -225,6 +149,4 @@ module.exports = {
     Video,
     VideoCalculated,
     Vote,
-    // Repositories
-    MarkupRepository
 };
