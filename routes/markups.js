@@ -84,8 +84,9 @@ router.put('/markups', [
     body('category_id').notEmpty().isInt({ min: 1 }),
     body('start').notEmpty().isInt({ min: 0 }),
     body('end').notEmpty().isInt({ min: 0 }),
-    body('new_start').notEmpty().isInt({ min: 0 }),
-    body('new_end').notEmpty().isInt({ min: 0 }),
+    body('new_category_id').isInt({ min: 1 }),
+    body('new_start').isInt({ min: 0 }),
+    body('new_end').isInt({ min: 0 }),
     validateRequest
 ],
 handler(async (req, res) => {
@@ -126,23 +127,31 @@ handler(async (req, res) => {
         return;
     }
 
+    let newValues = {};
+
+    if (req.body.new_category_id !== undefined) {
+        let category = await db.MarkupCategory.findByPk(req.body.new_category_id);
+        if (!category) {
+            res.status(400).send('New category is invalid');
+            return;
+        }
+        newValues.category_id = req.body.new_category_id;
+    }
+
+    if (req.body.new_start !== undefined) {
+        newValues.start = req.body.new_start;
+    }
+    if (req.body.new_end !== undefined) {
+        newValues.end = req.body.new_end;
+    }
+
     await db.db.transaction(async (transaction) => {
-        await db.MarkupTimeInterval.update({
-            start: req.body.new_start,
-            end: req.body.new_end,
-            is_new: true
-        }, {
-            where: {
-                id: markupInterval.id
-            }
+        await db.MarkupTimeInterval.update(newValues, {
+            where: { id: markupInterval.id }
         });
 
-        await db.Markup.update({
-            is_new: true
-        }, {
-            where: {
-                id: markupInterval.markup_id
-            }
+        await db.Markup.update({ is_new: true }, {
+            where: { id: markupInterval.markup_id }
         });
     });
 
