@@ -6,6 +6,8 @@ const prometheusWrapper = require('../prometheus-wrapper');
 const validateRequest = require('../middleware/validate-request');
 const verifyBearerToken = require('../middleware/verify-bearer-token');
 const handler = require('../middleware/handler');
+const markupRepository = require('../repository/markup');
+const markupTimeIntervalRepository = require('../repository/markup-time-interval');
 
 /**
  * Create markup
@@ -99,8 +101,8 @@ handler(async (req, res) => {
         return;
     }
 
-    let markups = await db.Markup.findAll({
-        where: { 
+    let markups = await markupRepository.findAll({
+        where: {
             video_id: video.id,
             user_id: req.body.user_id,
             category_id: req.body.category_id,
@@ -114,7 +116,7 @@ handler(async (req, res) => {
 
     let markupIds = markups.map(markup => markup.id);
 
-    let markupInterval = await db.MarkupTimeInterval.findOne({
+    let markupInterval = await markupTimeIntervalRepository.findOne({
         where: {
             markup_id: markupIds,
             start: req.body.start,
@@ -162,7 +164,7 @@ handler(async (req, res) => {
  * Get markups by filter
  */
 router.get('/markups', verifyBearerToken, handler(async (req, res) => {
-    let markups = await db.MarkupRepository.findByRequest(req);
+    let markups = await markupRepository.findByRequest(req);
     res.status(200).send(markups);
 }))
 
@@ -172,7 +174,7 @@ router.get('/markups', verifyBearerToken, handler(async (req, res) => {
 router.delete('/markups/:id', verifyBearerToken, handler(async (req, res) => {
     const markupId = req.params.id;
 
-    let markup = await db.Markup.findByPk(markupId)
+    let markup = await markupRepository.findByPk(markupId)
     if (!markup) {
         res.status(404).send('Not found ' . markupId );
         return;
@@ -189,7 +191,7 @@ router.delete('/markups/:id', verifyBearerToken, handler(async (req, res) => {
             transaction
         });
 
-        let videoMarkups = await db.Markup.findAll({
+        let videoMarkups = await markupRepository.findAll({
             where: { video_id: markup.video_id },
             transaction
         });
@@ -228,7 +230,7 @@ router.get('/markups/:id/delete', handler(async (req, res) => {
         return;
     }
 
-    let markup = await db.Markup.findByPk(markupId)
+    let markup = await markupRepository.findByPk(markupId)
     if (!markup) {
         res.status(404).send('Not found ' . markupId );
         return;
@@ -245,7 +247,7 @@ router.get('/markups/:id/delete', handler(async (req, res) => {
             transaction
         });
 
-        let videoMarkups = await db.Markup.findAll({
+        let videoMarkups = await markupRepository.findAll({
             where: { video_id: markup.video_id },
             transaction
         });
@@ -292,12 +294,12 @@ router.delete('/videos/:id/markups', verifyBearerToken, handler(async (req, res)
     }
     
     // Collect all markups, intervals ids for common delete query
-    let videoMarkups = await db.Markup.findAll({
+    let videoMarkups = await markupRepository.findAll({
         where: { video_id: String(videoId) }
     });
     markupIds = videoMarkups.map(markup => markup.id);
 
-    let markupIntervals = await db.MarkupTimeInterval.findAll({
+    let markupIntervals = await markupTimeIntervalRepository.findAll({
         where: { markup_id: markupIds }
     });
     markupIntervalIds = markupIntervals.map(interval => interval.id);
