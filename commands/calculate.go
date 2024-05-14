@@ -57,7 +57,7 @@ func getVideoIds(db *sql.DB) []string {
 func getVideoIdsWithNewMarkups(db *sql.DB) []string {
 	getVideoIdsSql := `
 		SELECT DISTINCT video_id FROM markups
-		WHERE is_new = true
+		WHERE is_new = true AND deleted_at IS NULL
 	`
 
 	rows, err := db.Query(getVideoIdsSql)
@@ -130,7 +130,7 @@ func calculateIntervals(db *sql.DB, videoId string) (map[int]map[int]IntervalAgg
   	SELECT intervals.start, intervals.end, categories.id category_id, markups.id markup_id FROM markup_time_intervals intervals
 		LEFT JOIN markups ON markups.id = intervals.markup_id
 		LEFT JOIN markup_categories categories ON categories.id = markups.category_id
-		WHERE markups.video_id = $1
+		WHERE markups.video_id = $1 AND markup_time_intervals.deleted_at IS NULL AND markups.deleted_at IS NULL
 		ORDER BY intervals.start
 	`
 
@@ -249,7 +249,7 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 func updateIsNew(db *sql.DB, videoId string) {
 	sql := `
 		UPDATE markups SET is_new = false
-		WHERE video_id = $1 AND is_new = true
+		WHERE video_id = $1 AND is_new = true AND deleted_at IS NULL
 	`
 
 	res, err := db.Query(sql, videoId)
