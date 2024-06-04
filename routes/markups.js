@@ -13,11 +13,11 @@ const markupTimeIntervalRepository = require('../repository/markup-time-interval
  * Create markup
  */
 router.post('/markup', [
-    body('video_id').notEmpty().isString(),
-    body('user_id').notEmpty().isString(),
+    body('video_id').isString(),
+    body('user_id').isString(),
     body('vk_user_id').optional().isInt({ min: 1 }),
     body('vk_uid').optional().isInt({ min: 1 }), // TODO: Temporary solution; remove once all frontends are updated.
-    body('category_id').notEmpty().isInt({ min: 1 }),
+    body('category_id').isInt({ min: 1 }),
     body('data').custom((value) => {
         if (typeof value !== 'object') {
             throw new Error('data must be an object');
@@ -80,15 +80,15 @@ handler(async (req, res) => {
  * Edit markup
  */
 router.put('/markups', [
-    body('video_id').notEmpty().isString(),
-    body('user_id').notEmpty().isString(),
+    body('video_id').isString(),
+    body('user_id').isString(),
     body('vk_user_id').optional().isInt({ min: 1 }),
-    body('category_id').notEmpty().isInt({ min: 1 }),
-    body('start').notEmpty().isInt({ min: 0 }),
-    body('end').notEmpty().isInt({ min: 0 }),
-    body('new_category_id').isInt({ min: 1 }),
-    body('new_start').isInt({ min: 0 }),
-    body('new_end').isInt({ min: 0 }),
+    body('category_id').isInt({ min: 1 }),
+    body('start').isInt({ min: 0 }),
+    body('end').isInt({ min: 0 }),
+    body('new_category_id').optional().isInt({ min: 1 }),
+    body('new_start').optional().isInt({ min: 0 }),
+    body('new_end').optional().isInt({ min: 0 }),
     validateRequest
 ],
 handler(async (req, res) => {
@@ -165,14 +165,14 @@ handler(async (req, res) => {
  * Soft delete all old markups and create new admin markup.
  */
 router.post('/admin/markups/edit', verifyBearerToken, [
-    body('video_id').notEmpty().isString(),
-    body('category_id').notEmpty().isInt({ min: 1 }),
-    body('start').notEmpty().isInt({ min: 0 }),
-    body('end').notEmpty().isInt({ min: 0 }),
+    body('video_id').isString(),
+    body('category_id').isInt({ min: 1 }),
+    body('start').isInt({ min: 0 }),
+    body('end').isInt({ min: 0 }),
     body('new_category_id').isInt({ min: 1 }),
     body('new_start').isInt({ min: 0 }),
     body('new_end').isInt({ min: 0 }),
-    body('user_id').notEmpty().isString(),
+    body('user_id').isString(),
     body('vk_user_id').optional().isInt({ min: 1 }),
     validateRequest
 ],

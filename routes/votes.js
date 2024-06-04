@@ -6,13 +6,13 @@ const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
 
 router.post('/vote', [
-    body('video_id').notEmpty().isString(),
-    body('user_id').notEmpty().isString(),
+    body('video_id').isString(),
+    body('user_id').isString(),
     body('vk_user_id').optional().isInt({ min: 1 }),
-    body('category_id').notEmpty().isInt({ min: 1 }),
-    body('start').notEmpty().isInt({ min: 0 }),
-    body('end').notEmpty().isInt({ min: 0 }),
-    body('vote').notEmpty().isInt({ min: -1, max: 1 }),
+    body('category_id').isInt({ min: 1 }),
+    body('start').isInt({ min: 0 }),
+    body('end').isInt({ min: 0 }),
+    body('vote').isInt({ min: -1, max: 1 }),
     validateRequest
 ],
 handler(async (req, res) => {
