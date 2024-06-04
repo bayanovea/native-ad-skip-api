@@ -5,12 +5,12 @@ const markupRepository = {
         'deleted_by_prv_user_id'],
 
     async findAll(options, includeDeleted = false) {
-        _updateOptionsByDeleted(options, includeDeleted);
+        this._updateOptionsByDeleted(options, includeDeleted);
         return db.Markup.findAll(options);
     },
 
     async findByPk(id, includeDeleted = false) {
-        _updateOptionsByDeleted(options, includeDeleted);
+        this._updateOptionsByDeleted(options, includeDeleted);
         return db.Markup.findByPk(id);
     },
 
@@ -21,7 +21,7 @@ const markupRepository = {
      * req.order_by format is "field1, field2, -field3, -field4". Minus means DESC.
      */
     async findByRequest(req, includeDeleted = false) {
-        _updateOptionsByDeleted(req, includeDeleted);
+        this._updateOptionsByDeleted(req, includeDeleted);
 
         let query = {
             sql: `
