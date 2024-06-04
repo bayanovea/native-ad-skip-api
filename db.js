@@ -26,7 +26,19 @@ const Markup = db.define("markup", {
     is_new: {
         type: DataTypes.BOOLEAN,
         defaultValue: true
-    }
+    },
+    deleted_at: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    deleted_by_user_id: {
+        type: DataTypes.CHAR(36),
+        allowNull: true
+    },
+    deleted_by_vk_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
 });
 
 const MarkupCategory = db.define("markup_category", {
@@ -36,7 +48,19 @@ const MarkupCategory = db.define("markup_category", {
 const MarkupTimeInterval = db.define("markup_time_interval", {
     markup_id: DataTypes.INTEGER,
     start: DataTypes.FLOAT,
-    end: DataTypes.FLOAT
+    end: DataTypes.FLOAT,
+    deleted_at: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    deleted_by_user_id: {
+        type: DataTypes.CHAR(36),
+        allowNull: true
+    },
+    deleted_by_vk_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
 });
 
 const Video = db.define("video", {
