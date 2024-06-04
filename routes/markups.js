@@ -129,7 +129,8 @@ handler(async (req, res) => {
         return;
     }
 
-    let newValues = {};
+    let newMarkupValues = { is_new: true };
+    let newIntervalValues = {};
 
     if (req.body.new_category_id !== undefined) {
         let category = await db.MarkupCategory.findByPk(req.body.new_category_id);
@@ -137,22 +138,24 @@ handler(async (req, res) => {
             res.status(400).send('New category is invalid');
             return;
         }
-        newValues.category_id = req.body.new_category_id;
+        newMarkupValues.category_id = req.body.new_category_id;
     }
 
     if (req.body.new_start !== undefined) {
-        newValues.start = req.body.new_start;
+        newIntervalValues.start = req.body.new_start;
     }
     if (req.body.new_end !== undefined) {
-        newValues.end = req.body.new_end;
+        newIntervalValues.end = req.body.new_end;
     }
 
     await db.db.transaction(async (transaction) => {
-        await db.MarkupTimeInterval.update(newValues, {
-            where: { id: markupInterval.id }
-        });
+        if (Object.keys(newIntervalValues).length !== 0) {
+            await db.MarkupTimeInterval.update(newIntervalValues, {
+                where: { id: markupInterval.id }
+            });
+        }
 
-        await db.Markup.update({ is_new: true }, {
+        await db.Markup.update(newMarkupValues, {
             where: { id: markupInterval.markup_id }
         });
     });
