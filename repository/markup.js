@@ -45,6 +45,63 @@ const markupRepository = {
         }
     },
 
+    async getIdsBySegmentData(video, categoryId, start, end) {
+        const videoCalculated = await db.VideoCalculated.findOne({
+            where: { video_id: String(video.id) }
+        });
+        if (!videoCalculated) {
+            throw new Error('Video calculated not found');
+        }
+
+        let markupIds = [];
+        for (let i = 0; i < videoCalculated.data.length; i++) {
+            let interval = videoCalculated.data[i];
+    
+            if (interval.category_id === categoryId && interval.start === start && interval.end === end) {
+                let metaSegment = videoCalculated.meta.segments[i];
+                if (metaSegment.id !== i) {
+                    throw new Error('Segment id should be the same with iterator');
+                }
+    
+                markupIds.push(...metaSegment.markup_ids);
+            }
+        }
+    
+        markupIds = [...new Set(markupIds)]; // only unique values
+
+        if (markupIds.length === 0) {
+            throw new Error('Empty markup ids');
+        }
+
+        return markupIds;
+    },
+
+    async softDeleteByIds(markupIds, userId, prvUserId) {
+        await db.db.transaction(async (transaction) => {
+            let updateValues = {
+                deleted_at: Date.now(),
+                deleted_by_user_id: userId,
+                deleted_by_prv_user_id: prvUserId,
+            };
+
+            await db.Markup.update(
+                updateValues,
+                { 
+                    where: { id: markupIds },
+                    transaction
+                }
+            );
+
+            await db.MarkupTimeInterval.update(
+                updateValues,
+                { 
+                    where: { markup_id: markupIds },
+                    transaction
+                }
+            );
+        });
+    },
+
     _updateOptionsByDeleted: function(options, includeDeleted) {
         if (includeDeleted === false) {
             options.deleted_at = null;

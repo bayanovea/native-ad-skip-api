@@ -77,8 +77,8 @@ handler(async (req, res) => {
 }))
 
 /**
-* Edit markup
-*/
+ * Edit markup
+ */
 router.put('/markups', [
     body('video_id').notEmpty().isString(),
     body('user_id').notEmpty().isString(),
@@ -158,6 +158,56 @@ handler(async (req, res) => {
     });
 
     res.status(200).send('Updated');
+}))
+
+/**
+ * Admin edit markup.
+ * Soft delete all old markups and create new admin markup.
+ */
+router.post('/admin/markups/edit', verifyBearerToken, [
+    body('video_id').notEmpty().isString(),
+    body('category_id').notEmpty().isInt({ min: 1 }),
+    body('start').notEmpty().isInt({ min: 0 }),
+    body('end').notEmpty().isInt({ min: 0 }),
+    body('new_category_id').isInt({ min: 1 }),
+    body('new_start').isInt({ min: 0 }),
+    body('new_end').isInt({ min: 0 }),
+    body('user_id').notEmpty().isString(),
+    body('prv_user_id').optional().isInt({ min: 1 }),
+    validateRequest
+],
+handler(async (req, res) => {
+    const userId = req.body.user_id;
+    const prvUserId = req.body.prv_user_id;
+
+    let video = await db.Video.findOne({
+        where: { native_id: req.body.video_id }
+    });
+    if (!video) {
+        res.status(404).send('Video not found');
+        return;
+    }
+
+    markupIds = await markupRepository.getIdsBySegmentData(video, req.body.category_id, req.body.start, req.body.end);
+
+    await markupRepository.softDeleteByIds(markupIds, userId, prvUserId);
+
+    await db.db.transaction(async (transaction) => {
+        const markup = await db.Markup.create({
+            video_id: video.id,
+            user_id: userId,
+            prv_user_id: prvUserId,
+            category_id: req.body.new_category_id
+        });
+
+        await db.MarkupTimeInterval.create({
+            markup_id: markup.id,
+            start: req.body.new_start,
+            end: req.body.new_end
+        });
+    });
+
+    res.status(201).send('Created');
 }))
 
 /**
