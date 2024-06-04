@@ -130,7 +130,7 @@ func calculateIntervals(db *sql.DB, videoId string) (map[int]map[int]IntervalAgg
   	SELECT intervals.start, intervals.end, categories.id category_id, markups.id markup_id FROM markup_time_intervals intervals
 		LEFT JOIN markups ON markups.id = intervals.markup_id
 		LEFT JOIN markup_categories categories ON categories.id = markups.category_id
-		WHERE markups.video_id = $1 AND markup_time_intervals.deleted_at IS NULL AND markups.deleted_at IS NULL
+		WHERE markups.video_id = $1 AND intervals.deleted_at IS NULL AND markups.deleted_at IS NULL
 		ORDER BY intervals.start
 	`
 
