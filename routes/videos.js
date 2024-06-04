@@ -11,7 +11,7 @@ const handler = require('../middleware/handler');
  */
 router.get('/video-calculated',
     [
-        query('video_id').notEmpty().isString(),
+        query('video_id').isString(),
         validateRequest
     ],
 handler(async (req, res) => {
