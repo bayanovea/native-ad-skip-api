@@ -233,39 +233,24 @@ router.delete('/markups/:id', verifyBearerToken, handler(async (req, res) => {
         return;
     }
 
-    await db.db.transaction(async (transaction) => {
-        await db.MarkupTimeInterval.destroy({
-            where: { markup_id: markupId },
-            transaction
-        });
+    await markupRepository.softDeleteByIds([markupId], 'admin', 1);
 
-        await db.Markup.destroy({
-            where: { id: markupId },
-            transaction
-        });
-
-        let videoMarkups = await markupRepository.findAll({
-            where: { video_id: markup.video_id },
-            transaction
-        });
-
-        if (videoMarkups.length > 0) {
-            // Update rest markups as new for recalculating without deleted markup
-            await db.Markup.update(
-                { is_new: true },
-                { 
-                    where: { video_id: markup.video_id },
-                    transaction
-                },
-            );
-        } else {
-            // Don't need to recalculate video because there are no markups, so delete calculated data
-            await db.VideoCalculated.destroy({
-                where: { video_id: markup.video_id },
-                transaction
-            });
-        }
+    let videoMarkups = await markupRepository.findAll({
+        where: { video_id: markup.video_id }
     });
+
+    if (videoMarkups.length > 0) {
+        // Update rest markups as new for recalculating without deleted markup
+        await db.Markup.update(
+            { is_new: true },
+            { where: { video_id: markup.video_id } }
+        );
+    } else {
+        // Don't need to recalculate video because there are no markups, so delete calculated data
+        await db.VideoCalculated.destroy({
+            where: { video_id: markup.video_id }
+        });
+    }
 
     res.status(201).send('Deleted');
 }))
@@ -289,39 +274,24 @@ router.get('/markups/:id/delete', handler(async (req, res) => {
         return;
     }
 
-    await db.db.transaction(async (transaction) => {
-        await db.MarkupTimeInterval.destroy({
-            where: { markup_id: markupId },
-            transaction
-        });
+    await markupRepository.softDeleteByIds([markupId], 'admin', 1);
 
-        await db.Markup.destroy({
-            where: { id: markupId },
-            transaction
-        });
-
-        let videoMarkups = await markupRepository.findAll({
-            where: { video_id: markup.video_id },
-            transaction
-        });
-
-        if (videoMarkups.length > 0) {
-            // Update rest markups as new for recalculating without deleted markup
-            await db.Markup.update(
-                { is_new: true },
-                { 
-                    where: { video_id: markup.video_id },
-                    transaction
-                },
-            );
-        } else {
-            // Don't need to recalculate video because there are no markups, so delete calculated data
-            await db.VideoCalculated.destroy({
-                where: { video_id: markup.video_id },
-                transaction
-            });
-        }
+    let videoMarkups = await markupRepository.findAll({
+        where: { video_id: markup.video_id }
     });
+
+    if (videoMarkups.length > 0) {
+        // Update rest markups as new for recalculating without deleted markup
+        await db.Markup.update(
+            { is_new: true },
+            { where: { video_id: markup.video_id } }
+        );
+    } else {
+        // Don't need to recalculate video because there are no markups, so delete calculated data
+        await db.VideoCalculated.destroy({
+            where: { video_id: markup.video_id }
+        });
+    }
 
     res.status(201).send('Deleted');
 }))
