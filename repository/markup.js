@@ -82,13 +82,13 @@ const markupRepository = {
     },
 
     async softDeleteByIds(markupIds, userId, vkUserId) {
-        await db.db.transaction(async (transaction) => {
-            let updateValues = {
-                deleted_at: Date.now(),
-                deleted_by_user_id: userId,
-                deleted_by_vk_user_id: vkUserId,
-            };
+        let updateValues = {
+            deleted_at: Date.now(),
+            deleted_by_user_id: userId,
+            deleted_by_vk_user_id: vkUserId,
+        };
 
+        await db.db.transaction(async (transaction) => {
             await db.Markup.update(
                 updateValues,
                 { 
