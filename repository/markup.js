@@ -10,7 +10,7 @@ const markupRepository = {
     },
 
     async findByPk(id, includeDeleted = false) {
-        const markup = db.Markup.findByPk(id);
+        const markup = await db.Markup.findByPk(id);
 
         if (includeDeleted === false && markup.deleted_at !== null) {
             return null;
