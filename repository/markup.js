@@ -10,8 +10,13 @@ const markupRepository = {
     },
 
     async findByPk(id, includeDeleted = false) {
-        this._updateOptionsByDeleted(options, includeDeleted);
-        return db.Markup.findByPk(id);
+        const markup = db.Markup.findByPk(id);
+
+        if (includeDeleted === false && markup.deleted_at !== null) {
+            return null;
+        }
+
+        return markup;
     },
 
     /**
