@@ -109,7 +109,7 @@ const markupRepository = {
 
     _updateOptionsByDeleted: function(options, includeDeleted) {
         if (includeDeleted === false) {
-            options.deleted_at = null;
+            options.where.deleted_at = null;
         }
     },
 
