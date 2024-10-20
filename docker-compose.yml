@@ -8,13 +8,13 @@ services:
     extra_hosts:
       - "database:134.122.73.229"
     networks:
-      - main-network2
+      - main-network
     environment:
       - GOPATH=/go
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_HOST=${DB_HOST}
+      - DB_HOST=134.122.73.229
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
@@ -23,7 +23,7 @@ services:
     ports:
       - "9090:9090"
     networks:
-      - main-network2
+      - main-network
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/data
@@ -34,6 +34,6 @@ volumes:
   prometheus_data:
 
 networks:
-  main-network2:
+  main-network:
     external: true
     driver: bridge
