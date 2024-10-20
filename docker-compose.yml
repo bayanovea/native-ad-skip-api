@@ -6,7 +6,7 @@ services:
     ports:
       - "3022:3022"
     extra_hosts:
-      - "database:134.122.73.229"
+      - "database:localhost"
     networks:
       - main-network
     environment:
