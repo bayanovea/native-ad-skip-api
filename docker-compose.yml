@@ -5,8 +5,10 @@ services:
     build: .
     ports:
       - "3022:3022"
+    extra_hosts:
+      - "database:134.122.73.229"
     networks:
-      - main-network
+      - main-network2
     environment:
       - GOPATH=/go
       - DB_NAME=${DB_NAME}
@@ -21,7 +23,7 @@ services:
     ports:
       - "9090:9090"
     networks:
-      - main-network
+      - main-network2
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/data
@@ -32,6 +34,6 @@ volumes:
   prometheus_data:
 
 networks:
-  main-network:
+  main-network2:
     external: true
     driver: bridge
