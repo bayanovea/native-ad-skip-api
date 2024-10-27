@@ -33,7 +33,12 @@ router.post('/markup', [
     validateRequest
 ],
 handler(async (req, res) => {
-    const blockedUserIds = ['689613b1-e95c-410a-8879-6745c72a0a9a', '3c0c4282-3d8b-4889-ae18-2da7284c8c5a', '86ebab8d-2309-4ade-882d-070a47953e0a'];
+    const blockedUserIds = [
+        '689613b1-e95c-410a-8879-6745c72a0a9a', 
+        '3c0c4282-3d8b-4889-ae18-2da7284c8c5a', 
+        '86ebab8d-2309-4ade-882d-070a47953e0a',
+        '58fd5104-c500-465b-8ab7-b8779056523a'
+    ];
     let videoId = req.body.video_id;
 
     if (blockedUserIds.includes(req.body.user_id)) {
