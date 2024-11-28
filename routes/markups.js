@@ -34,10 +34,14 @@ router.post('/markup', [
 ],
 handler(async (req, res) => {
     const blockedUserIds = [
-        '689613b1-e95c-410a-8879-6745c72a0a9a', 
-        '3c0c4282-3d8b-4889-ae18-2da7284c8c5a', 
+        '689613b1-e95c-410a-8879-6745c72a0a9a',
+        '3c0c4282-3d8b-4889-ae18-2da7284c8c5a',
         '86ebab8d-2309-4ade-882d-070a47953e0a',
-        '58fd5104-c500-465b-8ab7-b8779056523a'
+        '58fd5104-c500-465b-8ab7-b8779056523a',
+        '7bf55b02-5556-48fa-b6d3-928d10bfceaa',
+        '15c2caeb-903f-4ce5-97f4-8e2d0b0a2398',
+        'b4199ab6-100e-435d-b2a4-dbef1715155f',
+        '9a661f94-8be8-44e3-b879-2a4dc81fcbc8'
     ];
     let videoId = req.body.video_id;
 
@@ -262,7 +266,7 @@ router.delete('/markups/:id', verifyBearerToken, handler(async (req, res) => {
 
 /**
  * Delete markup via GET (DUPLICATE)
- * 
+ *
  * TODO: NEED THIS DUPLICATE BECAUSE OF GRAFANA, AFTER FIXING GRAFANA NEED TO DELETE THIS
  */
 router.get('/markups/:id/delete', handler(async (req, res) => {
@@ -320,7 +324,7 @@ router.delete('/videos/:id/markups', verifyBearerToken, handler(async (req, res)
 
         videoId = video.id;
     }
-    
+
     // Collect all markups, intervals ids for common delete query
     let videoMarkups = await markupRepository.findAll({
         where: { video_id: String(videoId) }
