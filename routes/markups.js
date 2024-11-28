@@ -15,8 +15,7 @@ const markupTimeIntervalRepository = require('../repository/markup-time-interval
 router.post('/markup', [
     body('video_id').isString(),
     body('user_id').isString(),
-    body('vk_user_id').optional().isInt({ min: 1 }),
-    body('vk_uid').optional().isInt({ min: 1 }), // TODO: Temporary solution; remove once all frontends are updated.
+    body('vk_user_id').optional({ nullable: true }).isInt({ min: 1 }),
     body('category_id').isInt({ min: 1 }),
     body('data').custom((value) => {
         if (typeof value !== 'object') {
@@ -33,6 +32,7 @@ router.post('/markup', [
     validateRequest
 ],
 handler(async (req, res) => {
+    /** BLACKLIST */
     const blockedUserIds = [
         '689613b1-e95c-410a-8879-6745c72a0a9a',
         '3c0c4282-3d8b-4889-ae18-2da7284c8c5a',
@@ -60,16 +60,10 @@ handler(async (req, res) => {
         where: { native_id: videoId }
     });
 
-    // TODO: Temporary solution; remove once all frontends are updated.
-    let vkUserId = req.body.vk_user_id;
-    if (!vkUserId) {
-        vkUserId = req.body.vk_uid;
-    }
-
     const markup = await db.Markup.create({
         video_id: video.id,
         user_id: req.body.user_id,
-        vk_user_id: vkUserId,
+        vk_user_id: req.body.vk_user_id,
         category_id: req.body.category_id
     });
 

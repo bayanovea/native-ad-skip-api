@@ -8,7 +8,7 @@ const handler = require('../middleware/handler');
 router.post('/vote', [
     body('video_id').isString(),
     body('user_id').isString(),
-    body('vk_user_id').optional().isInt({ min: 1 }),
+    body('vk_user_id').optional({ nullable: true }).isInt({ min: 1 }),
     body('category_id').isInt({ min: 1 }),
     body('start').isInt({ min: 0 }),
     body('end').isInt({ min: 0 }),
