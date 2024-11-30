@@ -8,6 +8,7 @@ const verifyBearerToken = require('../middleware/verify-bearer-token');
 const handler = require('../middleware/handler');
 const markupRepository = require('../repository/markup');
 const markupTimeIntervalRepository = require('../repository/markup-time-interval');
+const userRepository = require('../repository/user');
 
 /**
  * Create markup
@@ -32,6 +33,7 @@ router.post('/markup', [
     validateRequest
 ],
 handler(async (req, res) => {
+    // TODO: Remove blacklist
     /** BLACKLIST */
     const blockedUserIds = [
         '689613b1-e95c-410a-8879-6745c72a0a9a',
@@ -44,8 +46,9 @@ handler(async (req, res) => {
         '9a661f94-8be8-44e3-b879-2a4dc81fcbc8'
     ];
     let videoId = req.body.video_id;
+    const userId = req.body.user_id
 
-    if (blockedUserIds.includes(req.body.user_id)) {
+    if (blockedUserIds.includes(userId)) {
         res.status(201).send('Created'); // fake response
         return;
     }
@@ -60,11 +63,20 @@ handler(async (req, res) => {
         where: { native_id: videoId }
     });
 
+    let user = userRepository.findOrCreareByGeneratedUserId(userId);
+    if (!user) {
+        user = db.User.create({
+            user_id: userId,
+            prv_user_id: req.body.prv_user_id
+        });
+    }
+
     const markup = await db.Markup.create({
         video_id: video.id,
-        user_id: req.body.user_id,
+        user_id: userId,
         prv_user_id: req.body.prv_user_id,
-        category_id: req.body.category_id
+        category_id: req.body.category_id,
+        user: user
     });
 
     for (const interval of req.body.data.intervals) {
@@ -104,6 +116,7 @@ handler(async (req, res) => {
         return;
     }
 
+    // TODO: Find by table user
     let markups = await markupRepository.findAll({
         where: {
             video_id: video.id,
@@ -198,6 +211,7 @@ handler(async (req, res) => {
 
     await markupRepository.softDeleteByIds(markupIds, userId, prvUserId);
 
+    // TODO: Find by table user
     await db.db.transaction(async (transaction) => {
         const markup = await db.Markup.create({
             video_id: video.id,

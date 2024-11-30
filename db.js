@@ -46,6 +46,10 @@ const Markup = db.define("markup", {
         type: DataTypes.INTEGER,
         allowNull: true
     },
+    internal_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
 });
 
 const MarkupCategory = db.define("markup_category", {
@@ -60,11 +64,17 @@ const MarkupTimeInterval = db.define("markup_time_interval", {
         type: DataTypes.DATE,
         allowNull: true
     },
+    // Удалить, переходим на deleted_by_internal_user_id
     deleted_by_user_id: {
         type: DataTypes.CHAR(36),
         allowNull: true
     },
+    // Удалить, переходим на deleted_by_internal_user_id
     deleted_by_prv_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    deleted_by_internal_user_id: {
         type: DataTypes.INTEGER,
         allowNull: true
     },
@@ -83,6 +93,8 @@ const VideoCalculated = db.define("video_calculated", {
 });
 
 const Vote = db.define("vote", {
+    // Возможно в будущем надо будет удалить и перейти на internal_user_id, 
+    // но сейчас там только пользователя кто оставлял разметку
     user_id: DataTypes.CHAR(36),
     prv_user_id: {
         type: DataTypes.INTEGER,
@@ -92,7 +104,29 @@ const Vote = db.define("vote", {
     category_id: DataTypes.INTEGER,
     start: DataTypes.FLOAT,
     end: DataTypes.FLOAT,
-    vote: DataTypes.SMALLINT
+    vote: DataTypes.SMALLINT,
+});
+
+const User = db.define("user", {
+    generated_user_id: {
+        type: DataTypes.CHAR(36),
+        allowNull: true
+    },
+    prv_user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    rating: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    }
+}, {
+    indexes: [
+      {
+        unique: true,
+        fields: ['generated_user_id'],
+      },
+    ],
 });
 
 /** Rels **/
@@ -105,6 +139,10 @@ Markup.belongsTo(MarkupCategory, {
     foreignKey: 'category_id',
     as: 'category'
 });
+Markup.belongsTo(User, {
+    foreignKey: 'internal_user_id',
+    as: 'user'
+});
 
 MarkupCategory.hasMany(Markup, {
     foreignKey: 'category_id',
@@ -114,6 +152,10 @@ MarkupCategory.hasMany(Markup, {
 MarkupTimeInterval.belongsTo(Markup, {
     foreignKey: 'markup_id',
     as: 'markup'
+});
+MarkupTimeInterval.belongsTo(User, {
+    foreignKey: 'internal_user_id',
+    as: 'user'
 });
 
 Video.hasOne(VideoCalculated, {
@@ -180,4 +222,5 @@ module.exports = {
     Video,
     VideoCalculated,
     Vote,
+    User,
 };
