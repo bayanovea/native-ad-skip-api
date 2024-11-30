@@ -63,9 +63,9 @@ handler(async (req, res) => {
         where: { native_id: videoId }
     });
 
-    let user = userRepository.findOrCreareByGeneratedUserId(userId);
+    let user = userRepository.findByGeneratedUserId(userId);
     if (!user) {
-        user = db.User.create({
+        user = await db.User.create({
             user_id: userId,
             prv_user_id: req.body.prv_user_id
         });
@@ -76,7 +76,7 @@ handler(async (req, res) => {
         user_id: userId,
         prv_user_id: req.body.prv_user_id,
         category_id: req.body.category_id,
-        user: user
+        user_id: user.id
     });
 
     for (const interval of req.body.data.intervals) {

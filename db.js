@@ -154,8 +154,8 @@ MarkupTimeInterval.belongsTo(Markup, {
     as: 'markup'
 });
 MarkupTimeInterval.belongsTo(User, {
-    foreignKey: 'internal_user_id',
-    as: 'user'
+    foreignKey: 'deleted_by_internal_user_id',
+    as: 'deleted_by_user'
 });
 
 Video.hasOne(VideoCalculated, {
