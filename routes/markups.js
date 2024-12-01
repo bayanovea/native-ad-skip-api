@@ -8,7 +8,6 @@ const verifyBearerToken = require('../middleware/verify-bearer-token');
 const handler = require('../middleware/handler');
 const markupRepository = require('../repository/markup');
 const markupTimeIntervalRepository = require('../repository/markup-time-interval');
-const userRepository = require('../repository/user');
 
 /**
  * Create markup
@@ -46,9 +45,10 @@ handler(async (req, res) => {
         '9a661f94-8be8-44e3-b879-2a4dc81fcbc8'
     ];
     let videoId = req.body.video_id;
-    const userId = req.body.user_id
+    const generatedUserId = req.body.user_id
+    const prvUserId = req.body.prv_user_id ?? null;
 
-    if (blockedUserIds.includes(userId)) {
+    if (blockedUserIds.includes(generatedUserId)) {
         res.status(201).send('Created'); // fake response
         return;
     }
@@ -59,28 +59,27 @@ handler(async (req, res) => {
         videoId = '-' + videoId;
     }
 
-    const [video, created] = await db.Video.findOrCreate({
+    const [video, videoCreated] = await db.Video.findOrCreate({
         where: { native_id: videoId }
     });
 
-    let user = userRepository.findByGeneratedUserId(userId);
-    if (!user) {
-        user = await db.User.create({
-            user_id: userId,
-            prv_user_id: req.body.prv_user_id
-        });
-    }
+    const [user, userCreated] = await db.User.findOrCreate({
+        where: {
+            generated_user_id: generatedUserId,
+            prv_user_id: req.body.prv_user_id ?? null
+        }
+    });
 
     const markup = await db.Markup.create({
         video_id: video.id,
-        user_id: userId,
+        user_id: generatedUserId,
         prv_user_id: req.body.prv_user_id,
         category_id: req.body.category_id,
-        user_id: user.id
+        internal_user_id: user.id
     });
 
     for (const interval of req.body.data.intervals) {
-        const markupInterval = await db.MarkupTimeInterval.create({
+        await db.MarkupTimeInterval.create({
             markup_id: markup.id,
             // Currently we support only integer values
             start: Math.round(interval.start),

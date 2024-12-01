@@ -108,10 +108,7 @@ const Vote = db.define("vote", {
 });
 
 const User = db.define("user", {
-    generated_user_id: {
-        type: DataTypes.CHAR(36),
-        allowNull: true
-    },
+    generated_user_id: DataTypes.CHAR(36),
     prv_user_id: {
         type: DataTypes.INTEGER,
         allowNull: true
@@ -122,11 +119,11 @@ const User = db.define("user", {
     }
 }, {
     indexes: [
-      {
-        unique: true,
-        fields: ['generated_user_id'],
-      },
-    ],
+        {
+            unique: true,
+            fields: ['generated_user_id', 'prv_user_id'],
+        },
+    ]
 });
 
 /** Rels **/
