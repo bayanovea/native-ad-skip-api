@@ -9,6 +9,8 @@ const handler = require('../middleware/handler');
 const markupRepository = require('../repository/markup');
 const markupTimeIntervalRepository = require('../repository/markup-time-interval');
 
+const IGNORE_MAKRUPS_USER_RATING_VAL = -5;
+
 /**
  * Create markup
  */
@@ -32,26 +34,8 @@ router.post('/markup', [
     validateRequest
 ],
 handler(async (req, res) => {
-    // TODO: Remove blacklist
-    /** BLACKLIST */
-    const blockedUserIds = [
-        '689613b1-e95c-410a-8879-6745c72a0a9a',
-        '3c0c4282-3d8b-4889-ae18-2da7284c8c5a',
-        '86ebab8d-2309-4ade-882d-070a47953e0a',
-        '58fd5104-c500-465b-8ab7-b8779056523a',
-        '7bf55b02-5556-48fa-b6d3-928d10bfceaa',
-        '15c2caeb-903f-4ce5-97f4-8e2d0b0a2398',
-        'b4199ab6-100e-435d-b2a4-dbef1715155f',
-        '9a661f94-8be8-44e3-b879-2a4dc81fcbc8'
-    ];
     let videoId = req.body.video_id;
     const generatedUserId = req.body.user_id
-    const prvUserId = req.body.prv_user_id ?? null;
-
-    if (blockedUserIds.includes(generatedUserId)) {
-        res.status(201).send('Created'); // fake response
-        return;
-    }
 
     // Crutch for old versions when frontend always send video id without minus
     if (!req.body.v) {
@@ -69,6 +53,11 @@ handler(async (req, res) => {
             prv_user_id: req.body.prv_user_id ?? null
         }
     });
+
+    if (user.rating <= IGNORE_MAKRUPS_USER_RATING_VAL) {
+        res.status(201).send('Created'); // fake response
+        return;
+    }
 
     const markup = await db.Markup.create({
         video_id: video.id,
