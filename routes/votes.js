@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const db = require('../db');
 const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
+const userService = require('../service/user');
 
 router.post('/vote', [
     body('video_id').isString(),
@@ -51,7 +52,7 @@ handler(async (req, res) => {
         return;
     }
 
-    await db.Vote.destroy({
+    const prevVote = await db.Vote.findOne({
         where: {
             user_id: userId,
             video_id: video.id,
@@ -61,12 +62,7 @@ handler(async (req, res) => {
         }
     });
 
-    if (vote === 0) {
-        res.status(204).send();
-        return;
-    }
-
-    await db.Vote.create({
+    voteObj = await db.Vote.create({
         user_id: userId,
         prv_user_id: req.body.prv_user_id,
         video_id: video.id,
@@ -75,6 +71,12 @@ handler(async (req, res) => {
         end: end,
         vote: vote
     });
+
+    await userService.updateRatingByVote(voteObj, prevVote);
+
+    if (prevVote) {
+        await prevVote.destroy();
+    }
 
     res.status(204).send();
 }))
