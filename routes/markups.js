@@ -9,7 +9,7 @@ const handler = require('../middleware/handler');
 const markupRepository = require('../repository/markup');
 const markupTimeIntervalRepository = require('../repository/markup-time-interval');
 
-const IGNORE_MAKRUPS_USER_RATING_VAL = -5;
+const IGNORE_MAKRUPS_USER_RATING_VAL = -2;
 
 /**
  * Create markup
