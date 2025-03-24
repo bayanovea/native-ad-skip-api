@@ -82,8 +82,8 @@ handler(async (req, res) => {
 }))
 
 /**
-* TODO: Method GET because of Grafana
-*/
+ * TODO: Method GET because of Grafana
+ */
 router.get('/votes/:id/delete', handler(async (req, res) => {
     const voteId = req.params.id;
 
@@ -102,6 +102,30 @@ router.get('/votes/:id/delete', handler(async (req, res) => {
     }
 
     res.status(201).send('Deleted');
+}))
+
+/**
+ * TODO: Method GET because of Grafana
+ */
+router.get('/votes/:internal_user_id/update-rating', handler(async (req, res) => {
+    const internalUserId = req.params.internal_user_id;
+
+    if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
+        res.status(401).send('Unauthorized');
+        return;
+    }
+
+    let user = await db.User.findByPk(internalUserId);
+    if (!user) {
+        res.status(404).send('Not found');
+        return;
+    }
+
+    await user.update({
+        rating: req.body.rating
+    });
+
+    res.status(201).send('Updated');
 }))
 
 module.exports = router;
