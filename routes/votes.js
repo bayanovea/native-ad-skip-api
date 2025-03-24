@@ -122,7 +122,7 @@ router.get('/votes/user/:internal_user_id/update-rating', handler(async (req, re
     }
 
     await user.update({
-        rating: req.body.rating
+        rating: req.query.rating
     });
 
     res.status(201).send('Updated');
