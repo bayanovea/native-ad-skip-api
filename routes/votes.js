@@ -107,7 +107,7 @@ router.get('/votes/:id/delete', handler(async (req, res) => {
 /**
  * TODO: Method GET because of Grafana
  */
-router.get('/votes/:internal_user_id/update-rating', handler(async (req, res) => {
+router.get('/votes/user/:internal_user_id/update-rating', handler(async (req, res) => {
     const internalUserId = req.params.internal_user_id;
 
     if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
