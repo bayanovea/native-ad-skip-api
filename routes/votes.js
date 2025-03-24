@@ -92,16 +92,33 @@ router.get('/votes/:id/delete', handler(async (req, res) => {
         return;
     }
 
-    let vote = await db.Vote.destroy({
-        where: { id: voteId }
-    });
-
+    let vote = await db.Vote.findByPk(voteId);
     if (!vote) {
-        res.status(404).send('Not found');
+        res.status(404).send('Vote not found');
         return;
     }
 
-    res.status(201).send('Deleted');
+    await db.db.transaction(async (transaction) => {
+        await db.Vote.destroy({
+            where: { id: voteId },
+            transaction
+        });
+
+        let user = await db.User.findOne({
+            where: {
+                generated_user_id: vote.user_id,
+                prv_user_id: vote.prv_user_id
+            }
+        });
+        if (!user) {
+            res.status(404).send('User not found');
+            return;
+        }
+    
+        await user.decrement('rating', { by: vote.vote }, transaction);
+    });
+
+    res.status(201).send('Updated');
 }))
 
 /**
