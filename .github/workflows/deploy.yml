@@ -60,7 +60,7 @@ jobs:
         export HOST_IP='$HOST_IP'
         
         # Сборка и запуск с использованием Docker Compose
-        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yml up --build -d app
+        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yml up --build
           # --scale app=2
         
         # Очистка
