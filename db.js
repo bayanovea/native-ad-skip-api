@@ -80,6 +80,10 @@ const Video = db.define("video", {
     native_id: {
         type: DataTypes.STRING,
     },
+    duration: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
 });
 
 const VideoCalculated = db.define("video_calculated", {
