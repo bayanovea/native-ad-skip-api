@@ -14,11 +14,7 @@ db.authenticate()
     .catch(err => {
         console.error('Unable to connect to the database:', err);
         process.exit(-1);
-    }).then(() => {
-        console.log('DB qqq1');
     });
-
-    console.log('DB qqq2');
 
 /** Models **/
 
