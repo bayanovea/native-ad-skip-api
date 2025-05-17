@@ -55,6 +55,13 @@ handler(async (req, res) => {
     });
 
     if (user.rating <= IGNORE_MAKRUPS_USER_RATING_VAL) {
+        console.warn('Do not create markup because of bad user rating', {
+            generatedUserId: generatedUserId,
+            prvUserId: req.body.prv_user_id,
+            videoId: videoId,
+            categoryId: req.body.category_id,
+            intervals: req.body.data.intervals,
+        });
         res.status(201).send('Created'); // fake response
         return;
     }
