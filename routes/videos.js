@@ -12,7 +12,7 @@ const handler = require('../middleware/handler');
 router.get('/video-calculated',
     [
         query('video_id').isString(),
-        query('duration').optional().isInt(),
+        query('duration').optional().isInt().toInt(),
         validateRequest
     ],
 handler(async (req, res) => {
@@ -26,20 +26,18 @@ handler(async (req, res) => {
         });
 
         if (video && duration) {
-            if (video.duration) {
-                if (video.duration !== req.query.duration) {
-                    console.warn('Video duration mismatch', {
-                        videoId: video.id,
-                        videoDuration: video.duration,
-                        queryDuration: req.query.duration
-                    });
-                }
-            } else {
-                await db.Video.update(
-                    { duration: duration },
-                    { where: { id: video.id } }
-                );
+            if (video.duration && video.duration !== duration) {
+                console.warn('Video duration mismatch', {
+                    videoId: video.id,
+                    videoDuration: video.duration,
+                    queryDuration: duration,
+                });
             }
+
+            await db.Video.update(
+                { duration: duration },
+                { where: { id: video.id } }
+            );
         }
     } else { // Crutch for old versions when frontend always send video id without minus
         prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
