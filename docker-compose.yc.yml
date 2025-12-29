@@ -5,8 +5,8 @@ services:
     build: .
     ports:
       - "3022:3022"
-    # extra_hosts:
-    #   - "database:178.154.241.202"
+    extra_hosts:
+      - "database:178.154.241.202"
     networks:
       - main-network
     environment:

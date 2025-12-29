@@ -32,7 +32,7 @@ jobs:
         DB_NAME: ${{ secrets.DB_NAME }}
         DB_USER: ${{ secrets.DB_USER }}
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        DB_HOST: localhost
+        DB_HOST: database
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
         AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         HOST_IP: ${{ secrets.HOST_IP_YC }}
