@@ -1,9 +1,9 @@
 name: Build and Run Docker Image on DO
 
 on:
-  push:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 jobs:
@@ -60,7 +60,7 @@ jobs:
         export HOST_IP='$HOST_IP'
         
         # Сборка и запуск с использованием Docker Compose
-        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yml up --build -d app
+        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.do.yml up --build -d app
           # --scale app=2
         
         # Очистка

@@ -1,0 +1,67 @@
+name: Build and Run Docker Image on YC
+
+on:
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Setup SSH
+      env:
+        PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_YC }}
+      run: |
+        mkdir -p ~/.ssh/
+        echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        echo "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+
+    - name: Transfer Codebase to YC
+      run: |
+        tar czf - . | ssh -o StrictHostKeyChecking=no root@${{ secrets.HOST_IP_YC }} "cat > /tmp/codebase.tar.gz"
+
+    - name: Deploy to YC
+      env:
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: database
+        NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
+        AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+        HOST_IP: ${{ secrets.HOST_IP_YC }}
+        IMAGE_NAME: native-ad-skip-api
+      run: |
+        ssh -o StrictHostKeyChecking=no root@$HOST_IP_YC "
+        # Остановка и удаление существующих контейнеров и образов
+        CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=$IMAGE_NAME_app')
+        if [ ! -z '\$CONTAINER_ID' ]; then 
+          docker stop \$CONTAINER_ID
+          docker rm \$CONTAINER_ID
+        fi
+        
+        # Перенос и распаковка исходного кода
+        cd /tmp
+        tar xzf codebase.tar.gz
+
+        # Переменные окружения
+        export DB_NAME='$DB_NAME'
+        export DB_USER='$DB_USER'
+        export DB_PASSWORD='$DB_PASSWORD'
+        export DB_HOST='$DB_HOST'
+        export NODE_APP_PORT='$NODE_APP_PORT'
+        export AUTH_TOKEN='$AUTH_TOKEN'
+        export HOST_IP='$HOST_IP_YC'
+        
+        # Сборка и запуск с использованием Docker Compose
+        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yc.yml up --build -d app
+          # --scale app=2
+        
+        # Очистка
+        rm -rf /tmp/codebase.tar.gz"

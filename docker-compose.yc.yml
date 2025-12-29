@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3022:3022"
+    extra_hosts:
+      - "database:178.154.241.202"
+    networks:
+      - main-network
+    environment:
+      - GOPATH=/go
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=178.154.241.202
+      - NODE_APP_PORT=${NODE_APP_PORT}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - HOST_IP=${HOST_IP}
+  # prometheus:
+  #   image: prom/prometheus:v2.45.2
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - main-network
+  #   volumes:
+  #     - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/data
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.retention.time=30d'
+# volumes:
+#   prometheus_data:
+
+networks:
+  main-network:
+    external: true
+    driver: bridge
