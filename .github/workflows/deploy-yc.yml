@@ -40,11 +40,11 @@ jobs:
       run: |
         ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP "
         # Остановка и удаление существующих контейнеров и образов
-        CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=$IMAGE_NAME_app')
-        if [ ! -z '\$CONTAINER_ID' ]; then 
-          docker stop \$CONTAINER_ID
-          docker rm \$CONTAINER_ID
-        fi
+        # CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=${IMAGE_NAME}_app')
+        # if [ ! -z '\$CONTAINER_ID' ]; then 
+        #   docker stop \$CONTAINER_ID
+        #   docker rm \$CONTAINER_ID
+        # fi
         
         # Перенос и распаковка исходного кода
         cd /tmp
