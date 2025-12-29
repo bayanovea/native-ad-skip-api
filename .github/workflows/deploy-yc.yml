@@ -18,10 +18,6 @@ jobs:
       env:
         PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_YC }}
       run: |
-        # Debug info
-        echo "Host IP: $HOST_IP"
-        echo "Key length: ${#SSH_PRIVATE_KEY}"
-
         mkdir -p ~/.ssh/
         echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
@@ -42,7 +38,7 @@ jobs:
         HOST_IP: ${{ secrets.HOST_IP_YC }}
         IMAGE_NAME: native-ad-skip-api
       run: |
-        ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP_YC "
+        ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP "
         # Остановка и удаление существующих контейнеров и образов
         CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=$IMAGE_NAME_app')
         if [ ! -z '\$CONTAINER_ID' ]; then 
@@ -61,7 +57,7 @@ jobs:
         export DB_HOST='$DB_HOST'
         export NODE_APP_PORT='$NODE_APP_PORT'
         export AUTH_TOKEN='$AUTH_TOKEN'
-        export HOST_IP='$HOST_IP_YC'
+        export HOST_IP='$HOST_IP'
         
         # Сборка и запуск с использованием Docker Compose
         docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yc.yml up --build -d app
