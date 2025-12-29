@@ -25,7 +25,7 @@ jobs:
 
     - name: Transfer Codebase to YC
       run: |
-        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP_YC }} "cat > /tmp/codebase.tar.gz"
+        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP_YC }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
 
     - name: Deploy to YC
       env:
@@ -47,7 +47,7 @@ jobs:
         # fi
         
         # Перенос и распаковка исходного кода
-        cd /tmp
+        cd /home/skipper-admin/tmp
         tar xzf codebase.tar.gz
 
         # Переменные окружения
@@ -60,8 +60,8 @@ jobs:
         export HOST_IP='$HOST_IP'
         
         # Сборка и запуск с использованием Docker Compose
-        docker-compose -p $IMAGE_NAME -f /tmp/docker-compose.yc.yml up --build -d app
+        docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yc.yml up --build -d app
           # --scale app=2
         
         # Очистка
-        rm -rf /tmp/codebase.tar.gz"
+        rm -rf /home/skipper-admin/tmp/codebase.tar.gz"
