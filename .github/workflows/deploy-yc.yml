@@ -25,7 +25,7 @@ jobs:
 
     - name: Transfer Codebase to YC
       run: |
-        tar czf - . | ssh -o StrictHostKeyChecking=no root@${{ secrets.HOST_IP_YC }} "cat > /tmp/codebase.tar.gz"
+        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP_YC }} "cat > /tmp/codebase.tar.gz"
 
     - name: Deploy to YC
       env:
