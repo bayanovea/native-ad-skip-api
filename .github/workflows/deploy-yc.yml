@@ -18,6 +18,10 @@ jobs:
       env:
         PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_YC }}
       run: |
+        # Debug info
+        echo "Host IP: $HOST_IP"
+        echo "Key length: ${#SSH_PRIVATE_KEY}"
+
         mkdir -p ~/.ssh/
         echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
