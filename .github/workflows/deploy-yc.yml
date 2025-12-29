@@ -32,19 +32,19 @@ jobs:
         DB_NAME: ${{ secrets.DB_NAME }}
         DB_USER: ${{ secrets.DB_USER }}
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        DB_HOST: database
+        DB_HOST: localhost
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
         AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         HOST_IP: ${{ secrets.HOST_IP_YC }}
         IMAGE_NAME: native-ad-skip-api
       run: |
         ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP "
-        # Остановка и удаление существующих контейнеров и образов
-        # CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=${IMAGE_NAME}_app')
-        # if [ ! -z '\$CONTAINER_ID' ]; then 
-        #   docker stop \$CONTAINER_ID
-        #   docker rm \$CONTAINER_ID
-        # fi
+        Остановка и удаление существующих контейнеров и образов
+        CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=${IMAGE_NAME}_app')
+        if [ ! -z '\$CONTAINER_ID' ]; then 
+          docker stop \$CONTAINER_ID
+          docker rm \$CONTAINER_ID
+        fi
         
         # Перенос и распаковка исходного кода
         cd /home/skipper-admin/tmp
