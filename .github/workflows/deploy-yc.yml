@@ -38,7 +38,7 @@ jobs:
         HOST_IP: ${{ secrets.HOST_IP_YC }}
         IMAGE_NAME: native-ad-skip-api
       run: |
-        ssh -o StrictHostKeyChecking=no root@$HOST_IP_YC "
+        ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP_YC "
         # Остановка и удаление существующих контейнеров и образов
         CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=$IMAGE_NAME_app')
         if [ ! -z '\$CONTAINER_ID' ]; then 
