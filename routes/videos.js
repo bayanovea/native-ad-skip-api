@@ -27,7 +27,7 @@ handler(async (req, res) => {
 
         if (video && duration) {
             if (video.duration && video.duration !== duration) {
-                console.warn('Video duration mismatch', {
+                console.log('Video duration mismatch', {
                     videoId: video.id,
                     videoDuration: video.duration,
                     queryDuration: duration,
