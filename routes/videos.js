@@ -25,19 +25,21 @@ handler(async (req, res) => {
             where: { native_id: nativeFullVideoId }
         });
 
-        if (video && duration) {
-            if (video.duration && video.duration !== duration) {
-                console.log('Video duration mismatch', {
-                    videoId: video.id,
-                    videoDuration: video.duration,
-                    queryDuration: duration,
-                });
+        if (duration && video && video.duration !== duration) {
+            var logData = {
+                videoId: video.id,
+                videoDuration: video.duration,
+                queryDuration: duration,
+            };
+            if (video.duration) {
+                console.log('Video duration mismatch, not empty duration', logData);
+            } else {
+                await db.Video.update(
+                    { duration: duration },
+                    { where: { id: video.id } }
+                );
+                console.log('Video duration mismatch, empty duration', logData);
             }
-
-            await db.Video.update(
-                { duration: duration },
-                { where: { id: video.id } }
-            );
         }
     } else { // Crutch for old versions when frontend always send video id without minus
         prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
