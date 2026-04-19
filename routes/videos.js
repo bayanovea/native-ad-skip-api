@@ -5,6 +5,7 @@ const db = require('../db');
 const prometheusWrapper = require('../prometheus-wrapper');
 const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
+const durationLogRepository = require('../repository/duration-log');
 
 /**
  * Get calculated data by video 
@@ -13,6 +14,8 @@ router.get('/video-calculated',
     [
         query('video_id').isString(),
         query('duration').optional().isInt().toInt(),
+        query('user_id').optional().isString(),
+        query('prv_user_id').optional().isInt({ min: 1 }).toInt(),
         validateRequest
     ],
 handler(async (req, res) => {
@@ -25,21 +28,14 @@ handler(async (req, res) => {
             where: { native_id: nativeFullVideoId }
         });
 
-        if (duration && video && video.duration !== duration) {
-            var logData = {
-                videoId: video.id,
-                videoDuration: video.duration,
-                queryDuration: duration,
-            };
-            if (video.duration) {
-                console.log('Video duration mismatch, not empty duration', logData);
-            } else {
-                await db.Video.update(
-                    { duration: duration },
-                    { where: { id: video.id } }
-                );
-                console.log('Video duration mismatch, empty duration', logData);
-            }
+        if (req.query.user_id && duration && video.duration != duration && video && video.status != 1) {
+            const [user] = await db.User.findOrCreate({
+                where: {
+                    generated_user_id: req.query.user_id,
+                    prv_user_id: req.query.prv_user_id ?? null,
+                }
+            });
+            await durationLogRepository.createOrIncrement(user.id, video.id, duration);
         }
     } else { // Crutch for old versions when frontend always send video id without minus
         prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);

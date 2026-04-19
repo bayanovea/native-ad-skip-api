@@ -84,6 +84,10 @@ const Video = db.define("video", {
         type: DataTypes.INTEGER,
         allowNull: true
     },
+    duration_status: {
+        type: DataTypes.SMALLINT,
+        allowNull: true
+    },
 });
 
 const VideoCalculated = db.define("video_calculated", {
@@ -124,6 +128,19 @@ const User = db.define("user", {
             fields: ['generated_user_id', 'prv_user_id'],
         },
     ]
+});
+
+const DurationLog = db.define("duration_log", {
+    user_id: DataTypes.INTEGER,
+    video_id: DataTypes.INTEGER,
+    duration: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+    },
+    count: {
+        type: DataTypes.SMALLINT,
+        allowNull: false,
+    },
 });
 
 /** Rels **/
@@ -178,6 +195,15 @@ Vote.belongsTo(MarkupCategory, {
     as: 'category'
 });
 
+DurationLog.belongsTo(User, {
+    foreignKey: 'user_id',
+    as: 'user'
+});
+DurationLog.belongsTo(Video, {
+    foreignKey: 'video_id',
+    as: 'video'
+});
+
 
 /**
  * Миграция, создаёт категории
@@ -220,4 +246,5 @@ module.exports = {
     VideoCalculated,
     Vote,
     User,
+    DurationLog,
 };
