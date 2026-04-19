@@ -28,7 +28,7 @@ handler(async (req, res) => {
             where: { native_id: nativeFullVideoId }
         });
 
-        if (req.query.user_id && duration && video.duration != duration && video && video.status != 1) {
+        if (req.query.user_id && video && duration && video.duration != duration && video.status != 1) {
             const [user] = await db.User.findOrCreate({
                 where: {
                     generated_user_id: req.query.user_id,
