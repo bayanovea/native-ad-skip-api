@@ -28,14 +28,21 @@ handler(async (req, res) => {
             where: { native_id: nativeFullVideoId }
         });
 
-        if (req.query.user_id && video && duration && video.duration != duration && video.status != 1) {
-            const [user] = await db.User.findOrCreate({
-                where: {
-                    generated_user_id: req.query.user_id,
-                    prv_user_id: req.query.prv_user_id ?? null,
-                }
-            });
-            await durationLogRepository.createOrIncrement(user.id, video.id, duration);
+        if (video && duration) {
+            if (video.duration === null) {
+                await db.Video.update(
+                    { duration: duration },
+                    { where: { id: video.id } }
+                );
+            } else if (req.query.user_id && video.duration != duration && video.status != 1) {
+                const [user] = await db.User.findOrCreate({
+                    where: {
+                        generated_user_id: req.query.user_id,
+                        prv_user_id: req.query.prv_user_id ?? null,
+                    }
+                });
+                await durationLogRepository.createOrIncrement(user.id, video.id, duration);
+            }
         }
     } else { // Crutch for old versions when frontend always send video id without minus
         prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
