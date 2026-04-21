@@ -34,7 +34,10 @@ handler(async (req, res) => {
                     { duration: duration },
                     { where: { id: video.id } }
                 );
-            } else if (req.query.user_id && video.duration != duration && video.status != 1) {
+            }
+
+            const durationDiff = video.duration === null ? null : Math.abs(video.duration - duration);
+            if (req.query.user_id && video.status != 1 && (durationDiff === null || durationDiff > 1)) {
                 const [user] = await db.User.findOrCreate({
                     where: {
                         generated_user_id: req.query.user_id,
