@@ -31,20 +31,28 @@ handler(async (req, res) => {
         await user.increment('time_saved', { by: inc });
     }
 
-    const allRows = await db.User.findAll({
-        where: { generated_user_id: user_id },
-        attributes: ['time_saved']
-    });
-
-    const totalTimeSaved = allRows.reduce((sum, row) => sum + (row.time_saved || 0), 0);
+    const [byUserId, byPrvUserId] = await Promise.all([
+        db.User.findAll({
+            where: { generated_user_id: user_id },
+            attributes: ['time_saved']
+        }),
+        prv_user_id != null ? db.User.findAll({
+            where: { prv_user_id },
+            attributes: ['time_saved']
+        }) : Promise.resolve([])
+    ]);
 
     if (inc != null) {
         await user.reload();
     }
 
+    const sumByUserId = byUserId.reduce((sum, row) => sum + (row.time_saved || 0), 0);
+    const sumByPrvUserId = byPrvUserId.reduce((sum, row) => sum + (row.time_saved || 0), 0);
+
     res.send({
-        time_user_id: totalTimeSaved,
-        time_prv_user_id: user.time_saved
+        time_user_id: sumByUserId,
+        time_prv_user_id: sumByPrvUserId,
+        time_saved: user.time_saved
     });
 }))
 
