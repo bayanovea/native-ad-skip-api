@@ -15,17 +15,12 @@ router.post('/users/time-saved', [
 handler(async (req, res) => {
     const { user_id, prv_user_id, inc } = req.body;
 
-    const user = await db.User.findOne({
+    const [user] = await db.User.findOrCreate({
         where: {
             generated_user_id: user_id,
             prv_user_id: prv_user_id ?? null
         }
     });
-
-    if (!user) {
-        res.status(404).send('User not found');
-        return;
-    }
 
     if (inc != null) {
         await user.increment('time_saved', { by: inc });
