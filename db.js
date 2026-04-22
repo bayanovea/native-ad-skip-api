@@ -120,6 +120,10 @@ const User = db.define("user", {
     rating: {
         type: DataTypes.INTEGER,
         defaultValue: 0
+    },
+    time_saved: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
     }
 }, {
     indexes: [
