@@ -9,7 +9,7 @@ const handler = require('../middleware/handler');
 router.post('/users/time-saved', [
     body('user_id').isString(),
     body('prv_user_id').optional({ nullable: true }).isInt({ min: 1 }),
-    body('inc').isInt({ min: 0 }),
+    body('inc').optional({ nullable: true }).isInt({ min: 0 }),
     validateRequest
 ],
 handler(async (req, res) => {
@@ -27,7 +27,9 @@ handler(async (req, res) => {
         return;
     }
 
-    await user.increment('time_saved', { by: inc });
+    if (inc != null) {
+        await user.increment('time_saved', { by: inc });
+    }
 
     const allRows = await db.User.findAll({
         where: { generated_user_id: user_id },
@@ -36,7 +38,9 @@ handler(async (req, res) => {
 
     const totalTimeSaved = allRows.reduce((sum, row) => sum + (row.time_saved || 0), 0);
 
-    await user.reload();
+    if (inc != null) {
+        await user.reload();
+    }
 
     res.send({
         time_user_id: totalTimeSaved,
