@@ -5,6 +5,7 @@ const videoRoutes = require('./routes/videos');
 const markupRoutes = require('./routes/markups');
 const voteRoutes = require('./routes/votes');
 const userRoutes = require('./routes/users');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -37,6 +38,7 @@ app.use('/', videoRoutes);
 app.use('/', markupRoutes);
 app.use('/', voteRoutes);
 app.use('/', userRoutes);
+app.use('/', adminRoutes);
 app.use((error, req, res, next) => {
     console.error('Error: ', {
         method: req.method,
