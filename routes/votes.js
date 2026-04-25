@@ -5,6 +5,7 @@ const db = require('../db');
 const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
 const userService = require('../service/user');
+const videoRepository = require('../repository/video');
 
 router.post('/vote', [
     body('video_id').isString(),
@@ -14,6 +15,7 @@ router.post('/vote', [
     body('start').isInt({ min: 0 }),
     body('end').isInt({ min: 0 }),
     body('vote').isInt({ min: -1, max: 1 }),
+    body('duration').optional({ nullable: true }).isInt({ min: 1 }),
     validateRequest
 ],
 handler(async (req, res) => {
@@ -22,10 +24,9 @@ handler(async (req, res) => {
     const start = req.body.start;
     const end = req.body.end;
     const vote = req.body.vote;
+    const duration = req.body.duration;
 
-    const video = await db.Video.findOne({
-        where: { native_id: req.body.video_id }
-    });
+    const video = await videoRepository.findByNativeIdAndDuration(req.body.video_id, duration);
     if (!video) {
         res.status(404).send('Not found');
         return;

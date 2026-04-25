@@ -6,6 +6,7 @@ const prometheusWrapper = require('../prometheus-wrapper');
 const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
 const durationLogRepository = require('../repository/duration-log');
+const videoRepository = require('../repository/video');
 
 /**
  * Get calculated data by video 
@@ -24,18 +25,9 @@ handler(async (req, res) => {
     let video;
     
     if (req.query.v) {
-        video = await db.Video.findOne({
-            where: { native_id: nativeFullVideoId }
-        });
+        video = await videoRepository.findByNativeIdAndDuration(nativeFullVideoId, duration);
 
         if (video && duration) {
-            if (video.duration === null) {
-                await db.Video.update(
-                    { duration: duration },
-                    { where: { id: video.id } }
-                );
-            }
-
             const durationDiff = video.duration === null ? null : Math.abs(video.duration - duration);
             if (req.query.user_id && video.status != 1 && (durationDiff === null || durationDiff > 1)) {
                 const [user] = await db.User.findOrCreate({

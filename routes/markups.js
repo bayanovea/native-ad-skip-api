@@ -8,6 +8,7 @@ const verifyBearerToken = require('../middleware/verify-bearer-token');
 const handler = require('../middleware/handler');
 const markupRepository = require('../repository/markup');
 const markupTimeIntervalRepository = require('../repository/markup-time-interval');
+const videoRepository = require('../repository/video');
 
 const IGNORE_MAKRUPS_USER_RATING_VAL = -2;
 
@@ -31,6 +32,7 @@ router.post('/markup', [
         }
         return true;
     }),
+    body('duration').optional({ nullable: true }).isInt({ min: 1 }),
     validateRequest
 ],
 handler(async (req, res) => {
@@ -43,9 +45,7 @@ handler(async (req, res) => {
         videoId = '-' + videoId;
     }
 
-    const [video, videoCreated] = await db.Video.findOrCreate({
-        where: { native_id: videoId }
-    });
+    const video = await videoRepository.findByNativeIdAndDuration(videoId, req.body.duration, { create: true });
 
     const [user, userCreated] = await db.User.findOrCreate({
         where: {
@@ -99,6 +99,7 @@ router.put('/markups', [
     body('new_category_id').optional().isInt({ min: 1 }),
     body('new_start').optional().isInt({ min: 0 }),
     body('new_end').optional().isInt({ min: 0 }),
+    body('duration').optional({ nullable: true }).isInt({ min: 1 }),
     validateRequest
 ],
 handler(async (req, res) => {
