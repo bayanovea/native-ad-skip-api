@@ -363,7 +363,7 @@ router.get('/admin/video/:video_id/user/:prv_user_id', handler(async (req, res) 
             btn.classList.toggle('active', useInt);
             renderIntervals();
         }
-        renderIntervals();
+        document.addEventListener('DOMContentLoaded', renderIntervals);
         async function deleteMarkup(btn, id) {
             if (!confirm('Delete markup ' + id + '?')) return;
             btn.disabled = true;
