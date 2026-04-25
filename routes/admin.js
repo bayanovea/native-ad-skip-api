@@ -85,28 +85,50 @@ router.get('/admin/video/:video_id', handler(async (req, res) => {
         const categoryName = categoryById[seg.category_id] || seg.category_id;
         const color = categoryColors[categoryName] || '#64748b';
 
-        const markupRows = bucketMarkups.map(markup => {
-            const catName = markup.category?.category || categoryById[markup.category_id] || '?';
-            const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
-            const markupIntervals = intervalsByMarkup[markup.id] || [];
-            const intervalStr = markupIntervals.length
-                ? markupIntervals.map(i => `<span class="interval-val" data-start="${i.start}" data-end="${i.end}" data-seg-end="${seg.end}"></span>`).join('<br>')
-                : '—';
-            return `
-            <tr class="markup-row">
-                <td class="indent" colspan="2">&#x21B3;</td>
-                <td class="muted">${intervalStr}</td>
-                <td>${markup.user?.prv_user_id != null ? `<a class="user-link" href="/admin/video/${video.id}/user/${markup.user.prv_user_id}?verifyBearerToken=${req.query.verifyBearerToken}" target="_blank">&#128100; ${markup.user.prv_user_id}</a>` : '—'}</td>
-                <td class="muted">${createdAt}</td>
-                <td><button class="delete-btn" onclick="deleteMarkup(this, ${markup.id})">Delete</button></td>
-            </tr>`;
-        }).join('');
+        // Group markups by their interval (start_end key), sorted by start ASC
+        const intervalGroups = {};
+        for (const markup of bucketMarkups) {
+            const mIntervals = intervalsByMarkup[markup.id] || [];
+            if (mIntervals.length === 0) continue;
+            const interval = mIntervals.find(i => (Math.floor(i.start) - (Math.floor(i.start) % 3)) === startRounded) || mIntervals[0];
+            const gKey = `${interval.start}_${interval.end}`;
+            if (!intervalGroups[gKey]) intervalGroups[gKey] = { start: interval.start, end: interval.end, items: [] };
+            intervalGroups[gKey].items.push(markup);
+        }
+        const markupRows = Object.values(intervalGroups)
+            .sort((a, b) => a.start - b.start)
+            .map((group, gIdx) => {
+                const groupId = `${seg.category_id}_${startRounded}_${gIdx}`;
+                const subRows = group.items.map(markup => {
+                    const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
+                    const userLink = markup.user?.prv_user_id != null
+                        ? `<a class="user-link" href="/admin/video/${video.id}/user/${markup.user.prv_user_id}?verifyBearerToken=${req.query.verifyBearerToken}" target="_blank">&#128100; ${markup.user.prv_user_id}</a>`
+                        : '—';
+                    return `
+                <tr class="markup-row" data-group="${groupId}" style="display:none">
+                    <td colspan="4"></td>
+                    <td>${userLink}</td>
+                    <td class="muted">${createdAt}</td>
+                    <td><button class="delete-btn" onclick="deleteMarkup(this, ${markup.id})">Delete</button></td>
+                </tr>`;
+                }).join('');
+                return `
+            <tr class="interval-group-row">
+                <td colspan="2"></td>
+                <td class="muted"><span class="interval-val" data-start="${group.start}" data-end="${group.end}" data-seg-end="${seg.end}"></span></td>
+                <td class="muted">${group.items.length}</td>
+                <td><button class="toggle-group-btn" onclick="toggleGroup(this, '${groupId}')">Show</button></td>
+                <td><button class="toggle-group-btn" onclick="toggleGroup(this, '${groupId}')">Show</button></td>
+                <td><button class="toggle-group-btn" onclick="toggleGroup(this, '${groupId}')">Show</button></td>
+            </tr>
+            ${subRows}`;
+            }).join('');
 
         return `
         <tbody>
             <tr class="segment-row" style="border-left: 4px solid ${color}">
-                <td colspan="2"><button class="toggle-btn" onclick="toggleSegment(this)">&#x25BC;</button> <strong><span class="interval-val" data-start="${seg.start}" data-end="${seg.end}"></span></strong> &nbsp;<span class="badge" style="background:${color}">${categoryName}</span></td>
-                <td colspan="4" class="muted">${bucketMarkups.length} markup${bucketMarkups.length !== 1 ? 's' : ''}</td>
+                <td colspan="2"><button class="toggle-btn" onclick="toggleSegment(this)">Hide</button> <strong><span class="interval-val" data-start="${seg.start}" data-end="${seg.end}"></span></strong> &nbsp;<span class="badge" style="background:${color}">${categoryName}</span></td>
+                <td colspan="5" class="muted">${bucketMarkups.length} markup${bucketMarkups.length !== 1 ? 's' : ''}</td>
             </tr>
             ${markupRows}
         </tbody>`;
@@ -147,6 +169,10 @@ router.get('/admin/video/:video_id', handler(async (req, res) => {
         .delete-btn:disabled { opacity: 0.5; cursor: default; }
         .toggle-time-btn { background: #0f172a; border: 1px solid #334155; color: #64748b; font-size: 0.7rem; padding: 2px 7px; border-radius: 4px; cursor: pointer; margin-left: 6px; vertical-align: middle; font-weight: 400; text-transform: none; letter-spacing: 0; }
         .toggle-time-btn.active { background: #0f3460; border-color: #2563eb; color: #7dd3fc; }
+        .interval-group-row td { background: #162032; }
+        .markup-row td { background: #0f1a2a; }
+        .toggle-group-btn { background: none; border: none; color: #475569; cursor: pointer; font-size: 0.65rem; padding: 0 4px; vertical-align: middle; }
+        .toggle-group-btn:hover { color: #e2e8f0; }
         .toggle-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 0.7rem; padding: 0 4px 0 0; line-height: 1; vertical-align: middle; }
         .toggle-btn:hover { color: #e2e8f0; }
     </style>
@@ -167,6 +193,7 @@ router.get('/admin/video/:video_id', handler(async (req, res) => {
             <tr>
                 <th colspan="2">Final interval</th>
                 <th>Interval <button class="toggle-time-btn" onclick="toggleTimeFormat(this)">&#x1F552; Time</button></th>
+                <th>Count</th>
                 <th>User id</th>
                 <th>Created at</th>
                 <th>Actions</th>
@@ -206,10 +233,20 @@ router.get('/admin/video/:video_id', handler(async (req, res) => {
     renderIntervals();
     function toggleSegment(btn) {
         const tbody = btn.closest('tbody');
-        const rows = tbody.querySelectorAll('.markup-row');
+        const rows = tbody.querySelectorAll('.interval-group-row');
         const isOpen = !rows.length || rows[0].style.display !== 'none';
         rows.forEach(r => r.style.display = isOpen ? 'none' : '');
-        btn.innerHTML = isOpen ? '&#x25B6;' : '&#x25BC;';
+        if (isOpen) {
+            tbody.querySelectorAll('.markup-row').forEach(r => r.style.display = 'none');
+            tbody.querySelectorAll('.toggle-group-btn').forEach(b => b.textContent = 'Show');
+        }
+        btn.textContent = isOpen ? 'Show' : 'Hide';
+    }
+    function toggleGroup(btn, groupId) {
+        const rows = document.querySelectorAll('[data-group="' + groupId + '"]');
+        const isOpen = rows.length > 0 && rows[0].style.display !== 'none';
+        rows.forEach(r => r.style.display = isOpen ? 'none' : '');
+        btn.closest('tr').querySelectorAll('.toggle-group-btn').forEach(b => b.textContent = isOpen ? 'Show' : 'Hide');
     }
     async function deleteMarkup(btn, id) {
         if (!confirm('Delete markup ' + id + '?')) return;
