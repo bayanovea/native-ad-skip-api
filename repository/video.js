@@ -17,9 +17,9 @@ async function findByNativeIdAndDuration(nativeId, duration) {
 
             if (video) {
                 await video.update({ duration });
+            } else {
+                video = await db.Video.create({ native_id: nativeId, duration });
             }
-            
-            video = await db.Video.create({ native_id: nativeId, duration });
         }
 
         return video;
