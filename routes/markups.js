@@ -45,7 +45,7 @@ handler(async (req, res) => {
         videoId = '-' + videoId;
     }
 
-    const video = await videoRepository.findByNativeIdAndDuration(videoId, req.body.duration, { create: true });
+    const video = await videoRepository.findByNativeIdAndDuration(videoId, req.body.duration);
 
     const [user, userCreated] = await db.User.findOrCreate({
         where: {
