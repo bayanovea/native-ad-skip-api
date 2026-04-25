@@ -5,7 +5,7 @@ const db = require('../db');
 const prometheusWrapper = require('../prometheus-wrapper');
 const validateRequest = require('../middleware/validate-request');
 const handler = require('../middleware/handler');
-const durationLogRepository = require('../repository/duration-log');
+// const durationLogRepository = require('../repository/duration-log');
 const videoRepository = require('../repository/video');
 
 /**
@@ -27,18 +27,18 @@ handler(async (req, res) => {
     if (req.query.v) {
         video = await videoRepository.findByNativeIdAndDuration(nativeFullVideoId, duration);
 
-        if (video && duration) {
-            const durationDiff = video.duration === null ? null : Math.abs(video.duration - duration);
-            if (req.query.user_id && video.status != 1 && (durationDiff === null || durationDiff > 1)) {
-                const [user] = await db.User.findOrCreate({
-                    where: {
-                        generated_user_id: req.query.user_id,
-                        prv_user_id: req.query.prv_user_id ?? null,
-                    }
-                });
-                await durationLogRepository.createOrIncrement(user.id, video.id, duration);
-            }
-        }
+        // if (video && duration) {
+        //     const durationDiff = video.duration === null ? null : Math.abs(video.duration - duration);
+        //     if (req.query.user_id && video.status != 1 && (durationDiff === null || durationDiff > 1)) {
+        //         const [user] = await db.User.findOrCreate({
+        //             where: {
+        //                 generated_user_id: req.query.user_id,
+        //                 prv_user_id: req.query.prv_user_id ?? null,
+        //             }
+        //         });
+        //         await durationLogRepository.createOrIncrement(user.id, video.id, duration);
+        //     }
+        // }
     } else { // Crutch for old versions when frontend always send video id without minus
         prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', nativeFullVideoId);
 
