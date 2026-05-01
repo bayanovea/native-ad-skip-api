@@ -1,44 +1,33 @@
 const express = require('express');
-const bodyParser = require('body-parser')
-const routes = require('./routes/routes');
-const videoRoutes = require('./routes/videos');
-const markupRoutes = require('./routes/markups');
-const voteRoutes = require('./routes/votes');
-const userRoutes = require('./routes/users');
-const adminRoutes = require('./routes/admin');
+const bodyParser = require('body-parser');
+const routes = require('./prv/routes/routes');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
 
-// body parser
-app.use(bodyParser.json())
-app.use(bodyParser.urlencoded({ extended: true }))
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// metrics middleware
 const promBundle = require('express-prom-bundle');
-const metricsMiddleware = promBundle({includeMethod: true, includePath: true});
+const metricsMiddleware = promBundle({ includeMethod: true, includePath: true });
 app.use(metricsMiddleware);
 
-// session
-app.set('trust proxy', true)
+app.set('trust proxy', true);
 
-// cors
 app.use(function (req, res, next) {
-    const origin = req.headers.origin || '*'
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE')
-    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type, Accept')
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
-    next()
-})
+    const origin = req.headers.origin || '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type, Accept');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    next();
+});
 
-// routes
 app.use('/', routes);
-app.use('/', videoRoutes);
-app.use('/', markupRoutes);
-app.use('/', voteRoutes);
-app.use('/', userRoutes);
-app.use('/', adminRoutes);
+app.use('/', require('./prv'));
+app.use('/rt', require('./rt'));
+app.use('/yt', require('./yt'));
+
 app.use((error, req, res, next) => {
     console.error('Error: ', {
         method: req.method,
@@ -47,7 +36,7 @@ app.use((error, req, res, next) => {
         body: req.body,
         params: req.params,
         query: req.query,
-        error: error
+        error,
     });
     res.status(500).send('Internal Server Error');
 });

@@ -25,7 +25,9 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN touch /tmp/supervisor.sock && chmod 700 /tmp/supervisor.sock
 
 # GoLang build
-RUN go build -o commands/calculate commands/*.go
+RUN go build -o prv/commands/calculate ./prv/commands/ && \
+    go build -o rt/commands/calculate ./rt/commands/ && \
+    go build -o yt/commands/calculate ./yt/commands/
 
 # Cron
 COPY crontab /etc/cron.d/my-crontab
