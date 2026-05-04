@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  e2e-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d app"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    networks:
+      - e2e-network
+
+  e2e-app:
+    build: .
+    depends_on:
+      e2e-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: e2e-db
+      DB_NAME: app
+      DB_USER: app_user
+      DB_PASSWORD: app_pass
+      NODE_APP_PORT: 3022
+      AUTH_TOKEN: test_token
+      GOPATH: /go
+      APP_DIR: /app
+    command: node test/e2e.js
+    networks:
+      - e2e-network
+
+networks:
+  e2e-network:
+    driver: bridge

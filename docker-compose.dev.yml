@@ -11,6 +11,16 @@ services:
       - .env
     environment:
       - GOPATH=/go
+  swagger-ui:
+    image: swaggerapi/swagger-ui
+    ports:
+      - "8080:8080"
+    networks:
+      - main-network
+    volumes:
+      - ./api/doc/openapi.yaml:/usr/share/nginx/html/openapi.yaml
+    environment:
+      - SWAGGER_JSON=/usr/share/nginx/html/openapi.yaml
   prometheus:
     image: prom/prometheus:v2.45.2
     ports:

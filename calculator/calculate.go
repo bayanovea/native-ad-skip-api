@@ -24,31 +24,27 @@ type IntervalAggregated struct {
 	markupIds    []int
 }
 
-func Run(tablePrefix string) {
+func Run(tablePrefix string, videoId ...string) {
 	db := ConnectDb()
 	defer db.Close()
 
-	videoIds := getVideoIds(db, tablePrefix)
+	var ids []string
+	if len(videoId) > 0 && videoId[0] != "" {
+		ids = []string{videoId[0]}
+	} else {
+		ids = getVideoIdsWithNewMarkups(db, tablePrefix)
+	}
+
 	pool := NewGoroutinePool(10)
 
-	for _, videoId := range videoIds {
-		id := videoId
+	for _, id := range ids {
+		id := id
 		pool.Execute(func() {
 			calculateVideo(id, db, tablePrefix)
 		})
 	}
 
 	pool.Close()
-}
-
-func getVideoIds(db *sql.DB, tablePrefix string) []string {
-	args := os.Args[1:]
-
-	if len(args) == 0 {
-		return getVideoIdsWithNewMarkups(db, tablePrefix)
-	}
-
-	return []string{args[0]}
 }
 
 func getVideoIdsWithNewMarkups(db *sql.DB, tablePrefix string) []string {
@@ -101,12 +97,12 @@ func clearOldVideoCalculated(db *sql.DB, videoId string, tablePrefix string) {
 
 func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) (map[int]map[int]IntervalAggregated, []int) {
 	sql := fmt.Sprintf(`
-  	SELECT intervals.start, intervals.end, categories.id category_id, markups.id markup_id FROM %smarkup_time_intervals intervals
+  	SELECT intervals.start, intervals.end, categories.id category_id, %smarkups.id markup_id FROM %smarkup_time_intervals intervals
 		LEFT JOIN %smarkups ON %smarkups.id = intervals.markup_id
 		LEFT JOIN %smarkup_categories categories ON categories.id = %smarkups.category_id
 		WHERE %smarkups.video_id = $1 AND intervals.deleted_at IS NULL AND %smarkups.deleted_at IS NULL
 		ORDER BY intervals.start
-	`, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix)
+	`, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix, tablePrefix)
 
 	videos, err := db.Query(sql, videoId)
 	if err != nil {
@@ -232,9 +228,7 @@ func updateIsNew(db *sql.DB, videoId string, tablePrefix string) {
 }
 
 func ConnectDb() *sql.DB {
-	if err := godotenv.Load("/app/.env"); err != nil {
-		log.Fatalf("Can not load .env: %v", err)
-	}
+	godotenv.Load("/app/.env") // non-fatal; env vars already set take precedence
 
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		os.Getenv("DB_HOST"), 5432, os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"))

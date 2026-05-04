@@ -1,0 +1,718 @@
+openapi: 3.0.3
+info:
+  title: native-ad-skip-api
+  version: 1.0.0
+  description: |
+    Crowdsourced video ad/segment skipping API.
+    Supports three providers: **prv** (no prefix), **RT** (`/rt`), **yt** (`/yt`).
+
+servers:
+  - url: http://localhost:3022
+
+# ── Security ──────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: "Username: `admin` — Password: `AUTH_TOKEN` value"
+    tokenQuery:
+      type: apiKey
+      in: query
+      name: verifyBearerToken
+      description: "AUTH_TOKEN value as query parameter. Used by Grafana-compatible GET endpoints."
+
+  schemas:
+    Segment:
+      type: object
+      properties:
+        category_id: { type: integer, example: 1 }
+        start:       { type: integer, example: 5 }
+        end:         { type: integer, example: 30 }
+
+    Interval:
+      type: object
+      required: [start, end]
+      properties:
+        start: { type: number, example: 5.0 }
+        end:   { type: number, example: 30.0 }
+
+    # ── prv schemas (duration optional) ───────────────────────────────────────
+    PrvMarkupBody:
+      type: object
+      required: [video_id, user_id, category_id, data]
+      properties:
+        video_id:    { type: string, example: "123_456" }
+        user_id:     { type: string, example: "uuid-abc" }
+        prv_user_id:  { type: integer, minimum: 1, nullable: true, example: 789 }
+        category_id: { type: integer, minimum: 1, example: 1 }
+        v:
+          type: string
+          example: "1"
+          description: "Version string. If omitted, legacy mode activates and `-` is prepended to video_id."
+        data:
+          type: object
+          required: [intervals]
+          properties:
+            intervals:
+              type: array
+              items: { $ref: '#/components/schemas/Interval' }
+        duration: { type: integer, minimum: 1, nullable: true, example: 300 }
+
+    PrvUpdateMarkupBody:
+      type: object
+      required: [video_id, user_id, category_id, start, end]
+      properties:
+        video_id:       { type: string }
+        user_id:        { type: string }
+        prv_user_id:     { type: integer, minimum: 1 }
+        category_id:    { type: integer, minimum: 1 }
+        start:          { type: integer, minimum: 0 }
+        end:            { type: integer, minimum: 0 }
+        new_category_id: { type: integer, minimum: 1 }
+        new_start:       { type: integer, minimum: 0 }
+        new_end:         { type: integer, minimum: 0 }
+        duration:        { type: integer, minimum: 1, nullable: true }
+
+    PrvVoteBody:
+      type: object
+      required: [video_id, user_id, category_id, start, end, vote]
+      properties:
+        video_id:    { type: string }
+        user_id:     { type: string }
+        prv_user_id:  { type: integer, minimum: 1, nullable: true }
+        category_id: { type: integer, minimum: 1 }
+        start:       { type: integer, minimum: 0 }
+        end:         { type: integer, minimum: 0 }
+        vote:        { type: integer, minimum: -1, maximum: 1, example: 1 }
+        duration:    { type: integer, minimum: 1, nullable: true }
+
+    # ── RT/YT schemas (duration required, prv_user_id required in vote) ───────
+    RTMarkupBody:
+      type: object
+      required: [video_id, user_id, category_id, data, duration]
+      properties:
+        video_id:    { type: string }
+        user_id:     { type: string }
+        prv_user_id:  { type: integer, minimum: 1, nullable: true }
+        category_id: { type: integer, minimum: 1 }
+        data:
+          type: object
+          required: [intervals]
+          properties:
+            intervals:
+              type: array
+              items: { $ref: '#/components/schemas/Interval' }
+        duration: { type: integer, minimum: 1, example: 300 }
+
+    RTUpdateMarkupBody:
+      type: object
+      required: [video_id, user_id, category_id, start, end, duration]
+      properties:
+        video_id:       { type: string }
+        user_id:        { type: string }
+        prv_user_id:     { type: integer, minimum: 1 }
+        category_id:    { type: integer, minimum: 1 }
+        start:          { type: integer, minimum: 0 }
+        end:            { type: integer, minimum: 0 }
+        new_category_id: { type: integer, minimum: 1 }
+        new_start:       { type: integer, minimum: 0 }
+        new_end:         { type: integer, minimum: 0 }
+        duration:        { type: integer, minimum: 1 }
+
+    RTVoteBody:
+      type: object
+      required: [video_id, user_id, prv_user_id, category_id, start, end, vote, duration]
+      properties:
+        video_id:    { type: string }
+        user_id:     { type: string }
+        prv_user_id:  { type: integer, minimum: 1 }
+        category_id: { type: integer, minimum: 1 }
+        start:       { type: integer, minimum: 0 }
+        end:         { type: integer, minimum: 0 }
+        vote:        { type: integer, minimum: -1, maximum: 1 }
+        duration:    { type: integer, minimum: 1 }
+
+    TimeSavedBody:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:    { type: string }
+        prv_user_id: { type: integer, minimum: 1, nullable: true }
+        inc:        { type: integer, minimum: 0, nullable: true, description: "Seconds to add to time_saved" }
+
+    TimeSavedResponse:
+      type: object
+      properties:
+        time_user_id:    { type: integer, description: "Total time saved across all records by generated_user_id" }
+        time_prv_user_id: { type: integer, description: "Total time saved across all records by prv_user_id" }
+        time_saved:      { type: integer, description: "time_saved for the matched user record" }
+
+  responses:
+    Unauthorized:
+      description: Unauthorized
+    NotFound:
+      description: Not found
+    ValidationError:
+      description: Validation error
+
+# ── Tags ──────────────────────────────────────────────────────────────────────
+tags:
+  - name: System
+  - name: prv
+  - name: RT
+  - name: YT
+  - name: Admin
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── System ──────────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [System]
+      summary: Health check
+      responses:
+        '200': { description: OK }
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus metrics
+      responses:
+        '200':
+          description: Metrics in Prometheus text format
+          content:
+            text/plain:
+              schema: { type: string }
+
+  # ── prv ──────────────────────────────────────────────────────────────────────
+  /video-calculated:
+    get:
+      tags: [prv]
+      summary: Get calculated segments
+      parameters:
+        - name: video_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: v
+          in: query
+          schema: { type: string }
+          description: "Version string. Required for correct lookup; omit only for legacy clients."
+        - name: duration
+          in: query
+          schema: { type: integer }
+        - name: user_id
+          in: query
+          schema: { type: string }
+        - name: prv_user_id
+          in: query
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Calculated segments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Segment' }
+        '204': { description: No calculated data for this video }
+
+  /markup:
+    post:
+      tags: [prv]
+      summary: Submit a markup
+      description: |
+        Users with rating ≤ −2 are silently accepted (201 returned) but the markup is not stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrvMarkupBody' }
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /markups:
+    get:
+      tags: [prv]
+      summary: List markups
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: Markups list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [prv]
+      summary: Update a markup interval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrvUpdateMarkupBody' }
+      responses:
+        '200': { description: Updated }
+        '400': { description: New category is invalid }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /markups/{id}:
+    delete:
+      tags: [prv]
+      summary: Soft-delete a markup
+      security:
+        - basicAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /markups/{id}/delete:
+    get:
+      tags: [prv]
+      summary: Soft-delete a markup (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /videos/{id}/markups:
+    delete:
+      tags: [prv]
+      summary: Hard-delete all markups for a video
+      security:
+        - basicAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: "Video DB id (integer) or native_id (string)"
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vote:
+    post:
+      tags: [prv]
+      summary: Submit a vote on a calculated segment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrvVoteBody' }
+      responses:
+        '204': { description: Vote recorded }
+        '404': { description: Video, calculated data, or segment not found }
+
+  /votes/{id}/delete:
+    get:
+      tags: [prv]
+      summary: Delete a vote (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Vote or user not found }
+
+  /votes/user/{internal_user_id}/update-rating:
+    get:
+      tags: [prv]
+      summary: Override a user's rating
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: internal_user_id, in: path, required: true, schema: { type: integer } }
+        - { name: rating, in: query, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Updated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /users/time-saved:
+    post:
+      tags: [prv]
+      summary: Track and retrieve time saved for a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TimeSavedBody' }
+      responses:
+        '200':
+          description: Aggregated time saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimeSavedResponse' }
+
+  # ── Admin ────────────────────────────────────────────────────────────────────
+  /admin/markups/edit:
+    post:
+      tags: [Admin]
+      summary: Replace a calculated segment with new boundaries
+      description: "Soft-deletes all markups matching the segment, then creates a new markup."
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [video_id, category_id, start, end, new_category_id, new_start, new_end, user_id]
+              properties:
+                video_id:       { type: string }
+                category_id:    { type: integer, minimum: 1 }
+                start:          { type: integer, minimum: 0 }
+                end:            { type: integer, minimum: 0 }
+                new_category_id: { type: integer, minimum: 1 }
+                new_start:      { type: integer, minimum: 0 }
+                new_end:        { type: integer, minimum: 0 }
+                user_id:        { type: string }
+                prv_user_id:     { type: integer, minimum: 1 }
+      responses:
+        '201': { description: Created }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Video not found }
+
+  /admin/video/{video_id}:
+    get:
+      tags: [Admin]
+      summary: Admin dashboard — markups for a video
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: video_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: HTML dashboard page
+          content:
+            text/html:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/video/{video_id}/user/{prv_user_id}:
+    get:
+      tags: [Admin]
+      summary: Admin dashboard — markups by a specific user
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: video_id,    in: path, required: true, schema: { type: string } }
+        - { name: prv_user_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: HTML dashboard page
+          content:
+            text/html:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/markups/{id}/delete:
+    get:
+      tags: [Admin]
+      summary: Delete a markup from the admin dashboard
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '302': { description: Redirect back to video page }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── RT ──────────────────────────────────────────────────────────────────────
+  /rt/video-calculated:
+    get:
+      tags: [RT]
+      summary: Get calculated segments
+      parameters:
+        - { name: video_id,  in: query, required: true,  schema: { type: string } }
+        - { name: duration,  in: query, required: true,  schema: { type: integer } }
+        - { name: user_id,   in: query, required: false, schema: { type: string } }
+        - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Calculated segments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Segment' }
+        '204': { description: No data }
+
+  /rt/markup:
+    post:
+      tags: [RT]
+      summary: Submit a markup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTMarkupBody' }
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /rt/markups:
+    get:
+      tags: [RT]
+      summary: List markups
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: Markups list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [RT]
+      summary: Update a markup interval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTUpdateMarkupBody' }
+      responses:
+        '200': { description: Updated }
+        '400': { description: New category is invalid }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /rt/markups/{id}:
+    delete:
+      tags: [RT]
+      summary: Soft-delete a markup
+      security:
+        - basicAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /rt/markups/{id}/delete:
+    get:
+      tags: [RT]
+      summary: Soft-delete a markup (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /rt/videos/{id}/markups:
+    delete:
+      tags: [RT]
+      summary: Hard-delete all markups for a video
+      security:
+        - basicAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /rt/vote:
+    post:
+      tags: [RT]
+      summary: Submit a vote on a calculated segment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTVoteBody' }
+      responses:
+        '204': { description: Vote recorded }
+        '404': { description: Video, calculated data, or segment not found }
+
+  /rt/votes/{id}/delete:
+    get:
+      tags: [RT]
+      summary: Delete a vote (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Vote or user not found }
+
+  /rt/votes/user/{internal_user_id}/update-rating:
+    get:
+      tags: [RT]
+      summary: Override a user's rating
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: internal_user_id, in: path, required: true, schema: { type: integer } }
+        - { name: rating, in: query, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Updated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── YT ──────────────────────────────────────────────────────────────────────
+  /yt/video-calculated:
+    get:
+      tags: [YT]
+      summary: Get calculated segments
+      parameters:
+        - { name: video_id,  in: query, required: true,  schema: { type: string } }
+        - { name: duration,  in: query, required: true,  schema: { type: integer } }
+        - { name: user_id,   in: query, required: false, schema: { type: string } }
+        - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Calculated segments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Segment' }
+        '204': { description: No data }
+
+  /yt/markup:
+    post:
+      tags: [YT]
+      summary: Submit a markup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTMarkupBody' }
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /yt/markups:
+    get:
+      tags: [YT]
+      summary: List markups
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: Markups list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [YT]
+      summary: Update a markup interval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTUpdateMarkupBody' }
+      responses:
+        '200': { description: Updated }
+        '400': { description: New category is invalid }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /yt/markups/{id}:
+    delete:
+      tags: [YT]
+      summary: Soft-delete a markup
+      security:
+        - basicAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /yt/markups/{id}/delete:
+    get:
+      tags: [YT]
+      summary: Soft-delete a markup (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /yt/videos/{id}/markups:
+    delete:
+      tags: [YT]
+      summary: Hard-delete all markups for a video
+      security:
+        - basicAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /yt/vote:
+    post:
+      tags: [YT]
+      summary: Submit a vote on a calculated segment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RTVoteBody' }
+      responses:
+        '204': { description: Vote recorded }
+        '404': { description: Video, calculated data, or segment not found }
+
+  /yt/votes/{id}/delete:
+    get:
+      tags: [YT]
+      summary: Delete a vote (Grafana-compatible)
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Vote or user not found }
+
+  /yt/votes/user/{internal_user_id}/update-rating:
+    get:
+      tags: [YT]
+      summary: Override a user's rating
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: internal_user_id, in: path, required: true, schema: { type: integer } }
+        - { name: rating, in: query, required: true, schema: { type: integer } }
+      responses:
+        '201': { description: Updated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }

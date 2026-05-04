@@ -88,6 +88,7 @@ Client → Express routes → Middleware (validate, auth) → Repository layer �
 
 - **Admin routes**: `Authorization: Bearer <AUTH_TOKEN>` header (middleware `verify-bearer-token.js`)
 - **Admin dashboard**: `AUTH_TOKEN` as query param (checked directly in `routes/admin.js`)
+- **API docs** (`/api/doc`): HTTP Basic Auth — username `admin`, password `AUTH_TOKEN` env var
 - Public write endpoints (markup creation, votes) are unauthenticated
 
 ### Database Models

@@ -1,5 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const swaggerUi = require('swagger-ui-express');
+const yaml = require('js-yaml');
+const fs = require('fs');
 const routes = require('./prv/routes/routes');
 
 const app = express();
@@ -22,6 +25,21 @@ app.use(function (req, res, next) {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     next();
 });
+
+const apiSpec = yaml.load(fs.readFileSync('./api/doc/openapi.yaml', 'utf8'));
+app.use('/api/doc', (req, res, next) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="API Docs"');
+        return res.status(401).send('Unauthorized');
+    }
+    const [user, pass] = Buffer.from(auth.slice(6), 'base64').toString().split(':');
+    if (user !== 'admin' || pass !== process.env.AUTH_TOKEN) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="API Docs"');
+        return res.status(401).send('Unauthorized');
+    }
+    next();
+}, swaggerUi.serve, swaggerUi.setup(apiSpec));
 
 app.use('/', routes);
 app.use('/', require('./prv'));

@@ -1,7 +1,16 @@
 package main
 
-import "odedohbest/video-calculate/calculator"
+import (
+	"os"
+
+	"odedohbest/video-calculate/calculator"
+)
 
 func main() {
-	calculator.Run("")
+	args := os.Args[1:]
+	if len(args) > 0 {
+		calculator.Run("", args[0])
+	} else {
+		calculator.Run("")
+	}
 }
