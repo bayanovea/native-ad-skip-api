@@ -12,5 +12,6 @@ router.use('/', require('./markups')(models, { markupRepository, markupTimeInter
 router.use('/', require('./videos')(models, { videoRepository }));
 router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('../../prv/routes/users')(models));
+router.use('/', require('../../prv/routes/events')(models));
 
 module.exports = router;

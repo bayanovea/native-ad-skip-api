@@ -111,7 +111,11 @@ All three providers share the same route shape; `prv/` has two extras.
 - **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
 - **`votes.js`** — Vote submission updates the creator's rating via `prv/service/user.js`.
 - **`videos.js`** — `GET /video-calculated` serves aggregated segments; prv additionally logs duration claims and tracks legacy client versions.
-- **`prv/routes/users.js`** — `POST /users/time-saved`; shared by all providers.
+- **`prv/routes/events.js`** — `POST /events` (shared by all providers). Accepts a JSON array of mixed events; supported types below. Returns `{ data: { time_saved: { ... } } }` when the batch contains at least one `time_saved` event.
+  - **`interval_undo`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `category_id`, `start`, `end`. Stored in `[prefix_]interval_undos`.
+  - **`interval_click`** — fields: same as above plus `click_time` (int). Stored in `[prefix_]interval_clicks`.
+  - **`time_saved`** — fields: `user_id`, `prv_user_id`, `inc`. Increments `User.time_saved`; stored in `[prefix_]time_saved_events`. Response mirrors the old `POST /users/time-saved` structure: `by_user_id`, `by_prv_user_id`, `by_user`.
+- **`prv/routes/users.js`** — Shared by all providers (currently empty; `POST /users/time-saved` was removed in favour of the events endpoint).
 - **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only.
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
@@ -134,6 +138,9 @@ All three providers share the same route shape; `prv/` has two extras.
 | `Vote` | User rating of a markup (-1, 0, +1) |
 | `User` | Internal user mapped to prv user ID; tracks `rating` and `time_saved` |
 | `DurationLog` | Tracks claimed video durations for anomaly detection |
+| `IntervalUndo` | Records per-provider interval undo events (`[prefix_]interval_undos`) |
+| `IntervalClick` | Records per-provider interval click events with `click_time` (`[prefix_]interval_clicks`) |
+| `TimeSavedEvent` | Records per-provider time_saved events (`[prefix_]time_saved_events`) |
 
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 

@@ -13,6 +13,7 @@ router.use('/', require('./markups')(models, { markupRepository, markupTimeInter
 router.use('/', require('./videos')(models, { videoRepository, durationLogRepository }));
 router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('./users')(models));
+router.use('/', require('./events')(models));
 router.use('/', require('./admin')(models, { markupRepository }));
 
 module.exports = router;

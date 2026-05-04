@@ -66,6 +66,31 @@ module.exports = function(sequelize) {
         count: { type: DataTypes.SMALLINT, allowNull: false },
     }, { tableName: 'duration_logs' });
 
+    const IntervalUndo = sequelize.define('interval_undo', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.FLOAT,
+        end: DataTypes.FLOAT,
+    }, { tableName: 'interval_undos' });
+
+    const IntervalClick = sequelize.define('interval_click', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.FLOAT,
+        end: DataTypes.FLOAT,
+        click_time: DataTypes.INTEGER,
+    }, { tableName: 'interval_clicks' });
+
+    const TimeSavedEvent = sequelize.define('time_saved_event', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        inc: { type: DataTypes.INTEGER, allowNull: true },
+    }, { tableName: 'time_saved_events' });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -80,5 +105,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent };
 };

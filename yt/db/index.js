@@ -70,5 +70,30 @@ module.exports = function(sequelize) {
     Vote.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Vote.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User };
+    const IntervalUndo = sequelize.define('yt_interval_undo', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.FLOAT,
+        end: DataTypes.FLOAT,
+    }, { tableName: 'yt_interval_undos' });
+
+    const IntervalClick = sequelize.define('yt_interval_click', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.FLOAT,
+        end: DataTypes.FLOAT,
+        click_time: DataTypes.INTEGER,
+    }, { tableName: 'yt_interval_clicks' });
+
+    const TimeSavedEvent = sequelize.define('yt_time_saved_event', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        inc: { type: DataTypes.INTEGER, allowNull: true },
+    }, { tableName: 'yt_time_saved_events' });
+
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalClick, TimeSavedEvent };
 };

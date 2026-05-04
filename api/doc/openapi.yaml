@@ -133,20 +133,53 @@ components:
         vote:        { type: integer, minimum: -1, maximum: 1 }
         duration:    { type: integer, minimum: 1 }
 
-    TimeSavedBody:
+    EventIntervalUndo:
       type: object
-      required: [user_id]
+      required: [type, user_id, video_native_id, category_id, start, end]
       properties:
+        type:            { type: string, enum: [interval_undo] }
+        user_id:         { type: string, example: "uuid-abc" }
+        prv_user_id:      { type: integer, minimum: 1, nullable: true }
+        video_native_id: { type: string, example: "123_456" }
+        category_id:     { type: integer, minimum: 1 }
+        start:           { type: number }
+        end:             { type: number }
+
+    EventIntervalClick:
+      type: object
+      required: [type, user_id, video_native_id, category_id, start, end, click_time]
+      properties:
+        type:            { type: string, enum: [interval_click] }
+        user_id:         { type: string }
+        prv_user_id:      { type: integer, minimum: 1, nullable: true }
+        video_native_id: { type: string }
+        category_id:     { type: integer, minimum: 1 }
+        start:           { type: number }
+        end:             { type: number }
+        click_time:      { type: integer, description: "Seconds into the video when clicked" }
+
+    EventTimeSaved:
+      type: object
+      required: [type, user_id]
+      properties:
+        type:       { type: string, enum: [time_saved] }
         user_id:    { type: string }
         prv_user_id: { type: integer, minimum: 1, nullable: true }
         inc:        { type: integer, minimum: 0, nullable: true, description: "Seconds to add to time_saved" }
 
-    TimeSavedResponse:
+    EventsResponse:
       type: object
       properties:
-        time_user_id:    { type: integer, description: "Total time saved across all records by generated_user_id" }
-        time_prv_user_id: { type: integer, description: "Total time saved across all records by prv_user_id" }
-        time_saved:      { type: integer, description: "time_saved for the matched user record" }
+        data:
+          type: object
+          properties:
+            time_saved:
+              type: object
+              description: "Present only when the batch contains at least one time_saved event"
+              properties:
+                by_user_id:    { type: integer, description: "Total time saved across all records for this generated_user_id" }
+                by_prv_user_id: { type: integer, description: "Total time saved across all records for this prv_user_id" }
+                by_user:       { type: integer, description: "time_saved on the matched user record" }
 
   responses:
     Unauthorized:
@@ -345,21 +378,36 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /users/time-saved:
+  /events:
     post:
       tags: [prv]
-      summary: Track and retrieve time saved for a user
+      summary: Submit a batch of events
+      description: |
+        Accepts a JSON array of mixed event objects. Each event must have a `type` field.
+        Supported types: `interval_undo`, `interval_click`, `time_saved`.
+        If the batch contains at least one `time_saved` event, `data.time_saved` is included in the response.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/TimeSavedBody' }
+            schema:
+              type: array
+              items:
+                oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalClick' }
+                  - { $ref: '#/components/schemas/EventTimeSaved' }
+              example:
+                - { type: interval_undo, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5.0, end: 30.0 }
+                - { type: interval_click, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5.0, end: 30.0, click_time: 12 }
+                - { type: time_saved, user_id: "uuid-abc", prv_user_id: 789, inc: 25 }
       responses:
         '200':
-          description: Aggregated time saved
+          description: Events recorded
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TimeSavedResponse' }
+              schema: { $ref: '#/components/schemas/EventsResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
 
   # ── Admin ────────────────────────────────────────────────────────────────────
   /admin/markups/edit:
@@ -577,6 +625,29 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /rt/events:
+    post:
+      tags: [RT]
+      summary: Submit a batch of events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalClick' }
+                  - { $ref: '#/components/schemas/EventTimeSaved' }
+      responses:
+        '200':
+          description: Events recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventsResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
   # ── YT ──────────────────────────────────────────────────────────────────────
   /yt/video-calculated:
     get:
@@ -716,3 +787,26 @@ paths:
         '201': { description: Updated }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /yt/events:
+    post:
+      tags: [YT]
+      summary: Submit a batch of events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalClick' }
+                  - { $ref: '#/components/schemas/EventTimeSaved' }
+      responses:
+        '200':
+          description: Events recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventsResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
