@@ -158,6 +158,17 @@ components:
         end:             { type: integer, minimum: 0 }
         click_time:      { type: integer, description: "Seconds into the video when clicked" }
 
+    EventClientFailed:
+      type: object
+      required: [type, user_id, video_native_id, reason]
+      properties:
+        type:            { type: string, enum: [client_failed] }
+        user_id:         { type: string }
+        prv_user_id:      { type: integer, minimum: 1, nullable: true }
+        video_native_id: { type: string }
+        reason:          { type: string }
+        data:            { type: object, nullable: true, additionalProperties: true }
+
     EventTimeSaved:
       type: object
       required: [type, user_id]
@@ -397,6 +408,7 @@ paths:
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
+                  - { $ref: '#/components/schemas/EventClientFailed' }
               example:
                 - { type: interval_undo, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5.0, end: 30.0 }
                 - { type: interval_click, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5.0, end: 30.0, click_time: 12 }
@@ -640,6 +652,7 @@ paths:
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
+                  - { $ref: '#/components/schemas/EventClientFailed' }
       responses:
         '200':
           description: Events recorded
@@ -803,6 +816,7 @@ paths:
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
+                  - { $ref: '#/components/schemas/EventClientFailed' }
       responses:
         '200':
           description: Events recorded

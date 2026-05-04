@@ -91,6 +91,14 @@ module.exports = function(sequelize) {
         inc: { type: DataTypes.INTEGER, allowNull: true },
     }, { tableName: 'prv_events_time_saved' });
 
+    const ClientFailed = sequelize.define('client_failed', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        reason: DataTypes.STRING,
+        data: { type: DataTypes.JSON, allowNull: true },
+    }, { tableName: 'prv_events_client_failed' });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -105,5 +113,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed };
 };

@@ -1,7 +1,7 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
 
-const EVENT_TYPES = ['interval_undo', 'interval_click', 'time_saved'];
+const EVENT_TYPES = ['interval_undo', 'interval_click', 'time_saved', 'client_failed'];
 
 function validateEvent(event) {
     if (!event || typeof event !== 'object') return 'each event must be an object';
@@ -20,6 +20,11 @@ function validateEvent(event) {
 
     if (event.type === 'time_saved') {
         if (event.inc != null && !Number.isInteger(event.inc)) return 'inc must be an integer';
+    }
+
+    if (event.type === 'client_failed') {
+        if (typeof event.video_native_id !== 'string') return 'video_native_id must be a string';
+        if (typeof event.reason !== 'string') return 'reason must be a string';
     }
 
     return null;
@@ -43,6 +48,7 @@ module.exports = function createEventsRoute(models) {
         const undoEvents = events.filter(e => e.type === 'interval_undo');
         const clickEvents = events.filter(e => e.type === 'interval_click');
         const timeSavedEvents = events.filter(e => e.type === 'time_saved');
+        const clientFailedEvents = events.filter(e => e.type === 'client_failed');
 
         async function tryHandle(label, fn) {
             try {
@@ -69,6 +75,13 @@ module.exports = function createEventsRoute(models) {
                 start: e.start,
                 end: e.end,
                 click_time: e.click_time,
+            }))),
+            ...clientFailedEvents.map(e => tryHandle('client_failed', () => models.ClientFailed.create({
+                user_id: e.user_id,
+                prv_user_id: e.prv_user_id ?? null,
+                video_native_id: e.video_native_id,
+                reason: e.reason,
+                data: e.data ?? null,
             }))),
         ]);
 

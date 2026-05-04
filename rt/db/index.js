@@ -95,5 +95,13 @@ module.exports = function(sequelize) {
         inc: { type: DataTypes.INTEGER, allowNull: true },
     }, { tableName: 'rt_events_time_saved' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalClick, TimeSavedEvent };
+    const ClientFailed = sequelize.define('rt_client_failed', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        reason: DataTypes.STRING,
+        data: { type: DataTypes.JSON, allowNull: true },
+    }, { tableName: 'rt_events_client_failed' });
+
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed };
 };
