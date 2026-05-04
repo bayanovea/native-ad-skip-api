@@ -40,15 +40,20 @@ module.exports = function createEventsRoute(models) {
             return res.status(400).json({ error: 'body must be an array of events' });
         }
 
+        const validEvents = [];
         for (const event of events) {
             const err = validateEvent(event);
-            if (err) return res.status(400).json({ error: err });
+            if (err) {
+                console.error('events: skipping invalid event:', err, event);
+            } else {
+                validEvents.push(event);
+            }
         }
 
-        const undoEvents = events.filter(e => e.type === 'interval_undo');
-        const clickEvents = events.filter(e => e.type === 'interval_click');
-        const timeSavedEvents = events.filter(e => e.type === 'time_saved');
-        const clientFailedEvents = events.filter(e => e.type === 'client_failed');
+        const undoEvents = validEvents.filter(e => e.type === 'interval_undo');
+        const clickEvents = validEvents.filter(e => e.type === 'interval_click');
+        const timeSavedEvents = validEvents.filter(e => e.type === 'time_saved');
+        const clientFailedEvents = validEvents.filter(e => e.type === 'client_failed');
 
         async function tryHandle(label, fn) {
             try {
