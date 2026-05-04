@@ -11,8 +11,8 @@ function validateEvent(event) {
     if (event.type === 'interval_undo' || event.type === 'interval_click') {
         if (typeof event.video_native_id !== 'string') return 'video_native_id must be a string';
         if (!Number.isInteger(event.category_id)) return 'category_id must be an integer';
-        if (typeof event.start !== 'number') return 'start must be a number';
-        if (typeof event.end !== 'number') return 'end must be a number';
+        if (!Number.isInteger(event.start)) return 'start must be an integer';
+        if (!Number.isInteger(event.end)) return 'end must be an integer';
         if (event.type === 'interval_click' && !Number.isInteger(event.click_time)) {
             return 'click_time must be an integer';
         }

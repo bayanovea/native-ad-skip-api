@@ -142,8 +142,8 @@ components:
         prv_user_id:      { type: integer, minimum: 1, nullable: true }
         video_native_id: { type: string, example: "123_456" }
         category_id:     { type: integer, minimum: 1 }
-        start:           { type: number }
-        end:             { type: number }
+        start:           { type: integer, minimum: 0 }
+        end:             { type: integer, minimum: 0 }
 
     EventIntervalClick:
       type: object
@@ -154,8 +154,8 @@ components:
         prv_user_id:      { type: integer, minimum: 1, nullable: true }
         video_native_id: { type: string }
         category_id:     { type: integer, minimum: 1 }
-        start:           { type: number }
-        end:             { type: number }
+        start:           { type: integer, minimum: 0 }
+        end:             { type: integer, minimum: 0 }
         click_time:      { type: integer, description: "Seconds into the video when clicked" }
 
     EventTimeSaved:

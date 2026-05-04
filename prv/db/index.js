@@ -71,8 +71,8 @@ module.exports = function(sequelize) {
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
         video_native_id: DataTypes.STRING,
         category_id: DataTypes.INTEGER,
-        start: DataTypes.FLOAT,
-        end: DataTypes.FLOAT,
+        start: DataTypes.INTEGER,
+        end: DataTypes.INTEGER,
     }, { tableName: 'interval_undos' });
 
     const IntervalClick = sequelize.define('interval_click', {
@@ -80,8 +80,8 @@ module.exports = function(sequelize) {
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
         video_native_id: DataTypes.STRING,
         category_id: DataTypes.INTEGER,
-        start: DataTypes.FLOAT,
-        end: DataTypes.FLOAT,
+        start: DataTypes.INTEGER,
+        end: DataTypes.INTEGER,
         click_time: DataTypes.INTEGER,
     }, { tableName: 'interval_clicks' });
 
