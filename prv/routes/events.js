@@ -44,16 +44,24 @@ module.exports = function createEventsRoute(models) {
         const clickEvents = events.filter(e => e.type === 'interval_click');
         const timeSavedEvents = events.filter(e => e.type === 'time_saved');
 
+        async function tryHandle(label, fn) {
+            try {
+                await fn();
+            } catch (err) {
+                console.error(`events: failed to handle ${label}:`, err);
+            }
+        }
+
         await Promise.all([
-            ...undoEvents.map(e => models.IntervalUndo.create({
+            ...undoEvents.map(e => tryHandle('interval_undo', () => models.IntervalUndo.create({
                 user_id: e.user_id,
                 prv_user_id: e.prv_user_id ?? null,
                 video_native_id: e.video_native_id,
                 category_id: e.category_id,
                 start: e.start,
                 end: e.end,
-            })),
-            ...clickEvents.map(e => models.IntervalClick.create({
+            }))),
+            ...clickEvents.map(e => tryHandle('interval_click', () => models.IntervalClick.create({
                 user_id: e.user_id,
                 prv_user_id: e.prv_user_id ?? null,
                 video_native_id: e.video_native_id,
@@ -61,7 +69,7 @@ module.exports = function createEventsRoute(models) {
                 start: e.start,
                 end: e.end,
                 click_time: e.click_time,
-            })),
+            }))),
         ]);
 
         let timeSavedResponse = null;
@@ -70,34 +78,47 @@ module.exports = function createEventsRoute(models) {
             const last = timeSavedEvents[timeSavedEvents.length - 1];
             const { user_id, prv_user_id } = last;
 
-            const [user] = await models.User.findOrCreate({
-                where: { generated_user_id: user_id, prv_user_id: prv_user_id ?? null },
-            });
+            let user;
+            try {
+                [user] = await models.User.findOrCreate({
+                    where: { generated_user_id: user_id, prv_user_id: prv_user_id ?? null },
+                });
+            } catch (err) {
+                console.error('events: failed to findOrCreate user for time_saved:', err);
+            }
 
-            await Promise.all(timeSavedEvents.map(e => models.TimeSavedEvent.create({
+            await Promise.all(timeSavedEvents.map(e => tryHandle('time_saved log', () => models.TimeSavedEvent.create({
                 user_id: e.user_id,
                 prv_user_id: e.prv_user_id ?? null,
                 inc: e.inc ?? null,
-            })));
+            }))));
 
-            for (const e of timeSavedEvents) {
-                if (e.inc != null) await user.increment('time_saved', { by: e.inc });
+            if (user) {
+                for (const e of timeSavedEvents) {
+                    if (e.inc != null) {
+                        await tryHandle('time_saved increment', () => user.increment('time_saved', { by: e.inc }));
+                    }
+                }
+
+                try {
+                    const [byUserId, byPrvUserId] = await Promise.all([
+                        models.User.findAll({ where: { generated_user_id: user_id }, attributes: ['time_saved'] }),
+                        prv_user_id != null
+                            ? models.User.findAll({ where: { prv_user_id }, attributes: ['time_saved'] })
+                            : Promise.resolve([]),
+                    ]);
+
+                    await user.reload();
+
+                    timeSavedResponse = {
+                        by_user_id: byUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
+                        by_prv_user_id: byPrvUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
+                        by_user: user.time_saved,
+                    };
+                } catch (err) {
+                    console.error('events: failed to build time_saved response:', err);
+                }
             }
-
-            const [byUserId, byPrvUserId] = await Promise.all([
-                models.User.findAll({ where: { generated_user_id: user_id }, attributes: ['time_saved'] }),
-                prv_user_id != null
-                    ? models.User.findAll({ where: { prv_user_id }, attributes: ['time_saved'] })
-                    : Promise.resolve([]),
-            ]);
-
-            await user.reload();
-
-            timeSavedResponse = {
-                by_user_id: byUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
-                by_prv_user_id: byPrvUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
-                by_user: user.time_saved,
-            };
         }
 
         const data = {};
