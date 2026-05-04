@@ -73,7 +73,7 @@ module.exports = function(sequelize) {
         category_id: DataTypes.INTEGER,
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
-    }, { tableName: 'interval_undos' });
+    }, { tableName: 'prv_events_interval_undo' });
 
     const IntervalClick = sequelize.define('interval_click', {
         user_id: DataTypes.CHAR(36),
@@ -83,13 +83,13 @@ module.exports = function(sequelize) {
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
         click_time: DataTypes.INTEGER,
-    }, { tableName: 'interval_clicks' });
+    }, { tableName: 'prv_events_interval_click' });
 
     const TimeSavedEvent = sequelize.define('time_saved_event', {
         user_id: DataTypes.CHAR(36),
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
         inc: { type: DataTypes.INTEGER, allowNull: true },
-    }, { tableName: 'time_saved_events' });
+    }, { tableName: 'prv_events_time_saved' });
 
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });

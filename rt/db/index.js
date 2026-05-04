@@ -77,7 +77,7 @@ module.exports = function(sequelize) {
         category_id: DataTypes.INTEGER,
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
-    }, { tableName: 'rt_interval_undos' });
+    }, { tableName: 'rt_events_interval_undo' });
 
     const IntervalClick = sequelize.define('rt_interval_click', {
         user_id: DataTypes.CHAR(36),
@@ -87,13 +87,13 @@ module.exports = function(sequelize) {
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
         click_time: DataTypes.INTEGER,
-    }, { tableName: 'rt_interval_clicks' });
+    }, { tableName: 'rt_events_interval_click' });
 
     const TimeSavedEvent = sequelize.define('rt_time_saved_event', {
         user_id: DataTypes.CHAR(36),
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
         inc: { type: DataTypes.INTEGER, allowNull: true },
-    }, { tableName: 'rt_time_saved_events' });
+    }, { tableName: 'rt_events_time_saved' });
 
     return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalClick, TimeSavedEvent };
 };

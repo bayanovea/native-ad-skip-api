@@ -138,9 +138,9 @@ All three providers share the same route shape; `prv/` has two extras.
 | `Vote` | User rating of a markup (-1, 0, +1) |
 | `User` | Internal user mapped to prv user ID; tracks `rating` and `time_saved` |
 | `DurationLog` | Tracks claimed video durations for anomaly detection |
-| `IntervalUndo` | Records per-provider interval undo events (`[prefix_]interval_undos`) |
-| `IntervalClick` | Records per-provider interval click events with `click_time` (`[prefix_]interval_clicks`) |
-| `TimeSavedEvent` | Records per-provider time_saved events (`[prefix_]time_saved_events`) |
+| `IntervalUndo` | Records interval undo events — table `{provider}_events_interval_undo` |
+| `IntervalClick` | Records interval click events with `click_time` — table `{provider}_events_interval_click` |
+| `TimeSavedEvent` | Records time_saved events — table `{provider}_events_time_saved` |
 
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 
