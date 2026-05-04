@@ -21,17 +21,24 @@ docker-compose -f docker-compose.yml up --build -d app  # Production build
 
 ### Go CLI (Calculation Engine)
 
+Each provider has its own entry point that calls the shared `calculator` package with its table prefix (`""`, `"rt_"`, `"yt_"`).
+
 ```bash
-go build -o commands/calculate commands/*.go   # Build the calculator
-./commands/calculate                           # Process all videos with new markups
-./commands/calculate <video_id>               # Process a single video
+# Build all three
+go build -mod=vendor -o prv/commands/calculate ./prv/commands/
+go build -mod=vendor -o rt/commands/calculate ./rt/commands/
+go build -mod=vendor -o yt/commands/calculate ./yt/commands/
+
+# Run (example for prv)
+./prv/commands/calculate                # Process all videos with new markups
+./prv/commands/calculate <video_id>    # Process a single video
 ```
 
 ### Tests
 
 ```bash
-go test ./commands                            # Run Go unit tests
-go test ./commands -run TestFindMedian        # Run a single test
+go test ./calculator                            # Run Go unit tests
+go test ./calculator -run TestFindMedian        # Run a single test
 ```
 
 No Node.js test suite is configured.
@@ -54,18 +61,40 @@ Client → Express routes → Middleware (validate, auth) → Repository layer �
                                                     Go CLI (calculate) → VideoCalculated
 ```
 
+### Providers
+
+The service supports three video platforms, each isolated in its own directory:
+
+| Provider | Mount path | Directory |
+|----------|-----------|-----------|
+| prv | `/` | `prv/` |
+| rt | `/rt` | `rt/` |
+| yt | `/yt` | `yt/` |
+
+Each provider directory has the same internal layout:
+
+```
+<provider>/
+  commands/main.go       # Go CLI entry point (passes table prefix to calculator)
+  db/index.js            # Sequelize models scoped to this provider's table prefix
+  repository/            # Raw Sequelize queries
+  routes/                # Express route handlers
+  service/               # Business logic (prv/ only; rt and yt reuse prv/service/user.js)
+```
+
+`rt` and `yt` share `prv/service/user.js` and `prv/routes/users.js` directly — they have no separate user service.
+
 ### Key Directories
 
 | Path | Purpose |
 |------|---------|
-| `routes/` | Express route handlers |
-| `repository/` | Raw Sequelize queries — soft-delete filtering lives here |
-| `service/` | Business logic (user rating updates on votes) |
+| `prv/`, `rt/`, `yt/` | Per-provider Express routes, repositories, and Go CLI entry points |
+| `calculator/` | Shared Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
-| `commands/` | Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
-| `db.js` | Sequelize models and associations |
+| `db.js` | Sequelize models and associations for all providers |
+| `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
 
-### Calculation Algorithm (`commands/calculate.go`)
+### Calculation Algorithm (`calculator/calculate.go`)
 
 1. Query videos where any markup has `is_new = true`
 2. For each video (up to 10 in parallel via goroutine pool):
@@ -77,12 +106,14 @@ Client → Express routes → Middleware (validate, auth) → Repository layer �
 
 ### Routes
 
-- **`routes/markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
-- **`routes/votes.js`** — Vote submission updates the creator's rating via `service/user.js`.
-- **`routes/videos.js`** — `GET /video-calculated` serves aggregated segments; logs duration claims and tracks legacy client versions.
-- **`routes/users.js`** — `POST /users/time-saved` aggregates time saved per user and prv ID.
-- **`routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param.
-- **`routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
+All three providers share the same route shape; `prv/` has two extras.
+
+- **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
+- **`votes.js`** — Vote submission updates the creator's rating via `prv/service/user.js`.
+- **`videos.js`** — `GET /video-calculated` serves aggregated segments; prv additionally logs duration claims and tracks legacy client versions.
+- **`prv/routes/users.js`** — `POST /users/time-saved`; shared by all providers.
+- **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only.
+- **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
 ### Authentication
 
