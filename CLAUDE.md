@@ -37,11 +37,23 @@ go build -mod=vendor -o yt/commands/calculate ./yt/commands/
 ### Tests
 
 ```bash
-go test ./calculator                            # Run Go unit tests
+go test ./calculator                            # Run Go unit tests (no DB required)
 go test ./calculator -run TestFindMedian        # Run a single test
+
+make test-calculator                            # Go integration tests against a real Postgres
+                                                # (requires DB_USER/DB_PASSWORD in env)
+make test-e2e                                   # Full Docker e2e: spins up Postgres + Node app
+                                                # and exercises HTTP endpoints + Go calc binary
 ```
 
-No Node.js test suite is configured.
+`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite.
+
+### Database
+
+```bash
+make dump                                       # pg_dump the DB referenced by .env_local into ~/dumps
+                                                # (custom format, timestamped filename)
+```
 
 ## Architecture
 
@@ -51,7 +63,7 @@ Two independent runtimes managed by Supervisor inside Docker:
 - **Node.js (Express)** — HTTP API: CRUD for markups, votes, and serving calculated results
 - **Go CLI** — Cron job every minute: aggregates new markups into `VideoCalculated`
 
-Communication is only through PostgreSQL. The Go binary reads `MarkupTimeInterval` rows where `is_new = true` and writes aggregated JSON to `VideoCalculated`; Node reads that table for client responses.
+Communication is only through PostgreSQL. The Go binary reads `MarkupTimeInterval` rows where `is_new = true` and writes aggregated JSON to `VideoCalculated` plus relational rows in `{provider}_calculated_segments` (and the segment ↔ markup junction). Node reads `VideoCalculated.data` for client responses and updates the per-segment `rating` (in both the JSON and the segments table) when a vote arrives.
 
 ### Request Flow
 
@@ -101,20 +113,28 @@ Each provider directory has the same internal layout:
    - Group intervals by `(category_id, startRounded)` where `startRounded = start - (start % 3)` (3-second buckets)
    - **Start** = average of all starts in the group
    - **End** = median of all ends in the group
-   - Upsert into `VideoCalculated` as JSON; store markup IDs in `meta`
+   - Clear the previous segments (`{provider}_calculated_segment_markups` → `{provider}_calculated_segments` → `video_calculateds`)
+   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`, `rating: 0`). `meta` is no longer written.
+   - Insert one row per segment into `{provider}_calculated_segments` (with `rating = 0`) and one row per contributing markup into `{provider}_calculated_segment_markups`
    - Mark processed markups as `is_new = false`
+
+The segment rows in `{provider}_calculated_segments` are the source of truth for joins (e.g. analytics) and carry the same `rating` that lives in `video_calculateds.data`. Both are kept in sync by the vote handler (see Routes → `votes.js`).
 
 ### Routes
 
 All three providers share the same route shape; `prv/` has two extras.
 
 - **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
-- **`votes.js`** — Vote submission updates the creator's rating via `prv/service/user.js`.
+- **`votes.js`** — Vote submission. On each new vote:
+  - `{provider}_calculated_segments.rating` is incremented by `vote - prevVote.vote` (or just `vote` if no prior vote from this user)
+  - the matching entry in `video_calculateds.data` is rewritten with the same `rating` delta so clients see the updated value
+  - the markup author's user `rating` is adjusted via `prv/service/user.js` only when a single markup with an exact `(start, end)` match contributed to the segment
 - **`videos.js`** — `GET /video-calculated` serves aggregated segments; prv additionally logs duration claims and tracks legacy client versions.
-- **`prv/routes/events.js`** — `POST /events` (shared by all providers). Accepts a JSON array of mixed events; supported types below. Returns `{ data: { time_saved: { ... } } }` when the batch contains at least one `time_saved` event.
-  - **`interval_undo`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `category_id`, `start`, `end`. Stored in `[prefix_]interval_undos`.
-  - **`interval_click`** — fields: same as above plus `click_time` (int). Stored in `[prefix_]interval_clicks`.
-  - **`time_saved`** — fields: `user_id`, `prv_user_id`, `inc`. Increments `User.time_saved`; stored in `[prefix_]time_saved_events`. Response mirrors the old `POST /users/time-saved` structure: `by_user_id`, `by_prv_user_id`, `by_user`.
+- **`prv/routes/events.js`** — `POST /events` (shared by all providers). Accepts a JSON array of mixed events; supported types below. Invalid events (unknown `type`, missing fields) are logged to stdout and skipped — the rest of the batch still processes. Returns `{ data: { time_saved: { ... } } }` when the batch contains at least one `time_saved` event.
+  - **`interval_undo`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `category_id`, `start`, `end`. Stored in `{provider}_events_interval_undo`.
+  - **`interval_click`** — fields: same as above plus `click_time` (int). Stored in `{provider}_events_interval_click`.
+  - **`time_saved`** — fields: `user_id`, `prv_user_id`, `inc`. Increments `User.time_saved`; stored in `{provider}_events_time_saved`. Response mirrors the old `POST /users/time-saved` structure: `by_user_id`, `by_prv_user_id`, `by_user`.
+  - **`client_failed`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `reason` (string), `data` (arbitrary JSON, optional). Stored in `{provider}_events_client_failed`.
 - **`prv/routes/users.js`** — Shared by all providers (currently empty; `POST /users/time-saved` was removed in favour of the events endpoint).
 - **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only.
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
@@ -133,14 +153,17 @@ All three providers share the same route shape; `prv/` has two extras.
 | `Markup` | User-submitted segment; soft-deleted via `deleted_at` |
 | `MarkupTimeInterval` | start/end times belonging to a Markup; also soft-deleted |
 | `MarkupCategory` | Enum: intro, sponsor, self_promotion, credits |
-| `Video` | prv video reference with optional duration |
-| `VideoCalculated` | Aggregated JSON result per video (1:1 with Video) |
-| `Vote` | User rating of a markup (-1, 0, +1) |
+| `Video` | Video reference with optional duration |
+| `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`, `rating`. `meta` is unused by current calculator |
+| `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating` updated by votes |
+| `CalculatedSegmentMarkup` | Junction linking a `CalculatedSegment` to each contributing `Markup` — table `{provider}_calculated_segment_markups` |
+| `Vote` | User vote on a calculated segment (-1, 0, +1) |
 | `User` | Internal user mapped to prv user ID; tracks `rating` and `time_saved` |
 | `DurationLog` | Tracks claimed video durations for anomaly detection |
 | `IntervalUndo` | Records interval undo events — table `{provider}_events_interval_undo` |
 | `IntervalClick` | Records interval click events with `click_time` — table `{provider}_events_interval_click` |
 | `TimeSavedEvent` | Records time_saved events — table `{provider}_events_time_saved` |
+| `ClientFailed` | Records client-side failures with free-form `reason` and `data` JSON — table `{provider}_events_client_failed` |
 
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 

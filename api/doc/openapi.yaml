@@ -25,6 +25,10 @@ components:
   schemas:
     Segment:
       type: object
+      description: |
+        Aggregated segment served from `video_calculateds.data`.
+        `rating` starts at 0 when the calculator emits the segment and is incremented/decremented
+        as users vote on it.
       properties:
         category_id: { type: integer, example: 1 }
         start:       { type: integer, example: 5 }
@@ -354,6 +358,11 @@ paths:
     post:
       tags: [prv]
       summary: Submit a vote on a calculated segment
+      description: |
+        Increments the segment's `rating` (in `prv_calculated_segments` and the matching
+        `video_calculateds.data` entry) by the diff between the new and any previous vote
+        from the same user. Also adjusts the markup author's user `rating` only when a
+        single markup with an exact `(start, end)` match contributed to the segment.
       requestBody:
         required: true
         content:
@@ -396,7 +405,8 @@ paths:
       summary: Submit a batch of events
       description: |
         Accepts a JSON array of mixed event objects. Each event must have a `type` field.
-        Supported types: `interval_undo`, `interval_click`, `time_saved`.
+        Supported types: `interval_undo`, `interval_click`, `time_saved`, `client_failed`.
+        Invalid events are logged to stdout and skipped — the rest of the batch is still processed.
         If the batch contains at least one `time_saved` event, `data.time_saved` is included in the response.
       requestBody:
         required: true
@@ -603,6 +613,11 @@ paths:
     post:
       tags: [RT]
       summary: Submit a vote on a calculated segment
+      description: |
+        Increments the segment's `rating` (in `rt_calculated_segments` and the matching
+        `rt_video_calculateds.data` entry) by the diff between the new and any previous vote
+        from the same user. Also adjusts the markup author's user `rating` only when a
+        single markup with an exact `(start, end)` match contributed to the segment.
       requestBody:
         required: true
         content:
@@ -767,6 +782,11 @@ paths:
     post:
       tags: [YT]
       summary: Submit a vote on a calculated segment
+      description: |
+        Increments the segment's `rating` (in `yt_calculated_segments` and the matching
+        `yt_video_calculateds.data` entry) by the diff between the new and any previous vote
+        from the same user. Also adjusts the markup author's user `rating` only when a
+        single markup with an exact `(start, end)` match contributed to the segment.
       requestBody:
         required: true
         content:
