@@ -141,11 +141,54 @@ async function postMarkup(prefix, body) {
     assert.equal(res.status, 201, `POST ${path} failed: ${JSON.stringify(res.body)}`);
 }
 
+async function postVote(prefix, body) {
+    const path = prefix ? `/${prefix}/vote` : '/vote';
+    const res = await request('POST', path, body);
+    assert.equal(res.status, 204, `POST ${path} failed: ${res.status} ${JSON.stringify(res.body)}`);
+}
+
 async function getCalculated(prefix, videoId, extra = {}) {
     const params = new URLSearchParams({ video_id: videoId, ...extra });
     const path = prefix ? `/${prefix}/video-calculated?${params}` : `/video-calculated?${params}`;
     const res = await request('GET', path, null);
     return res; // { status, body: segment[] | null }
+}
+
+async function getSegmentRow(prefix, videoNativeId, catId, start, end) {
+    const tp = prefix ? `${prefix}_` : '';
+    const provider = prefix || 'prv';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        const { rows } = await c.query(
+            `SELECT s.rating FROM ${provider}_calculated_segments s
+             JOIN ${tp}videos v ON v.id = s.video_id
+             WHERE v.native_id = $1 AND s.category_id = $2 AND s.start = $3 AND s."end" = $4`,
+            [videoNativeId, catId, start, end]
+        );
+        return rows[0] || null;
+    } finally {
+        await c.end();
+    }
+}
+
+async function getJsonRating(prefix, videoNativeId, catId, start, end) {
+    const tp = prefix ? `${prefix}_` : '';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        const { rows } = await c.query(
+            `SELECT vc.data FROM ${tp}video_calculateds vc
+             JOIN ${tp}videos v ON v.id = vc.video_id
+             WHERE v.native_id = $1`,
+            [videoNativeId]
+        );
+        if (!rows[0]) return null;
+        const item = rows[0].data.find(it => it.category_id === catId && it.start === start && it.end === end);
+        return item ? item.rating : null;
+    } finally {
+        await c.end();
+    }
 }
 
 // ── Calculator helper ─────────────────────────────────────────────────────────
@@ -358,4 +401,132 @@ test('YT: outlier end and three buckets', async () => {
     assert.ok(findSeg(body, cats.yt.intro, 1,  6),  `bucket 0 (outlier excluded) missing`);
     assert.ok(findSeg(body, cats.yt.intro, 4,  20), `bucket 3 single markup missing`);
     assert.ok(findSeg(body, cats.yt.intro, 10, 31), `bucket 9 missing`);
+});
+
+// ── Vote Tests ────────────────────────────────────────────────────────────────
+
+// Calculator emits rating=0 in both the segments table and video_calculateds.data
+test('prv vote: initial rating is 0 in table and JSON', async () => {
+    const vid = '__e2e__prv_vote_initial';
+    const cat = cats.prv.intro;
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: {} };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('prv');
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 0, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 0, 'JSON rating');
+});
+
+// vote=+1 → rating=1 in prv_calculated_segments and video_calculateds.data
+test('prv vote: +1 increments rating in table and JSON', async () => {
+    const vid = '__e2e__prv_vote_basic';
+    const cat = cats.prv.intro;
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: {} };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('prv');
+
+    await postVote('', { video_id: vid, user_id: 'voter-1', category_id: cat, start: 1, end: 11, vote: 1 });
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 1, 'JSON rating');
+});
+
+// re-vote applies diff: +1 then -1 ⇒ diff=-2 ⇒ net rating=-1
+test('prv vote: re-vote applies diff to rating', async () => {
+    const vid = '__e2e__prv_vote_revote';
+    const cat = cats.prv.intro;
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: {} };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('prv');
+
+    const voteBase = { video_id: vid, user_id: 'voter-1', category_id: cat, start: 1, end: 11 };
+    await postVote('', { ...voteBase, vote: 1 });
+    await postVote('', { ...voteBase, vote: -1 });
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, -1, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), -1, 'JSON rating');
+});
+
+// independent users stack: +1 +1 -1 ⇒ rating=1
+test('prv vote: ratings stack across users', async () => {
+    const vid = '__e2e__prv_vote_multi';
+    const cat = cats.prv.intro;
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: {} };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('prv');
+
+    const voteBase = { video_id: vid, category_id: cat, start: 1, end: 11 };
+    await postVote('', { ...voteBase, user_id: 'voter-1', vote:  1 });
+    await postVote('', { ...voteBase, user_id: 'voter-2', vote:  1 });
+    await postVote('', { ...voteBase, user_id: 'voter-3', vote: -1 });
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 1, 'JSON rating');
+});
+
+// vote on a non-existent segment must not affect any other segment
+test('prv vote: 404 for non-matching start/end leaves rating untouched', async () => {
+    const vid = '__e2e__prv_vote_nomatch';
+    const cat = cats.prv.intro;
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: {} };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('prv');
+
+    const res = await request('POST', '/vote', {
+        video_id: vid, user_id: 'voter-1', category_id: cat, start: 99, end: 99, vote: 1,
+    });
+    assert.equal(res.status, 404);
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 0, 'rating unchanged');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 0, 'JSON rating unchanged');
+});
+
+// RT: vote requires duration and prv_user_id
+test('RT vote: +1 increments rating with duration check', async () => {
+    const vid = '__e2e__rt_vote';
+    const cat = cats.rt.intro;
+    const duration = 300;
+    const base = { video_id: vid, user_id: 'test-user', category_id: cat, duration, data: {} };
+    await postMarkup('rt', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('rt', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('rt', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('rt');
+
+    await postVote('rt', {
+        video_id: vid, user_id: 'voter-1', prv_user_id: 1, category_id: cat,
+        start: 1, end: 11, vote: 1, duration,
+    });
+
+    assert.equal((await getSegmentRow('rt', vid, cat, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating('rt', vid, cat, 1, 11), 1, 'JSON rating');
+});
+
+// YT: vote requires duration and prv_user_id
+test('YT vote: +1 increments rating with duration check', async () => {
+    const vid = '__e2e__yt_vote';
+    const cat = cats.yt.intro;
+    const duration = 600;
+    const base = { video_id: vid, user_id: 'test-user', category_id: cat, duration, data: {} };
+    await postMarkup('yt', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup('yt', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup('yt', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc('yt');
+
+    await postVote('yt', {
+        video_id: vid, user_id: 'voter-1', prv_user_id: 1, category_id: cat,
+        start: 1, end: 11, vote: 1, duration,
+    });
+
+    assert.equal((await getSegmentRow('yt', vid, cat, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating('yt', vid, cat, 1, 11), 1, 'JSON rating');
 });

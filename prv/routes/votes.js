@@ -49,6 +49,22 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
             vote,
         });
 
+        const diffCount = prevVote ? vote - prevVote.vote : vote;
+        if (diffCount) {
+            const calculatedSegment = await models.CalculatedSegment.findOne({
+                where: { video_id: video.id, category_id: categoryId, start, end },
+            });
+            if (calculatedSegment) await calculatedSegment.increment('rating', { by: diffCount });
+
+            const newData = calculatedVideo.data.map(item => {
+                if (item.category_id === categoryId && item.start === start && item.end === end) {
+                    return { ...item, rating: (item.rating || 0) + diffCount };
+                }
+                return item;
+            });
+            await calculatedVideo.update({ data: newData });
+        }
+
         await userService.updateRatingByVote(voteObj, prevVote);
 
         if (prevVote) await prevVote.destroy();

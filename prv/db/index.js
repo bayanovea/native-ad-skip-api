@@ -96,6 +96,7 @@ module.exports = function(sequelize) {
         category_id: DataTypes.INTEGER,
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
+        rating: { type: DataTypes.INTEGER, defaultValue: 0 },
     }, { tableName: 'prv_calculated_segments' });
 
     const CalculatedSegmentMarkup = sequelize.define('calculated_segment_markup', {

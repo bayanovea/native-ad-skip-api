@@ -19,6 +19,7 @@ type segment struct {
 	CategoryID int `json:"category_id"`
 	Start      int `json:"start"`
 	End        int `json:"end"`
+	Rating     int `json:"rating"`
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────

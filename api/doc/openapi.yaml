@@ -29,6 +29,7 @@ components:
         category_id: { type: integer, example: 1 }
         start:       { type: integer, example: 5 }
         end:         { type: integer, example: 30 }
+        rating:      { type: integer, example: 0 }
 
     Interval:
       type: object

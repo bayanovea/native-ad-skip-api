@@ -184,6 +184,7 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
+				"rating":      0,
 			})
 		}
 	}
@@ -213,8 +214,8 @@ func insertCalculatedSegments(db *sql.DB, videoId string, intervals map[int]map[
 		for _, level2 := range level1 {
 			var segmentId int
 			err := db.QueryRow(fmt.Sprintf(`
-				INSERT INTO %s (video_id, category_id, start, "end", "createdAt", "updatedAt")
-				VALUES ($1, $2, $3, $4, now(), now())
+				INSERT INTO %s (video_id, category_id, start, "end", rating, "createdAt", "updatedAt")
+				VALUES ($1, $2, $3, $4, 0, now(), now())
 				RETURNING id
 			`, segmentsTable), videoId, categoryId, level2.startAverage, level2.endAverage).Scan(&segmentId)
 			if err != nil {
