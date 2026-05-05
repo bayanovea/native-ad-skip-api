@@ -72,25 +72,41 @@ func getVideoIdsWithNewMarkups(db *sql.DB, tablePrefix string) []string {
 	return videoIds
 }
 
+func providerName(tablePrefix string) string {
+	if tablePrefix == "" {
+		return "prv"
+	}
+	return tablePrefix[:len(tablePrefix)-1]
+}
+
 func calculateVideo(videoId string, db *sql.DB, tablePrefix string) {
 	fmt.Println("Calculate video start: ", videoId)
 
 	clearOldVideoCalculated(db, videoId, tablePrefix)
 	intervals, markupIds := CalculateIntervals(db, videoId, tablePrefix)
 	insertVideoCalculated(db, videoId, intervals, markupIds, tablePrefix)
+	insertCalculatedSegments(db, videoId, intervals, tablePrefix)
 	updateIsNew(db, videoId, tablePrefix)
 
 	fmt.Println("Calculate video finish: ", videoId)
 }
 
 func clearOldVideoCalculated(db *sql.DB, videoId string, tablePrefix string) {
-	sql := fmt.Sprintf(`
-		DELETE FROM %svideo_calculateds
-		WHERE video_id = $1
-	`, tablePrefix)
+	provider := providerName(tablePrefix)
+	segmentsTable := provider + "_calculated_segments"
+	markupsTable := provider + "_calculated_segment_markups"
 
-	_, err := db.Query(sql, videoId)
-	if err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`
+		DELETE FROM %s WHERE segment_id IN (SELECT id FROM %s WHERE video_id = $1)
+	`, markupsTable, segmentsTable), videoId); err != nil {
+		log.Printf("clearOldVideoCalculated: failed to clear segment markups: %v", err)
+	}
+
+	if _, err := db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE video_id = $1`, segmentsTable), videoId); err != nil {
+		log.Printf("clearOldVideoCalculated: failed to clear segments: %v", err)
+	}
+
+	if _, err := db.Exec(fmt.Sprintf(`DELETE FROM %svideo_calculateds WHERE video_id = $1`, tablePrefix), videoId); err != nil {
 		panic(err)
 	}
 }
@@ -210,6 +226,36 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 	_, err = db.Exec(sql, videoId, jsonData, jsonMeta)
 	if err != nil {
 		panic(err)
+	}
+}
+
+func insertCalculatedSegments(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated, tablePrefix string) {
+	provider := providerName(tablePrefix)
+	segmentsTable := provider + "_calculated_segments"
+	markupsTable := provider + "_calculated_segment_markups"
+
+	for categoryId, level1 := range intervals {
+		for _, level2 := range level1 {
+			var segmentId int
+			err := db.QueryRow(fmt.Sprintf(`
+				INSERT INTO %s (video_id, category_id, start, "end", "createdAt", "updatedAt")
+				VALUES ($1, $2, $3, $4, now(), now())
+				RETURNING id
+			`, segmentsTable), videoId, categoryId, level2.startAverage, level2.endAverage).Scan(&segmentId)
+			if err != nil {
+				log.Printf("insertCalculatedSegments: failed to insert segment: %v", err)
+				continue
+			}
+
+			for _, markupId := range level2.markupIds {
+				if _, err := db.Exec(fmt.Sprintf(`
+					INSERT INTO %s (segment_id, markup_id, "createdAt", "updatedAt")
+					VALUES ($1, $2, now(), now())
+				`, markupsTable), segmentId, markupId); err != nil {
+					log.Printf("insertCalculatedSegments: failed to insert segment markup: %v", err)
+				}
+			}
+		}
 	}
 }
 

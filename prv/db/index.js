@@ -91,6 +91,22 @@ module.exports = function(sequelize) {
         inc: { type: DataTypes.INTEGER, allowNull: true },
     }, { tableName: 'prv_events_time_saved' });
 
+    const CalculatedSegment = sequelize.define('calculated_segment', {
+        video_id: DataTypes.INTEGER,
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.INTEGER,
+        end: DataTypes.INTEGER,
+    }, { tableName: 'prv_calculated_segments' });
+
+    const CalculatedSegmentMarkup = sequelize.define('calculated_segment_markup', {
+        segment_id: DataTypes.INTEGER,
+        markup_id: DataTypes.INTEGER,
+    }, { tableName: 'prv_calculated_segment_markups' });
+
+    CalculatedSegment.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
+    CalculatedSegment.hasMany(CalculatedSegmentMarkup, { foreignKey: 'segment_id', as: 'segment_markups' });
+    CalculatedSegmentMarkup.belongsTo(CalculatedSegment, { foreignKey: 'segment_id', as: 'segment' });
+
     const ClientFailed = sequelize.define('client_failed', {
         user_id: DataTypes.CHAR(36),
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
@@ -113,5 +129,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup };
 };

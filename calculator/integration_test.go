@@ -131,10 +131,21 @@ func cleanupVideo(t *testing.T, db *sql.DB, prefix, nativeID string) {
 		t.Logf("cleanup find video: %v", err)
 		return
 	}
+	provider := prefix
+	if prefix == "" {
+		provider = "prv"
+	} else {
+		provider = prefix[:len(prefix)-1]
+	}
+	segTable := provider + "_calculated_segments"
+	segMarkupTable := provider + "_calculated_segment_markups"
+
 	db.Exec(fmt.Sprintf(`DELETE FROM %smarkup_time_intervals WHERE markup_id IN
 	    (SELECT id FROM %smarkups WHERE video_id = $1)`, prefix, prefix), videoID)
 	db.Exec(fmt.Sprintf(`DELETE FROM %smarkups WHERE video_id = $1`, prefix), videoID)
 	db.Exec(fmt.Sprintf(`DELETE FROM %svideo_calculateds WHERE video_id = $1`, prefix), videoID)
+	db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE segment_id IN (SELECT id FROM %s WHERE video_id = $1)`, segMarkupTable, segTable), videoID)
+	db.Exec(fmt.Sprintf(`DELETE FROM %s WHERE video_id = $1`, segTable), videoID)
 	db.Exec(fmt.Sprintf(`DELETE FROM %svideos WHERE id = $1`, prefix), videoID)
 }
 
