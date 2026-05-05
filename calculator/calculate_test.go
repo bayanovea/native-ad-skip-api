@@ -49,10 +49,9 @@ func TestCalculateIntervals(t *testing.T) {
 		WithArgs("111_222").
 		WillReturnRows(rows)
 
-	intervals, markupIds := CalculateIntervals(db, "111_222", "")
+	intervals := CalculateIntervals(db, "111_222", "")
 
 	fmt.Println("Intervals:", intervals)
-	fmt.Println("Markup IDs:", markupIds)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)

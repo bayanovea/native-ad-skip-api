@@ -83,8 +83,8 @@ func calculateVideo(videoId string, db *sql.DB, tablePrefix string) {
 	fmt.Println("Calculate video start: ", videoId)
 
 	clearOldVideoCalculated(db, videoId, tablePrefix)
-	intervals, markupIds := CalculateIntervals(db, videoId, tablePrefix)
-	insertVideoCalculated(db, videoId, intervals, markupIds, tablePrefix)
+	intervals := CalculateIntervals(db, videoId, tablePrefix)
+	insertVideoCalculated(db, videoId, intervals, tablePrefix)
 	insertCalculatedSegments(db, videoId, intervals, tablePrefix)
 	updateIsNew(db, videoId, tablePrefix)
 
@@ -111,7 +111,7 @@ func clearOldVideoCalculated(db *sql.DB, videoId string, tablePrefix string) {
 	}
 }
 
-func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) (map[int]map[int]IntervalAggregated, []int) {
+func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) map[int]map[int]IntervalAggregated {
 	sql := fmt.Sprintf(`
   	SELECT intervals.start, intervals.end, categories.id category_id, %smarkups.id markup_id FROM %smarkup_time_intervals intervals
 		LEFT JOIN %smarkups ON %smarkups.id = intervals.markup_id
@@ -126,7 +126,6 @@ func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) (map[int
 	}
 	defer videos.Close()
 
-	markupIdsMap := make(map[int]bool)
 	intervals := make(map[int]map[int]IntervalAggregated)
 
 	for videos.Next() {
@@ -135,10 +134,6 @@ func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) (map[int
 		err := videos.Scan(&start, &end, &categoryId, &markupId)
 		if err != nil {
 			panic(err)
-		}
-
-		if _, ok := markupIdsMap[markupId]; !ok {
-			markupIdsMap[markupId] = true
 		}
 
 		startRounded := start - (start % 3)
@@ -177,30 +172,19 @@ func CalculateIntervals(db *sql.DB, videoId string, tablePrefix string) (map[int
 		}
 	}
 
-	markupIds := make([]int, 0, len(markupIdsMap))
-	for markupId := range markupIdsMap {
-		markupIds = append(markupIds, markupId)
-	}
-
-	return intervals, markupIds
+	return intervals
 }
 
-func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated, markupIds []int, tablePrefix string) {
+func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int]IntervalAggregated, tablePrefix string) {
 	var allData []map[string]interface{}
-	var segmentsMeta = []map[string]interface{}{}
 
-	i := 0
 	for categoryId, level1 := range intervals {
 		for _, level2 := range level1 {
-			data := map[string]interface{}{
+			allData = append(allData, map[string]interface{}{
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
-			}
-			allData = append(allData, data)
-
-			segmentsMeta = append(segmentsMeta, map[string]interface{}{"id": i, "markup_ids": level2.markupIds})
-			i++
+			})
 		}
 	}
 
@@ -209,21 +193,12 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 		log.Fatalf("JSON marshal error: %v", err)
 	}
 
-	meta := map[string]interface{}{
-		"markup_ids": markupIds,
-		"segments":   segmentsMeta,
-	}
-	jsonMeta, err := json.Marshal(meta)
-	if err != nil {
-		log.Fatalf("JSON marshal error: %v", err)
-	}
-
 	sql := fmt.Sprintf(`
-		INSERT INTO %svideo_calculateds (video_id, data, meta, "createdAt", "updatedAt")
-		VALUES ($1, $2, $3, now(), now())
+		INSERT INTO %svideo_calculateds (video_id, data, "createdAt", "updatedAt")
+		VALUES ($1, $2, now(), now())
 	`, tablePrefix)
 
-	_, err = db.Exec(sql, videoId, jsonData, jsonMeta)
+	_, err = db.Exec(sql, videoId, jsonData)
 	if err != nil {
 		panic(err)
 	}
