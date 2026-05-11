@@ -53,6 +53,7 @@ make test-e2e                                   # Full Docker e2e: spins up Post
 ```bash
 make dump                                       # pg_dump the DB referenced by .env_local into ~/dumps
                                                 # (custom format, timestamped filename)
+make psql-connect                               # Connect to local DB (psql -h localhost -U postgres -d adskip)
 ```
 
 ## Architecture
@@ -114,7 +115,7 @@ Each provider directory has the same internal layout:
    - **Start** = average of all starts in the group
    - **End** = median of all ends in the group
    - Clear the previous segments (`{provider}_calculated_segment_markups` → `{provider}_calculated_segments` → `video_calculateds`)
-   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`, `rating: 0`). `meta` is no longer written.
+   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`; `rating` is omitted when 0 — sparse representation). `meta` is no longer written.
    - Insert one row per segment into `{provider}_calculated_segments` (with `rating = 0`) and one row per contributing markup into `{provider}_calculated_segment_markups`
    - Mark processed markups as `is_new = false`
 
@@ -154,7 +155,7 @@ All three providers share the same route shape; `prv/` has two extras.
 | `MarkupTimeInterval` | start/end times belonging to a Markup; also soft-deleted |
 | `MarkupCategory` | Enum: intro, sponsor, self_promotion, credits |
 | `Video` | Video reference with optional duration |
-| `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`, `rating`. `meta` is unused by current calculator |
+| `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`; `rating` present only when non-zero. `meta` is unused by current calculator |
 | `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating` updated by votes |
 | `CalculatedSegmentMarkup` | Junction linking a `CalculatedSegment` to each contributing `Markup` — table `{provider}_calculated_segment_markups` |
 | `Vote` | User vote on a calculated segment (-1, 0, +1) |
