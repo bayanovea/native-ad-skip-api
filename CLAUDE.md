@@ -48,14 +48,6 @@ make test-e2e                                   # Full Docker e2e: spins up Post
 
 `make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite.
 
-### Database
-
-```bash
-make dump                                       # pg_dump the DB referenced by .env_local into ~/dumps
-                                                # (custom format, timestamped filename)
-make psql-connect                               # Connect to local DB (psql -h localhost -U postgres -d adskip)
-```
-
 ## Architecture
 
 ### Dual-Process Design
