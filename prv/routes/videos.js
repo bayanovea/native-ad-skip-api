@@ -70,7 +70,6 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
             return;
         }
 
-        console.log(`[video-calculated] id=${videoCalculated.id} video_id=${video.id} native_id=${nativeFullVideoId}`);
         prometheusWrapper.incrementVideoCalculatedFound(nativeFullVideoId);
         res.status(200).send(videoCalculated.data);
     }));
