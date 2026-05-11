@@ -185,7 +185,19 @@ async function getJsonRating(prefix, videoNativeId, catId, start, end) {
         );
         if (!rows[0]) return null;
         const item = rows[0].data.find(it => it.category_id === catId && it.start === start && it.end === end);
-        return item ? item.rating : null;
+        return item ? (item.rating ?? 0) : null;
+    } finally {
+        await c.end();
+    }
+}
+
+async function countVideos(prefix, nativeId) {
+    const tp = prefix ? `${prefix}_` : '';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        const { rows } = await c.query(`SELECT COUNT(*) FROM ${tp}videos WHERE native_id = $1`, [nativeId]);
+        return parseInt(rows[0].count);
     } finally {
         await c.end();
     }
@@ -401,6 +413,54 @@ test('YT: outlier end and three buckets', async () => {
     assert.ok(findSeg(body, cats.yt.intro, 1,  6),  `bucket 0 (outlier excluded) missing`);
     assert.ok(findSeg(body, cats.yt.intro, 4,  20), `bucket 3 single markup missing`);
     assert.ok(findSeg(body, cats.yt.intro, 10, 31), `bucket 9 missing`);
+});
+
+// ── Video lookup tests (no orphan Video rows) ─────────────────────────────────
+
+// GET must not create a Video row when the video doesn't exist
+test('prv GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
+    const vid = '__e2e__prv_no_orphan';
+    const res = await getCalculated('', vid, { v: '1' });
+    assert.equal(res.status, 204);
+    assert.equal(await countVideos('', vid), 0, 'no Video row should be created');
+});
+
+// Rule 1: find by native_id + duration within ±1
+test('prv GET /video-calculated: finds video by duration within ±1', async () => {
+    const vid = '__e2e__prv_duration_range';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 301 });
+    assert.equal(res.status, 200, 'should find video with duration 300 when requesting 301');
+});
+
+// Rule 2: find by native_id with null duration, update it
+test('prv GET /video-calculated: falls back to null-duration video and updates it', async () => {
+    const vid = '__e2e__prv_null_duration';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 300 });
+    assert.equal(res.status, 200, 'should find null-duration video and serve calculated data');
+});
+
+// Rule 3: find any video by native_id when duration doesn't match
+test('prv GET /video-calculated: falls back to any video when duration is far off', async () => {
+    const vid = '__e2e__prv_fallback_any';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 100, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 500 });
+    assert.equal(res.status, 200, 'should fall back to any video with matching native_id');
+});
+
+// RT: GET must not create a Video row when the video doesn't exist
+test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
+    const vid = '__e2e__rt_no_orphan';
+    const res = await getCalculated('rt', vid, { duration: 300 });
+    assert.equal(res.status, 204);
+    assert.equal(await countVideos('rt', vid), 0, 'no Video row should be created');
 });
 
 // ── Vote Tests ────────────────────────────────────────────────────────────────
