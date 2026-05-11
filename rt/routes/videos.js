@@ -1,10 +1,26 @@
 const express = require('express');
+const { Op } = require('sequelize');
 const { query } = require('express-validator');
 const prometheusWrapper = require('../../prometheus-wrapper');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
 
-module.exports = function createVideoRoutes(models, { videoRepository }) {
+async function findVideoForRead(models, nativeId, duration) {
+    if (duration != null) {
+        let video = await models.Video.findOne({
+            where: { native_id: nativeId, duration: { [Op.between]: [duration - 1, duration + 1] } },
+        });
+        if (video) return video;
+
+        video = await models.Video.findOne({ where: { native_id: nativeId, duration: null } });
+        if (video) { await video.update({ duration }); return video; }
+
+        return models.Video.findOne({ where: { native_id: nativeId } });
+    }
+    return models.Video.findOne({ where: { native_id: nativeId } });
+}
+
+module.exports = function createVideoRoutes(models) {
     const router = express.Router();
 
     router.get('/video-calculated', [
@@ -18,7 +34,7 @@ module.exports = function createVideoRoutes(models, { videoRepository }) {
         const duration = req.query.duration;
         const nativeFullVideoId = req.query.video_id;
 
-        const video = await videoRepository.findByNativeIdAndDuration(nativeFullVideoId, duration);
+        const video = await findVideoForRead(models, nativeFullVideoId, duration);
 
         if (!video) {
             prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);

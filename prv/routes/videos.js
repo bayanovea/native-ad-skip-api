@@ -1,8 +1,24 @@
 const express = require('express');
+const { Op } = require('sequelize');
 const { query } = require('express-validator');
 const prometheusWrapper = require('../../prometheus-wrapper');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
+
+async function findVideoForRead(models, nativeId, duration) {
+    if (duration != null) {
+        let video = await models.Video.findOne({
+            where: { native_id: nativeId, duration: { [Op.between]: [duration - 1, duration + 1] } },
+        });
+        if (video) return video;
+
+        video = await models.Video.findOne({ where: { native_id: nativeId, duration: null } });
+        if (video) { await video.update({ duration }); return video; }
+
+        return models.Video.findOne({ where: { native_id: nativeId } });
+    }
+    return models.Video.findOne({ where: { native_id: nativeId } });
+}
 
 module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository }) {
     const router = express.Router();
@@ -20,7 +36,7 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
         let video;
 
         if (req.query.v) {
-            video = await videoRepository.findByNativeIdAndDuration(nativeFullVideoId, duration);
+            video = await findVideoForRead(models, nativeFullVideoId, duration);
 
             // if (video && duration) {
             //     const durationDiff = video.duration === null ? null : Math.abs(video.duration - duration);
