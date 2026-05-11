@@ -184,7 +184,6 @@ func insertVideoCalculated(db *sql.DB, videoId string, intervals map[int]map[int
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
-				"rating":      0,
 			})
 		}
 	}

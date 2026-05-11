@@ -58,7 +58,10 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
 
             const newData = calculatedVideo.data.map(item => {
                 if (item.category_id === categoryId && item.start === start && item.end === end) {
-                    return { ...item, rating: (item.rating || 0) + diffCount };
+                    const newRating = (item.rating || 0) + diffCount;
+                    const { rating: _, ...rest } = item;
+                    // omit rating field when 0 — zero is the default, no need to store it
+                    return newRating ? { ...rest, rating: newRating } : rest;
                 }
                 return item;
             });
