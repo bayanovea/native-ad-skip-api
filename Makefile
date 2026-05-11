@@ -13,4 +13,7 @@ dump:
 	set -a; . ./.env_local; set +a; \
 	PGPASSWORD=$$DB_PASSWORD pg_dump -h $$DB_HOST -U $$DB_USER -F c -f $(DUMP_DIR)/$${DB_NAME}_$$(date +%Y%m%d_%H%M%S).dump $$DB_NAME
 
-.PHONY: test-calculator test-e2e dump
+psql-connect:
+	psql -h localhost -U postgres -d adskip
+
+.PHONY: test-calculator test-e2e dump psql-connect
