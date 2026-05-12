@@ -98,6 +98,7 @@ Each provider directory has the same internal layout:
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
 | `db.js` | Sequelize models and associations for all providers |
 | `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
+| `grafana/` | Grafana provisioning configs and dashboard JSONs; service runs on port 3024 |
 
 ### Calculation Algorithm (`calculator/calculate.go`)
 
