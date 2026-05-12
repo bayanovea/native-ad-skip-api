@@ -1,0 +1,22 @@
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL
+    type: postgres
+    uid: ce68e9be-35fa-4d6a-8f59-35f03dae1d52
+    url: ${DB_HOST}:5432
+    user: ${DB_USER}
+    secureJsonData:
+      password: ${DB_PASSWORD}
+    jsonData:
+      database: ${DB_NAME}
+      sslmode: disable
+      postgresVersion: 1400
+      timescaledb: false
+    editable: false
+
+  - name: Prometheus
+    type: prometheus
+    uid: c62ca5db-1b9b-4b36-a035-145154b708ae
+    url: http://prometheus:9090
+    editable: false

@@ -1,0 +1,1138 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 5,
+      "panels": [],
+      "title": "Разметки",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "text",
+            "mode": "fixed"
+          },
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "color-text"
+            },
+            "filterable": true,
+            "footer": {
+              "reducers": []
+            },
+            "inspect": true
+          },
+          "fieldMinMax": false,
+          "mappings": [
+            {
+              "options": {
+                "200ab0c1-12e9-4f57-b02b-15cf0829f10c": {
+                  "color": "green",
+                  "index": 5
+                },
+                "30648a47-a47b-4698-b21b-8c077c40eff9": {
+                  "color": "green",
+                  "index": 4
+                },
+                "57ca4592-b9ae-48c7-981b-4d787873e92a": {
+                  "color": "green",
+                  "index": 3
+                },
+                "fc958462-fe96-42d9-a509-2fe7b8281bc2": {
+                  "color": "green",
+                  "index": 2
+                },
+                "❌ Удалить": {
+                  "color": "red",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            },
+            {
+              "options": {
+                "pattern": "^https:\\/\\/prv\\.com\\/.*",
+                "result": {
+                  "color": "blue",
+                  "index": 1
+                }
+              },
+              "type": "regex"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "#EAB839",
+                "value": ""
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 50
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Видео"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 393
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Интервалы"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 109
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 315
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Видео"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Действия"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/markups/${__data.fields.id}﻿/delete?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 121
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Время добавления"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 174
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Категория"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 158
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Интервал"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 164
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "enablePagination": true,
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n    markups.id,\n    'https://example.invalid/video?z=video' || videos.native_id AS \"Видео\",\n    markups.user_id \"Пользователь\",\n    markups.\"createdAt\" \"Время добавления\",\n    STRING_AGG(\n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) % 60, 'FM00') || ' - ' ||\n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) % 60, 'FM00'),\n        ', '\n    ) \"Интервал\",\n    markup_categories.category \"Категория\",\n    markups.deleted_at \"Удалено\",\n    '❌ Удалить' \"Действия\" \nFROM \n    markups\nLEFT JOIN \n    videos ON videos.id = markups.video_id\nLEFT JOIN \n    markup_categories ON markup_categories.id = markups.category_id\nLEFT JOIN \n    markup_time_intervals ON markup_time_intervals.markup_id = markups.id\nGROUP BY \n    markups.id, videos.native_id, markup_categories.category\nORDER BY \n    markups.\"createdAt\" DESC\nLIMIT 10000;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "table": "markups"
+        }
+      ],
+      "title": "Разметки",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Статистика",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "❌ Удалить": {
+                  "color": "red",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Действия"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/votes/${__data.fields.id}﻿/delete?verifyBearerToken=Vh9oy4daHKGHjychim6S9f7s"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "summ"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 59
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "category_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 104
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "start"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 62
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "end"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 73
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 0,
+        "y": 20
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  'https://example.invalid/video?z=video' || MAX(videos.native_id) AS \"Видео\",\n  SUM(votes.vote) AS summ,\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nFROM\n  votes\nLEFT JOIN\n  videos ON videos.id = votes.video_id\nGROUP BY\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nORDER BY\n  summ\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [
+                  {
+                    "name": "vote",
+                    "type": "functionParameter"
+                  }
+                ],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "table": "votes"
+        }
+      ],
+      "title": "Дизлайки 👎",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "text",
+            "mode": "fixed"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-text"
+            },
+            "filterable": true,
+            "inspect": true
+          },
+          "mappings": [
+            {
+              "options": {
+                "200ab0c1-12e9-4f57-b02b-15cf0829f10c": {
+                  "color": "green",
+                  "index": 3
+                },
+                "30648a47-a47b-4698-b21b-8c077c40eff9": {
+                  "color": "green",
+                  "index": 2
+                },
+                "57ca4592-b9ae-48c7-981b-4d787873e92a": {
+                  "color": "green",
+                  "index": 1
+                },
+                "fc958462-fe96-42d9-a509-2fe7b8281bc2": {
+                  "color": "green",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlPu"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 277
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 7,
+        "x": 10,
+        "y": 20
+      },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT user_id \"Пользователь\", COUNT(*) \"Кол-во\" FROM markups \n  GROUP BY user_id\n  ORDER by \"Кол-во\" DESC;\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "name": "COUNT",
+                "parameters": [
+                  {
+                    "name": "user_id",
+                    "type": "functionParameter"
+                  }
+                ],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "table": "markups"
+        }
+      ],
+      "title": "Разметки",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "text",
+            "mode": "fixed"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-text"
+            },
+            "filterable": true,
+            "inspect": true
+          },
+          "mappings": [
+            {
+              "options": {
+                "200ab0c1-12e9-4f57-b02b-15cf0829f10c": {
+                  "color": "green",
+                  "index": 3
+                },
+                "30648a47-a47b-4698-b21b-8c077c40eff9": {
+                  "color": "green",
+                  "index": 2
+                },
+                "57ca4592-b9ae-48c7-981b-4d787873e92a": {
+                  "color": "green",
+                  "index": 1
+                },
+                "fc958462-fe96-42d9-a509-2fe7b8281bc2": {
+                  "color": "green",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlPu"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Кол-во"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 279
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 7,
+        "x": 17,
+        "y": 20
+      },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT user_id \"Пользователь\", COUNT(DISTINCT video_id) \"Кол-во\" FROM markups\n  GROUP BY user_id\n  ORDER BY \"Кол-во\" DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [
+                  {
+                    "name": "category_id",
+                    "type": "functionParameter"
+                  }
+                ],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "table": "markups"
+        }
+      ],
+      "title": "Видео",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 8,
+      "panels": [],
+      "title": "Пользователи",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "text",
+            "mode": "fixed"
+          },
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "color-text"
+            },
+            "filterable": true,
+            "inspect": true
+          },
+          "fieldMinMax": false,
+          "mappings": [
+            {
+              "options": {
+                "200ab0c1-12e9-4f57-b02b-15cf0829f10c": {
+                  "index": 5
+                },
+                "30648a47-a47b-4698-b21b-8c077c40eff9": {
+                  "index": 4
+                },
+                "57ca4592-b9ae-48c7-981b-4d787873e92a": {
+                  "index": 3
+                },
+                "fc958462-fe96-42d9-a509-2fe7b8281bc2": {
+                  "index": 2
+                },
+                "❌ Забанить": {
+                  "color": "red",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            },
+            {
+              "options": {
+                "pattern": "^https:\\/\\/prv\\.com\\/.*",
+                "result": {
+                  "color": "blue",
+                  "index": 1
+                }
+              },
+              "type": "regex"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "orange",
+                "value": -1
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 50
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Видео"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 393
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Интервалы"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 109
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 315
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Действия"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/votes/user/${__data.fields.id}﻿﻿/update-rating?rating=-100&verifyBearerToken=﻿${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Время добавления"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 174
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Категория"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 158
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Интервал"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 164
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prv_user_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rating"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prv_user_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 118
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 21,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n    id,\n    generated_user_id,\n    prv_user_id,\n    rating,\n    '❌ Забанить' \"Действия\" \nFROM \n    users\nORDER BY \n    users.rating ASC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "table": "markups"
+        }
+      ],
+      "title": "Пользователи",
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Vh9oy4daHKGHjychim6S9f7s",
+          "value": "Vh9oy4daHKGHjychim6S9f7s"
+        },
+        "description": "",
+        "hide": 2,
+        "label": "Токен авторизации",
+        "name": "verifyBearerToken",
+        "query": "Vh9oy4daHKGHjychim6S9f7s",
+        "skipUrlSync": true,
+        "type": "constant"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Асессоры",
+  "uid": "a5ce11dd-d1f0-40de-9ed6-05de698df89f",
+  "version": 43
+}
