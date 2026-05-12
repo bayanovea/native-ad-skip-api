@@ -3,7 +3,9 @@ const bodyParser = require('body-parser');
 const swaggerUi = require('swagger-ui-express');
 const yaml = require('js-yaml');
 const fs = require('fs');
+const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
+require('./prometheus-wrapper');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -12,8 +14,34 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const promBundle = require('express-prom-bundle');
-const metricsMiddleware = promBundle({ includeMethod: true, includePath: true });
+const metricsMiddleware = promBundle({
+    includeMethod: true,
+    includePath: true,
+    includeStatusCode: true,
+    autoregister: false,
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5],
+    excludeRoutes: [/^\/metrics(\/|$)/],
+    normalizePath: [
+        [/^\/admin\/video\/[^/]+\/user\/\d+$/, '/admin/video/#video_id/user/#prv_user_id'],
+        [/^\/admin\/video\/[^/]+$/, '/admin/video/#video_id'],
+        [/^\/admin\/markups\/\d+\/delete$/, '/admin/markups/#id/delete'],
+        [/^(\/(rt|yt))?\/markups\/\d+\/delete$/, '$1/markups/#id/delete'],
+        [/^(\/(rt|yt))?\/markups\/\d+$/, '$1/markups/#id'],
+        [/^(\/(rt|yt))?\/videos\/[^/]+\/markups$/, '$1/videos/#id/markups'],
+        [/^(\/(rt|yt))?\/votes\/\d+\/delete$/, '$1/votes/#id/delete'],
+        [/^(\/(rt|yt))?\/votes\/user\/\d+\/update-rating$/, '$1/votes/user/#internal_user_id/update-rating'],
+    ],
+});
 app.use(metricsMiddleware);
+
+app.get('/metrics', async (req, res, next) => {
+    try {
+        res.set('Content-Type', promClient.register.contentType);
+        res.end(await promClient.register.metrics());
+    } catch (err) {
+        next(err);
+    }
+});
 
 app.set('trust proxy', true);
 

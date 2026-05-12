@@ -1,7 +1,8 @@
 global:
-  scrape_interval: 15s
+  scrape_interval: 30s
+  evaluation_interval: 30s
 
 scrape_configs:
-  - job_name: 'app'
+  - job_name: 'native-ad-skip-api'
     static_configs:
-      - targets: ['native-ad-skip-api-app-1:3022']
+      - targets: ['app:3022']

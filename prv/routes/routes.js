@@ -8,11 +8,6 @@ router.get('/', (req, res, next) => {
     })
 })
 
-router.get('/metrics', handler((req, res, next) => {
-    res.set('Content-Type', metricsMiddleware.promClient.register.contentType);
-    res.end(metricsMiddleware.promClient.register.metrics());
-}))
-
 router.get('/gdfgestshgergevcv3rwrf2e2e', handler((req, res, next) => {
     console.error('qqq1');
     console.log('qqq2');

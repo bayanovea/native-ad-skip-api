@@ -218,6 +218,40 @@ function findSeg(segs, catId, start, end) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── Metrics helpers ───────────────────────────────────────────────────────────
+
+async function fetchMetrics() {
+    const res = await request('GET', '/metrics', null);
+    assert.equal(res.status, 200, `/metrics returned ${res.status}`);
+    return typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
+}
+
+function parseCounter(text, name, labels) {
+    const labelEntries = Object.entries(labels);
+    const labelRegex = labelEntries
+        .map(([k, v]) => `${k}="${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`)
+        .join(',[^}]*');
+    const re = new RegExp(`^${name}\\{[^}]*${labelRegex}[^}]*\\}\\s+([0-9.eE+\\-]+)`, 'm');
+    const match = text.match(re);
+    return match ? Number(match[1]) : 0;
+}
+
+async function getLookupCount(outcome, provider) {
+    const text = await fetchMetrics();
+    return parseCounter(text, 'video_calculated_lookup_total', { outcome, provider });
+}
+
+async function getRequestWithoutVersionCount(method, provider) {
+    const text = await fetchMetrics();
+    return parseCounter(text, 'request_without_version_total', { method, provider });
+}
+
+function httpDurationHasPath(text, pathValue) {
+    const escaped = pathValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^http_request_duration_seconds_(bucket|count|sum)\\{[^}]*path="${escaped}"`, 'm');
+    return re.test(text);
+}
+
 // ── prv Tests ──────────────────────────────────────────────────────────────────
 
 // starts=[0,1,2] all bucket 0 → startAvg=1, ends=[10,12,11] median=11
@@ -463,6 +497,122 @@ test('RT GET /video-calculated: unknown video returns 204 and creates no Video r
     assert.equal(await countVideos('rt', vid), 0, 'no Video row should be created');
 });
 
+// ── Lookup-outcome metric tests ───────────────────────────────────────────────
+
+test('prv lookup metric: match outcome increments on duration ±1 hit', async () => {
+    const vid = '__e2e__prv_metric_match';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+
+    const before = await getLookupCount('match', 'prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 301 });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('match', 'prv');
+    assert.equal(after - before, 1, 'match counter should increment by 1');
+});
+
+test('prv lookup metric: backfilled outcome increments when duration was null', async () => {
+    const vid = '__e2e__prv_metric_backfilled';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+
+    const before = await getLookupCount('backfilled', 'prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 300 });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('backfilled', 'prv');
+    assert.equal(after - before, 1, 'backfilled counter should increment by 1');
+});
+
+test('prv lookup metric: mismatch outcome increments when stored duration differs', async () => {
+    const vid = '__e2e__prv_metric_mismatch';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 100, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+
+    const before = await getLookupCount('mismatch', 'prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 500 });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('mismatch', 'prv');
+    assert.equal(after - before, 1, 'mismatch counter should increment by 1');
+});
+
+test('prv lookup metric: no_duration outcome when request omits duration', async () => {
+    const vid = '__e2e__prv_metric_no_duration';
+    const cat = cats.prv.intro;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('prv');
+
+    const before = await getLookupCount('no_duration', 'prv');
+    const res = await getCalculated('', vid, { v: '1' });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('no_duration', 'prv');
+    assert.equal(after - before, 1, 'no_duration counter should increment by 1');
+});
+
+test('prv lookup metric: not_calculated outcome when Video exists but VideoCalculated missing', async () => {
+    const vid = '__e2e__prv_metric_not_calculated';
+    const cat = cats.prv.intro;
+    // Create a Video row via POST /markup (which inserts the video), but DO NOT run the calculator,
+    // so VideoCalculated will be missing.
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }] } });
+
+    const before = await getLookupCount('not_calculated', 'prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 300 });
+    assert.equal(res.status, 204, 'should return 204 when VideoCalculated missing');
+    const after = await getLookupCount('not_calculated', 'prv');
+    assert.equal(after - before, 1, 'not_calculated counter should increment by 1');
+});
+
+test('prv lookup metric: not_found outcome when no Video row exists', async () => {
+    const vid = '__e2e__prv_metric_not_found';
+
+    const before = await getLookupCount('not_found', 'prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 300 });
+    assert.equal(res.status, 204);
+    const after = await getLookupCount('not_found', 'prv');
+    assert.equal(after - before, 1, 'not_found counter should increment by 1');
+});
+
+test('RT lookup metric: match outcome carries provider=rt', async () => {
+    const vid = '__e2e__rt_metric_match';
+    const cat = cats.rt.intro;
+    await postMarkup('rt', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('rt');
+
+    const before = await getLookupCount('match', 'rt');
+    const res = await getCalculated('rt', vid, { duration: 300 });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('match', 'rt');
+    assert.equal(after - before, 1, 'match counter for rt should increment by 1');
+});
+
+test('YT lookup metric: match outcome carries provider=yt', async () => {
+    const vid = '__e2e__yt_metric_match';
+    const cat = cats.yt.intro;
+    await postMarkup('yt', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+    runCalc('yt');
+
+    const before = await getLookupCount('match', 'yt');
+    const res = await getCalculated('yt', vid, { duration: 300 });
+    assert.equal(res.status, 200);
+    const after = await getLookupCount('match', 'yt');
+    assert.equal(after - before, 1, 'match counter for yt should increment by 1');
+});
+
+test('prv request_without_version metric: increments when POST /markup omits v', async () => {
+    const vid = '__e2e__prv_no_v_post_markup';
+    const cat = cats.prv.intro;
+    const before = await getRequestWithoutVersionCount('POST /markup', 'prv');
+
+    // No `v` field on body — exercises the legacy branch in prv/routes/markups.js.
+    await postMarkup('', { video_id: vid, user_id: 'u1', category_id: cat, data: { intervals: [{ start: 0, end: 10 }] } });
+
+    const after = await getRequestWithoutVersionCount('POST /markup', 'prv');
+    assert.equal(after - before, 1, 'request_without_version_total{method=POST /markup, provider=prv} should increment by 1');
+});
+
 // ── Vote Tests ────────────────────────────────────────────────────────────────
 
 // Calculator emits rating=0 in both the segments table and video_calculateds.data
@@ -589,4 +739,40 @@ test('YT vote: +1 increments rating with duration check', async () => {
 
     assert.equal((await getSegmentRow('yt', vid, cat, 1, 11)).rating, 1, 'segment table rating');
     assert.equal(await getJsonRating('yt', vid, cat, 1, 11), 1, 'JSON rating');
+});
+
+// ── Metrics endpoint and path normalization ──────────────────────────────────
+
+test('metrics: GET /metrics returns 200 and includes expected metric names', async () => {
+    const text = await fetchMetrics();
+    assert.ok(text.includes('video_calculated_lookup_total'), 'missing video_calculated_lookup_total');
+    assert.ok(text.includes('request_without_version_total'), 'missing request_without_version_total');
+    assert.ok(text.includes('http_request_duration_seconds'), 'missing http_request_duration_seconds');
+});
+
+test('metrics: /metrics is not recorded in http_request_duration_seconds', async () => {
+    await fetchMetrics();
+    await fetchMetrics();
+    const text = await fetchMetrics();
+    assert.ok(!httpDurationHasPath(text, '/metrics'), '/metrics path leaked into http_request_duration_seconds');
+});
+
+test('metrics: /admin/video/:video_id normalizes to a stable label', async () => {
+    await request('GET', '/admin/video/12345', null);
+    await request('GET', '/admin/video/67890', null);
+    const text = await fetchMetrics();
+    assert.ok(httpDurationHasPath(text, '/admin/video/#video_id'),
+        'expected normalized path /admin/video/#video_id in metrics');
+    assert.ok(!httpDurationHasPath(text, '/admin/video/12345'),
+        'raw path /admin/video/12345 leaked into metrics (normalization failed)');
+});
+
+test('metrics: DELETE /markups/:id normalizes to a stable label', async () => {
+    await request('DELETE', '/markups/111', null);
+    await request('DELETE', '/markups/222', null);
+    const text = await fetchMetrics();
+    assert.ok(httpDurationHasPath(text, '/markups/#id'),
+        'expected normalized path /markups/#id in metrics');
+    assert.ok(!httpDurationHasPath(text, '/markups/111'),
+        'raw path /markups/111 leaked into metrics (normalization failed)');
 });

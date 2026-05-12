@@ -145,11 +145,11 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Create: `lib/find-video-for-read.js`
 - Create: `test/find-video-for-read.test.js`
 
-- [ ] create `lib/find-video-for-read.js` exporting `findVideoForReadWithOutcome(models, nativeId, duration)` that returns one of five shapes: `{video, outcome: 'match'}`, `{video, outcome: 'backfilled'}` (with `video.update({ duration })` side effect), `{video, outcome: 'mismatch'}`, `{video, outcome: 'no_duration'}` (when request had no duration), or `{video: null, outcome: 'not_found'}`
-- [ ] note: `not_calculated` is NOT a helper outcome — the caller derives it after a missed `VideoCalculated.findOne`
-- [ ] write unit tests in `test/find-video-for-read.test.js` using `node:test` with a stubbed `models.Video` (in-memory mock for `findOne` / `update`)
-- [ ] cover all five outcome branches; assert `video.update({ duration })` runs exactly once on the backfill branch and not on the others
-- [ ] run `node --test test/find-video-for-read.test.js` — must pass before next task
+- [x] create `lib/find-video-for-read.js` exporting `findVideoForReadWithOutcome(models, nativeId, duration)` that returns one of five shapes: `{video, outcome: 'match'}`, `{video, outcome: 'backfilled'}` (with `video.update({ duration })` side effect), `{video, outcome: 'mismatch'}`, `{video, outcome: 'no_duration'}` (when request had no duration), or `{video: null, outcome: 'not_found'}`
+- [x] note: `not_calculated` is NOT a helper outcome — the caller derives it after a missed `VideoCalculated.findOne`
+- [x] write unit tests in `test/find-video-for-read.test.js` using `node:test` with a stubbed `models.Video` (in-memory mock for `findOne` / `update`)
+- [x] cover all five outcome branches; assert `video.update({ duration })` runs exactly once on the backfill branch and not on the others
+- [x] run `node --test test/find-video-for-read.test.js` — must pass before next task
 
 ### Task 2: Refactor `prometheus-wrapper.js` to the new counter API
 
@@ -157,28 +157,28 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Modify: `prometheus-wrapper.js`
 - Create: `test/prometheus-wrapper.test.js`
 
-- [ ] remove `incrementVideoCalculatedFound`, `incrementVideoCalculatedNotFound`, the `counters` cache map, and the `_getOrCreateCounter` helper (with only two counters total, lazy caching is unneeded)
-- [ ] declare both counters once at module load on `prom-client`'s default registry:
+- [x] remove `incrementVideoCalculatedFound`, `incrementVideoCalculatedNotFound`, the `counters` cache map, and the `_getOrCreateCounter` helper (with only two counters total, lazy caching is unneeded)
+- [x] declare both counters once at module load on `prom-client`'s default registry:
   - `video_calculated_lookup_total` with `labelNames: ['outcome', 'provider']`
   - `request_without_version_total` with `labelNames: ['method', 'provider']`
-- [ ] export `incrementVideoCalculatedLookup(outcome, provider)` and `incrementRequestWithoutVersion(method, provider)` (new signature — drop the per-video `originalVideoId` arg)
-- [ ] rely on the default `prom-client` registry; `server.js` will serve `/metrics` from `prom-client.register` in Task 6 (no separate registry to wire)
-- [ ] write unit tests in `test/prometheus-wrapper.test.js` using `node:test`: after each helper call, read `prom-client.register.getSingleMetric('video_calculated_lookup_total').get()` and assert the counter value at the right label combination
-- [ ] run `node --test test/prometheus-wrapper.test.js` — must pass before next task
+- [x] export `incrementVideoCalculatedLookup(outcome, provider)` and `incrementRequestWithoutVersion(method, provider)` (new signature — drop the per-video `originalVideoId` arg)
+- [x] rely on the default `prom-client` registry; `server.js` will serve `/metrics` from `prom-client.register` in Task 6 (no separate registry to wire)
+- [x] write unit tests in `test/prometheus-wrapper.test.js` using `node:test`: after each helper call, read `prom-client.register.getSingleMetric('video_calculated_lookup_total').get()` and assert the counter value at the right label combination
+- [x] run `node --test test/prometheus-wrapper.test.js` — must pass before next task
 
 ### Task 3: Wire the new helper + counter into prv video routes
 
 **Files:**
 - Modify: `prv/routes/videos.js`
 
-- [ ] import `findVideoForReadWithOutcome` from `lib/find-video-for-read`
-- [ ] preserve the `!req.query.v` legacy branch verbatim, **including the commented-out duration-anomaly tracking block at lines 41–49** (do not delete or rewrite it). Treat the legacy branch as a separate path that does NOT emit a lookup outcome — it continues to emit only `request_without_version_total`
-- [ ] in the canonical (`req.query.v` present) branch, call the shared helper and capture `{ video, outcome }`
-- [ ] after the canonical lookup, branch on `videoCalculated` presence: if missing, override outcome to `'not_calculated'`
-- [ ] call `incrementVideoCalculatedLookup(outcome, 'prv')` once per request, only on the canonical branch, before sending the response
-- [ ] update the legacy branch to call `incrementRequestWithoutVersion('GET /video-calculated', 'prv')` (new signature)
-- [ ] update / add e2e cases in `test/e2e.js` for: `match`, `backfilled`, `mismatch`, `no_duration`, `not_calculated`, `not_found` outcomes against the prv endpoint (assert response code AND metric counter value after the request)
-- [ ] run `make test-e2e` — must pass before next task
+- [x] import `findVideoForReadWithOutcome` from `lib/find-video-for-read`
+- [x] preserve the `!req.query.v` legacy branch verbatim, **including the commented-out duration-anomaly tracking block at lines 41–49** (do not delete or rewrite it). Treat the legacy branch as a separate path that does NOT emit a lookup outcome — it continues to emit only `request_without_version_total`
+- [x] in the canonical (`req.query.v` present) branch, call the shared helper and capture `{ video, outcome }`
+- [x] after the canonical lookup, branch on `videoCalculated` presence: if missing, override outcome to `'not_calculated'`
+- [x] call `incrementVideoCalculatedLookup(outcome, 'prv')` once per request, only on the canonical branch, before sending the response
+- [x] update the legacy branch to call `incrementRequestWithoutVersion('GET /video-calculated', 'prv')` (new signature)
+- [x] update / add e2e cases in `test/e2e.js` for: `match`, `backfilled`, `mismatch`, `no_duration`, `not_calculated`, `not_found` outcomes against the prv endpoint (assert response code AND metric counter value after the request)
+- [x] run `make test-e2e` — deferred to after Task 5: rt/yt and markups still reference the removed wrapper API, so e2e cannot run until those are updated. Verified locally with `node --check`.
 
 ### Task 4: Wire the new helper + counter into rt and yt video routes
 
@@ -186,22 +186,22 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Modify: `rt/routes/videos.js`
 - Modify: `yt/routes/videos.js`
 
-- [ ] remove the inline `findVideoForRead` from both files; import the shared helper
-- [ ] both routes require `duration` via `query('duration').isInt()` — there is no legacy `!req.query.v` branch or `no_duration` outcome reachable in practice; still pass `duration` through to the helper unchanged (helper handles `null` defensively)
-- [ ] derive `not_calculated` in the route handler when `VideoCalculated.findOne` returns null (same pattern as Task 3)
-- [ ] call `incrementVideoCalculatedLookup(outcome, 'rt')` / `(outcome, 'yt')` respectively
-- [ ] extend `test/e2e.js` with at least one happy-path (`match`) case per provider hitting `/rt/video-calculated` and `/yt/video-calculated`, asserting the counter increments with the correct provider label
-- [ ] run `make test-e2e` — must pass before next task
+- [x] remove the inline `findVideoForRead` from both files; import the shared helper
+- [x] both routes require `duration` via `query('duration').isInt()` — there is no legacy `!req.query.v` branch or `no_duration` outcome reachable in practice; still pass `duration` through to the helper unchanged (helper handles `null` defensively)
+- [x] derive `not_calculated` in the route handler when `VideoCalculated.findOne` returns null (same pattern as Task 3)
+- [x] call `incrementVideoCalculatedLookup(outcome, 'rt')` / `(outcome, 'yt')` respectively
+- [x] extend `test/e2e.js` with at least one happy-path (`match`) case per provider hitting `/rt/video-calculated` and `/yt/video-calculated`, asserting the counter increments with the correct provider label
+- [x] run `make test-e2e` — deferred until after Task 5 (see Task 3 note); syntax verified with `node --check`
 
 ### Task 5: Update `prv/routes/markups.js` `request_without_version` call
 
 **Files:**
 - Modify: `prv/routes/markups.js`
 
-- [ ] change the call at line 35 to `incrementRequestWithoutVersion('POST /markup', 'prv')` (drop the `videoId` arg per the new signature)
-- [ ] confirmed by audit: rt/yt `markups.js` do not have a `!req.body.v` branch and do not call `incrementRequestWithoutVersion` — no changes needed in those files
-- [ ] extend `test/e2e.js` to assert that calling `POST /markup` without `v` increments `request_without_version_total{method="POST /markup", provider="prv"}` by 1
-- [ ] run `make test-e2e` — must pass before next task
+- [x] change the call at line 35 to `incrementRequestWithoutVersion('POST /markup', 'prv')` (drop the `videoId` arg per the new signature)
+- [x] confirmed by audit: rt/yt `markups.js` do not have a `!req.body.v` branch and do not call `incrementRequestWithoutVersion` — no changes needed in those files
+- [x] extend `test/e2e.js` to assert that calling `POST /markup` without `v` increments `request_without_version_total{method="POST /markup", provider="prv"}` by 1
+- [x] run `make test-e2e` — all 32 tests passing
 
 ### Task 6: Harden `express-prom-bundle` config and `/metrics` endpoint in `server.js`
 
@@ -223,26 +223,22 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 | `prv/routes/votes.js:102` | `/votes/user/:internal_user_id/update-rating` | GET |
 | (same patterns repeat under `/rt` and `/yt`) | | |
 
-- [ ] **first, remove the broken `/metrics` handler in `prv/routes/routes.js:11–14`** (it references an undefined `metricsMiddleware` variable and currently 500s). Keep the `/` health route. Decide on `prv/routes/routes.js:16-20` `/gdfgestshgergevcv3rwrf2e2e` test endpoint: leave it (out of scope) but note it in the PR
-- [ ] configure `express-prom-bundle` in `server.js` with:
+- [x] **first, remove the broken `/metrics` handler in `prv/routes/routes.js:11–14`** (it references an undefined `metricsMiddleware` variable and currently 500s). Keep the `/` health route. The `/gdfgestshgergevcv3rwrf2e2e` test endpoint was left in place (out of scope)
+- [x] configure `express-prom-bundle` in `server.js` with:
   - `includeMethod: true`, `includePath: true`, `includeStatusCode: true`
   - `autoregister: false`
   - `buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5]`
-  - `normalizePath` covering each pattern from the audit above. Use rules like `[ /^(\/(rt|yt))?\/admin\/video\/[^/]+\/user\/\d+$/, '#path-admin-video-user' ]`, `[ /^(\/(rt|yt))?\/admin\/video\/[^/]+$/, '#path-admin-video' ]`, etc. (specific patterns BEFORE generic ones — `express-prom-bundle` applies first-match)
-  - `urlValueParser: { minBase64Length: 1 }` as a defense-in-depth catch-all for paths not enumerated above
-- [ ] register `app.get('/metrics', ...)` in `server.js` AFTER `app.use(metricsMiddleware)` but BEFORE `app.use('/', routes)` so the new handler shadows anything in the routes module. Serve from `prom-client`'s default register:
-  ```js
-  app.get('/metrics', async (req, res) => {
-      res.set('Content-Type', client.register.contentType);
-      res.end(await client.register.metrics());
-  });
-  ```
-- [ ] add e2e cases in `test/e2e.js`:
+  - `excludeRoutes: [/^\/metrics(\/|$)/]` — suppresses self-recording when we serve `/metrics` manually (autoregister: false alone keeps the middleware recording the request even when bypassing its built-in handler)
+  - `normalizePath` array of `[regex, replacement]` tuples — specific patterns first, with optional `/rt` / `/yt` prefix capture group on shared routes; admin routes are prv-only so no prefix branch
+  - **Removed `urlValueParser: { minBase64Length: 1 }`** from the plan: the default `valueMasks` include a `^[a-zA-Z0-9\-_]{minBase64Length,}$` rule that, at length 1, swallows every literal path chunk (`admin`, `video`, `markups`) and rewrites them to `#val`. The default (66) is correct; the integer/UUID masks already cover stray numeric IDs as defense-in-depth
+- [x] register `app.get('/metrics', ...)` in `server.js` AFTER `app.use(metricsMiddleware)` but BEFORE `app.use('/', routes)` (serves from `prom-client.register.metrics()`)
+- [x] also `require('./prometheus-wrapper')` at top of `server.js` so the custom counters register on the default registry before the first scrape (the wrapper is otherwise only imported by route files, which load lazily on first hit)
+- [x] add e2e cases in `test/e2e.js`:
   - GET `/metrics` returns 200 and the body contains the strings `video_calculated_lookup_total`, `request_without_version_total`, `http_request_duration_seconds`
-  - `/metrics` itself does NOT appear as a `path` label value in `http_request_duration_seconds` (i.e. self-recording is suppressed; if `autoregister: false` alone is not enough, the test will fail and the fix is to add `excludeRoutes: ['/metrics']` or similar — confirm option name against the installed `express-prom-bundle` version)
-  - GET `/admin/video/123` normalizes to a stable label (e.g. `path="#path-admin-video"`) — NOT `path="/admin/video/123"`
-  - DELETE `/markups/456` normalizes to a stable label — NOT `path="/markups/456"`
-- [ ] run `make test-e2e` — must pass before next task
+  - `/metrics` itself does NOT appear as a `path` label value in `http_request_duration_seconds`
+  - GET `/admin/video/<id>` normalizes to `path="/admin/video/#video_id"` — NOT the raw numeric id
+  - DELETE `/markups/<id>` normalizes to `path="/markups/#id"` — NOT the raw numeric id
+- [x] run `make test-e2e` — all 36 tests passing
 
 ### Task 7: Update production and dev `docker-compose.yml` for persistent Prometheus
 
@@ -250,20 +246,20 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Modify: `docker-compose.yml`
 - Modify: `docker-compose.dev.yml`
 
-- [ ] add `name: native-ad-skip-api` at the top of both compose files so the named volume `prometheus_data` resolves to a stable `native-ad-skip-api_prometheus_data` regardless of the repo directory name
-- [ ] in `docker-compose.yml` (production):
+- [x] add `name: native-ad-skip-api` at the top of both compose files so the named volume `prometheus_data` resolves to a stable `native-ad-skip-api_prometheus_data` regardless of the repo directory name
+- [x] in `docker-compose.yml` (production):
   - uncomment the `prometheus` service
   - correct the mount to `prometheus_data:/prometheus`
   - expose port as `127.0.0.1:9090:9090` (loopback only)
   - add `restart: unless-stopped`
   - add `--storage.tsdb.retention.time=180d` to the command list (also keep `--storage.tsdb.path=/prometheus` for explicitness — matches Prometheus's default)
   - uncomment the `volumes:` block declaring `prometheus_data`
-- [ ] in `docker-compose.dev.yml` (dev):
+- [x] in `docker-compose.dev.yml` (dev):
   - keep the port binding at `9090:9090` (no loopback restriction — local browser access is expected)
   - fix the mount from `/data` to `/prometheus`
   - add `--storage.tsdb.retention.time=180d` (parity with prod)
-- [ ] no automated test (compose is config) — manual verification covered in Post-Completion
-- [ ] run `docker compose -f docker-compose.yml config` AND `docker compose -f docker-compose.dev.yml config` to validate YAML — both must succeed before next task
+- [x] no automated test (compose is config) — manual verification covered in Post-Completion
+- [x] run `docker compose -f docker-compose.yml config` AND `docker compose -f docker-compose.dev.yml config` to validate YAML — both succeed
 
 ### Task 8: Update `config/prometheus.yml` and `config/prometheus.dev.yml`
 
@@ -271,12 +267,12 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Modify: `config/prometheus.yml`
 - Modify: `config/prometheus.dev.yml`
 
-- [ ] set `global.scrape_interval: 30s` and `global.evaluation_interval: 30s` in both files
-- [ ] rename the job to `native-ad-skip-api` in both files
-- [ ] in `config/prometheus.yml` (prod): change target to `app:3022` (compose service name; survives container rename)
-- [ ] in `config/prometheus.dev.yml`: change target from `host.docker.internal:3022` to `app:3022`. Rationale: the dev compose stack runs the API as the `app` service in the same network as Prometheus, so the service name is the correct target. The old `host.docker.internal` value was for scraping a host-side `yarn dev`; that mode is no longer the primary dev workflow per CLAUDE.md.
-- [ ] no automated test (config); the e2e suite in Task 6 already verifies `/metrics` is reachable
-- [ ] run `docker compose -f docker-compose.dev.yml up -d prometheus app` and confirm the target appears `UP` in `http://localhost:9090/targets` — must pass before next task
+- [x] set `global.scrape_interval: 30s` and `global.evaluation_interval: 30s` in both files
+- [x] rename the job to `native-ad-skip-api` in both files
+- [x] in `config/prometheus.yml` (prod): change target to `app:3022` (compose service name; survives container rename)
+- [x] in `config/prometheus.dev.yml`: change target from `host.docker.internal:3022` to `app:3022`. Rationale: the dev compose stack runs the API as the `app` service in the same network as Prometheus, so the service name is the correct target. The old `host.docker.internal` value was for scraping a host-side `yarn dev`; that mode is no longer the primary dev workflow per CLAUDE.md.
+- [x] no automated test (config); the e2e suite in Task 6 already verifies `/metrics` is reachable
+- [ ] deferred to Post-Completion: `docker compose -f docker-compose.dev.yml up -d prometheus app` and confirm the target appears `UP` in `http://localhost:9090/targets` (requires a real DB host; covered by the manual verification steps below)
 
 ### Task 9: Add minimal `docker-compose.yml` to the Grafana repo
 
@@ -285,46 +281,47 @@ prv's legacy `!req.query.v` branch increments `request_without_version_total{ me
 - Modify: `../native-ad-skip-grafana/README.md`
 - Modify: `../native-ad-skip-grafana/.env` (add `GF_ADMIN_PASSWORD` placeholder — real value lives only on the deploy host; do NOT commit a real password)
 
-- [ ] write a compose file with:
+- [x] write a compose file with:
   - `name: native-ad-skip-grafana` at the top (pins the volume identity to `native-ad-skip-grafana_grafana_data`)
   - `build: .`, `restart: unless-stopped`
-  - `ports: ['127.0.0.1:3024:3000']`
+  - `ports: ['127.0.0.1:3024:3024']` — Grafana listens on 3024 internally because `GF_SERVER_HTTP_PORT=3024` is set in the existing `.env` (loaded via `env_file: .env`)
   - attached to network `main-network` declared `external: true`
   - volume `grafana_data:/var/lib/grafana`
   - env `GF_USERS_ALLOW_SIGN_UP=false`, `GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD}`
-- [ ] add a short README section documenting:
+- [x] add a short README section documenting:
   - **Precondition:** `docker network create main-network` must already have been run on the host (idempotent: `docker network inspect main-network >/dev/null 2>&1 || docker network create main-network`). The api stack does NOT create this network either — both stacks declare it `external: true`.
   - Datasource URL: `http://prometheus:9090`
   - Rationale for persistence-only-no-provisioning today (manual dashboards safe on `grafana_data` volume; provisioning can be added later non-destructively)
-- [ ] no automated test (config); verified manually after deploy
-- [ ] run `docker compose config` inside the Grafana repo locally to validate the YAML — must pass before next task
+- [x] no automated test (config); verified manually after deploy
+- [x] run `docker compose config` inside the Grafana repo locally to validate the YAML — passes
+- [x] `.env` itself is gitignored and pre-existing — the README documents `GF_ADMIN_PASSWORD` as required, no committed placeholder needed
 
 ### Task 10: Rewrite the `Prometheus Metrics` section in `CLAUDE.md`
 
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] replace the existing `### Prometheus Metrics (prometheus-wrapper.js)` section with a section that lists:
+- [x] replace the existing `### Prometheus Metrics (prometheus-wrapper.js)` section with a section that lists:
   - the two custom counters and their label sets
   - all six outcome states with their exact definitions (copy from Technical Details above)
   - the `express-prom-bundle` histogram and what queries it answers
   - retention (180 d), scrape interval (30 s), storage (`prometheus_data` named volume)
   - sibling Grafana repo location and `main-network` linkage
-- [ ] remove references to the deleted `incrementVideoCalculatedFound` / `incrementVideoCalculatedNotFound` API
-- [ ] no automated test (documentation); a human reviews the diff
-- [ ] commit and proceed to verification
+- [x] remove references to the deleted `incrementVideoCalculatedFound` / `incrementVideoCalculatedNotFound` API
+- [x] no automated test (documentation); a human reviews the diff
+- [x] commit and proceed to verification
 
 ### Task 11: Verify acceptance criteria
-- [ ] verify all six outcome states are emitted by the e2e suite (grep the e2e test output for each `outcome=` label value)
-- [ ] verify `/metrics` does not appear in `http_request_duration_seconds` series
-- [ ] verify path normalization rewrites `/admin/video/<id>` → `path="/admin/video/#val"` in `http_request_duration_seconds`
-- [ ] run full e2e: `make test-e2e`
-- [ ] run unit tests: `node --test lib/find-video-for-read.test.js prometheus-wrapper.test.js`
-- [ ] run Go calculator tests: `go test ./calculator` (should be untouched but sanity-check)
+- [x] verify all six outcome states are emitted by the e2e suite (covered by tests 17–24 in `test/e2e.js`)
+- [x] verify `/metrics` does not appear in `http_request_duration_seconds` series (e2e test 34)
+- [x] verify path normalization rewrites `/admin/video/<id>` → `path="/admin/video/#video_id"` and `/markups/<id>` → `path="/markups/#id"` (e2e tests 35, 36)
+- [x] run full e2e: `make test-e2e` — 36 pass / 0 fail
+- [x] run unit tests: `node --test test/find-video-for-read.test.js test/prometheus-wrapper.test.js` — 9 pass / 0 fail
+- [x] run Go calculator pure unit tests: `go test ./calculator -run 'TestFindMedian|TestProcess'` — pass (integration test `TestIntegration` requires DB env vars, unchanged by this work)
 
 ### Task 12: [Final] Move plan to completed
-- [ ] verify CLAUDE.md changes render correctly
-- [ ] `mkdir -p docs/plans/completed && mv docs/plans/20260512-prometheus-monitoring.md docs/plans/completed/`
+- [x] verify CLAUDE.md changes render correctly
+- [x] `mkdir -p docs/plans/completed && mv docs/plans/20260512-prometheus-monitoring.md docs/plans/completed/`
 
 ## Post-Completion
 

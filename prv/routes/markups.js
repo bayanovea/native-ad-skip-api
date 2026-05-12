@@ -32,7 +32,7 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         const generatedUserId = req.body.user_id;
 
         if (!req.body.v) {
-            prometheusWrapper.incrementRequestWithoutVersion('POST /markup', videoId);
+            prometheusWrapper.incrementRequestWithoutVersion('POST /markup', 'prv');
             videoId = '-' + videoId;
         }
 

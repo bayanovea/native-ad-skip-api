@@ -1,24 +1,9 @@
 const express = require('express');
-const { Op } = require('sequelize');
 const { query } = require('express-validator');
 const prometheusWrapper = require('../../prometheus-wrapper');
+const { findVideoForReadWithOutcome } = require('../../lib/find-video-for-read');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
-
-async function findVideoForRead(models, nativeId, duration) {
-    if (duration != null) {
-        let video = await models.Video.findOne({
-            where: { native_id: nativeId, duration: { [Op.between]: [duration - 1, duration + 1] } },
-        });
-        if (video) return video;
-
-        video = await models.Video.findOne({ where: { native_id: nativeId, duration: null } });
-        if (video) { await video.update({ duration }); return video; }
-
-        return models.Video.findOne({ where: { native_id: nativeId } });
-    }
-    return models.Video.findOne({ where: { native_id: nativeId } });
-}
 
 module.exports = function createVideoRoutes(models) {
     const router = express.Router();
@@ -34,23 +19,22 @@ module.exports = function createVideoRoutes(models) {
         const duration = req.query.duration;
         const nativeFullVideoId = req.query.video_id;
 
-        const video = await findVideoForRead(models, nativeFullVideoId, duration);
+        const { video, outcome } = await findVideoForReadWithOutcome(models, nativeFullVideoId, duration);
 
         if (!video) {
-            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
+            prometheusWrapper.incrementVideoCalculatedLookup(outcome, 'rt');
             res.status(204).send();
             return;
         }
 
         const videoCalculated = await models.VideoCalculated.findOne({ where: { video_id: String(video.id) } });
-
         if (!videoCalculated) {
-            prometheusWrapper.incrementVideoCalculatedNotFound(nativeFullVideoId);
+            prometheusWrapper.incrementVideoCalculatedLookup('not_calculated', 'rt');
             res.status(204).send();
             return;
         }
 
-        prometheusWrapper.incrementVideoCalculatedFound(nativeFullVideoId);
+        prometheusWrapper.incrementVideoCalculatedLookup(outcome, 'rt');
         res.status(200).send(videoCalculated.data);
     }));
 

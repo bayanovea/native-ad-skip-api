@@ -1,35 +1,26 @@
 const client = require('prom-client');
-const counters = {};
 
-function incrementVideoCalculatedFound(fullNativeVideoId) {
-    const [nativeOwnerIdPart, nativeVideoIdPart] = fullNativeVideoId.split('_');
-    _incrementCounter('video_calculated_found', { owner_id: nativeOwnerIdPart, video_id: nativeVideoIdPart });
+const videoCalculatedLookupTotal = new client.Counter({
+    name: 'video_calculated_lookup_total',
+    help: 'GET /video-calculated outcomes by lookup state and provider',
+    labelNames: ['outcome', 'provider'],
+});
+
+const requestWithoutVersionTotal = new client.Counter({
+    name: 'request_without_version_total',
+    help: 'Requests from legacy clients that do not include the v query param',
+    labelNames: ['method', 'provider'],
+});
+
+function incrementVideoCalculatedLookup(outcome, provider) {
+    videoCalculatedLookupTotal.inc({ outcome, provider });
 }
 
-function incrementVideoCalculatedNotFound(fullNativeVideoId) {
-    const [nativeOwnerIdPart, nativeVideoIdPart] = fullNativeVideoId.split('_');
-    _incrementCounter('video_calculated_not_found', { owner_id: nativeOwnerIdPart, video_id: nativeVideoIdPart });
-}
-
-function incrementRequestWithoutVersion(method, originalVideoId) {
-    _incrementCounter('request_without_version', { method: method, originalVideoId: originalVideoId });
-}
-
-function _incrementCounter(name, labels) {
-  const counter = _getOrCreateCounter(name, name, Object.keys(labels));
-  counter.inc(labels);
-}
-
-function _getOrCreateCounter(name, help, labelNames) {
-    if (!counters[name]) {
-      counters[name] = new client.Counter({name, help, labelNames});
-    }
-
-    return counters[name];
+function incrementRequestWithoutVersion(method, provider) {
+    requestWithoutVersionTotal.inc({ method, provider });
 }
 
 module.exports = {
-    incrementVideoCalculatedFound,
-    incrementVideoCalculatedNotFound,
-    incrementRequestWithoutVersion
+    incrementVideoCalculatedLookup,
+    incrementRequestWithoutVersion,
 };

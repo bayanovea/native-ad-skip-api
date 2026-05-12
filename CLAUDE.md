@@ -162,11 +162,30 @@ All three providers share the same route shape; `prv/` has two extras.
 
 **Dual User ID System:** Users have both a `generated_user_id` (UUID) and an optional `prv_user_id`. The codebase is transitioning to internal DB `id` references.
 
-### Prometheus Metrics (`prometheus-wrapper.js`)
+### Prometheus Metrics (`prometheus-wrapper.js`, `server.js`)
 
-- `video_calculated_found` — successful segment lookups
-- `video_calculated_not_found` — missing segment lookups
-- `request_without_version` — legacy API client requests
+Two custom counters and one HTTP histogram are exposed on `GET /metrics` (served by `server.js`, not by `express-prom-bundle`'s autoregister — `/metrics` is in `excludeRoutes` so it doesn't record itself).
+
+**`video_calculated_lookup_total{outcome, provider}`** — outcomes of `GET /video-calculated`. `provider` is `prv` / `rt` / `yt`. `outcome` is one of:
+
+| Outcome | Definition |
+|---|---|
+| `match` | Request supplied `duration`; row found by `(native_id, duration ± 1)`; `VideoCalculated` row exists. |
+| `backfilled` | Request supplied `duration`; no `± 1` match; a row with `duration = NULL` existed and was just updated to the request's duration; `VideoCalculated` row exists. |
+| `mismatch` | Request supplied `duration`; no `± 1` match; no `NULL` row to backfill; helper fell through to `findOne({ native_id })` and returned a row whose stored duration differs by > 1 s; `VideoCalculated` row exists. |
+| `no_duration` | Request had no `duration` query param (legacy client); helper fell through directly to `findOne({ native_id })`; `VideoCalculated` row exists. |
+| `not_calculated` | Helper returned a `Video` (any of the four above) but no `VideoCalculated` row was found; caller overrides the helper's outcome to `not_calculated`. |
+| `not_found` | Helper returned `null` (no `Video` row matched at all). |
+
+The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calculated` is derived in the route handler when `VideoCalculated.findOne` returns null. prv's legacy `!req.query.v` branch in `prv/routes/videos.js` does **not** emit a lookup outcome — it only increments `request_without_version_total`.
+
+**`request_without_version_total{method, provider}`** — count of legacy client requests that omit the `v` query/body param. `method` is the route key (`GET /video-calculated`, `POST /markup`).
+
+**`http_request_duration_seconds_{bucket|count|sum}{method, path, status_code}`** — `express-prom-bundle` histogram with buckets `[0.05, 0.1, 0.25, 0.5, 1, 2.5]`. `path` is normalized via `normalizePath` rules in `server.js` so dynamic segments collapse (`/admin/video/12345` → `/admin/video/#video_id`, `/markups/42` → `/markups/#id`, etc.). The default `url-value-parser` catches any unmapped numeric/UUID IDs as defense-in-depth.
+
+**Storage / scrape:** Prometheus scrapes `app:3022/metrics` every 30 s and retains 180 days on the `prometheus_data` named Docker volume (mounted at `/prometheus` in the container; pinned project name `native-ad-skip-api` → stable volume `native-ad-skip-api_prometheus_data`).
+
+**Grafana:** sibling repo at `../native-ad-skip-grafana` holds the Grafana compose stack. Both stacks attach to the external `main-network` (precondition on the host: `docker network create main-network`); Grafana's datasource points at `http://prometheus:9090` by DNS within that network. Dashboards are maintained manually and persisted on the `native-ad-skip-grafana_grafana_data` volume.
 
 ### Environment Variables
 
