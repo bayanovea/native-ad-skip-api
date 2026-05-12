@@ -50,16 +50,16 @@ Dashboards become code via Grafana provisioning (JSON files). Everything deploys
 - Create: `grafana/provisioning/datasources/datasources.yml`
 - Create: `grafana/provisioning/dashboards/dashboards.yml`
 
-- [ ] create `grafana/provisioning/datasources/datasources.yml` with Postgres datasource:
+- [x] create `grafana/provisioning/datasources/datasources.yml` with Postgres datasource:
   - UID: `ce68e9be-35fa-4d6a-8f59-35f03dae1d52`
   - host: `${DB_HOST}:5432` (resolves to `database:5432` via `extra_hosts`)
   - database/user/password from env vars
   - `sslmode: disable`, `postgresVersion: 1400`, `timescaledb: false`
-- [ ] add Prometheus datasource to same file:
+- [x] add Prometheus datasource to same file:
   - UID: `c62ca5db-1b9b-4b36-a035-145154b708ae`
   - url: `http://prometheus:9090`
-- [ ] create `grafana/provisioning/dashboards/dashboards.yml` with file provider pointing to `/var/lib/grafana/dashboards`, `allowUiUpdates: false`
-- [ ] verify YAML is valid (`python3 -c "import yaml; yaml.safe_load(open(...))"`)
+- [x] create `grafana/provisioning/dashboards/dashboards.yml` with file provider pointing to `/var/lib/grafana/dashboards`, `allowUiUpdates: false`
+- [x] verify YAML is valid
 
 ### Task 3: Copy and clean dashboard JSONs
 
@@ -69,42 +69,34 @@ Dashboards become code via Grafana provisioning (JSON files). Everything deploys
 - Create: `grafana/dashboards/infrastructure.json`
 - Create: `grafana/dashboards/assessors.json`
 
-- [ ] copy `Продуктовая статистика` → `grafana/dashboards/product-stats.json`:
+- [x] copy `Продуктовая статистика` → `grafana/dashboards/product-stats.json`:
   - set top-level `"id": null` (prevents collision with old volume data)
   - set `"editable": false`
   - keep Cyrillic `"title"` field unchanged (UI displays title, not filename)
   - remove `__inputs`/`__requires` keys if present
-- [ ] same cleanup for `Таблицы в чистом виде` → `grafana/dashboards/tables.json`
-- [ ] same cleanup for `Инфрастуктура` → `grafana/dashboards/infrastructure.json`
-- [ ] same cleanup for `Асессоры` → `grafana/dashboards/assessors.json`
-- [ ] verify all 4 datasource UIDs match provisioned ones: `grep -r "datasource" grafana/dashboards/`
+- [x] same cleanup for `Таблицы в чистом виде` → `grafana/dashboards/tables.json`
+- [x] same cleanup for `Инфрастуктура` → `grafana/dashboards/infrastructure.json`
+- [x] same cleanup for `Асессоры` → `grafana/dashboards/assessors.json`
+- [x] verify all 4 datasource UIDs match provisioned ones
 
 ### Task 4: Add Grafana service to docker-compose.yml
 
 **Files:**
 - Modify: `docker-compose.yml`
 
-- [ ] add `grafana:` service:
-  - image: `grafana/grafana:12.3.1` (pinned)
-  - `restart: unless-stopped`
-  - port: `127.0.0.1:3024:3024`
-  - `extra_hosts: ["database:178.154.241.202"]` (matches `app` service — required for Postgres datasource)
-  - `depends_on: [prometheus]`
-  - volumes: `./grafana/provisioning:/etc/grafana/provisioning`, `./grafana/dashboards:/var/lib/grafana/dashboards`, `grafana_data:/var/lib/grafana`
-  - env: `GF_SERVER_HTTP_PORT=3024`, `GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD}`, `GF_USERS_ALLOW_SIGN_UP=false`, `GF_AUTH_ANONYMOUS_ENABLED=false`, `DB_HOST=${DB_HOST}`, `DB_NAME=${DB_NAME}`, `DB_USER=${DB_USER}`, `DB_PASSWORD=${DB_PASSWORD}`
-  - network: `main-network`
-- [ ] add `grafana_data:` to top-level `volumes:` section
-- [ ] run `docker-compose config` to validate
+- [x] add `grafana:` service (image `grafana/grafana:12.3.1`, pinned, `restart: unless-stopped`, port `127.0.0.1:3024:3024`, `extra_hosts`, `depends_on: [prometheus]`, volumes, env, `main-network`)
+- [x] add `grafana_data:` to top-level `volumes:` section
+- [x] run `docker-compose config` — valid (expected warnings for unset env vars locally)
 
 ### Task 5: Update deploy workflow
 
 **Files:**
 - Modify: `.github/workflows/deploy.yml`
 
-- [ ] add `GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}` to the `Deploy to YC` step's `env:` block
-- [ ] add `export GF_ADMIN_PASSWORD='$GF_ADMIN_PASSWORD'` to the remote shell exports inside the SSH command (alongside `DB_NAME`, `DB_USER`, etc.) — note: value contains `!`, verify it survives single-quote wrapping in bash
-- [ ] change `docker-compose ... up --build -d app` to `docker-compose ... up --build -d app grafana` (prometheus and swagger-ui continue running unmanaged)
-- [ ] verify workflow file is valid YAML
+- [x] add `GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}` to the `Deploy to YC` step's `env:` block
+- [x] add `export GF_ADMIN_PASSWORD='$GF_ADMIN_PASSWORD'` to remote shell exports
+- [x] changed `up --build -d app` to `up --build -d app grafana`
+- [x] workflow file is valid YAML
 
 ### Task 6: Add CI secret
 
