@@ -30,7 +30,6 @@ module.exports = function(sequelize) {
     const Video = sequelize.define('video', {
         native_id: { type: DataTypes.STRING },
         duration: { type: DataTypes.INTEGER, allowNull: true },
-        duration_status: { type: DataTypes.SMALLINT, allowNull: true },
     }, { tableName: 'videos' });
 
     const VideoCalculated = sequelize.define('video_calculated', {
