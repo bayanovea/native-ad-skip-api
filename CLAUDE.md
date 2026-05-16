@@ -130,7 +130,7 @@ All three providers share the same route shape; `prv/` has two extras.
   - **`time_saved`** — fields: `user_id`, `prv_user_id`, `inc`. Increments `User.time_saved`; stored in `{provider}_events_time_saved`. Response mirrors the old `POST /users/time-saved` structure: `by_user_id`, `by_prv_user_id`, `by_user`.
   - **`client_failed`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `reason` (string), `data` (arbitrary JSON, optional). Stored in `{provider}_events_client_failed`.
 - **`prv/routes/users.js`** — Shared by all providers (currently empty; `POST /users/time-saved` was removed in favour of the events endpoint).
-- **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only. A parallel "Асессоры v2" Grafana dashboard (`grafana/dashboards/assessors-v2.json`) mirrors this functionality via flat tables with per-video / per-user filters.
+- **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only.
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
 ### Authentication
@@ -186,7 +186,7 @@ The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calcul
 
 **Storage / scrape:** Prometheus scrapes `app:3022/metrics` every 30 s and retains 180 days on the `prometheus_data` named Docker volume (mounted at `/prometheus` in the container; pinned project name `native-ad-skip-api` → stable volume `native-ad-skip-api_prometheus_data`).
 
-**Grafana:** sibling repo at `../native-ad-skip-grafana` holds the Grafana compose stack. Both stacks attach to the external `main-network` (precondition on the host: `docker network create main-network`); Grafana's datasource points at `http://prometheus:9090` by DNS within that network. Dashboards are maintained manually and persisted on the `native-ad-skip-grafana_grafana_data` volume. Assessor drill-down (per-video / per-user markup view) is mirrored into the v2 dashboard `grafana/dashboards/assessors-v2.json` alongside v1 `assessors.json`.
+**Grafana:** sibling repo at `../native-ad-skip-grafana` holds the Grafana compose stack. Both stacks attach to the external `main-network` (precondition on the host: `docker network create main-network`); Grafana's datasource points at `http://prometheus:9090` by DNS within that network. Dashboards are maintained manually and persisted on the `native-ad-skip-grafana_grafana_data` volume.
 
 ### Environment Variables
 
