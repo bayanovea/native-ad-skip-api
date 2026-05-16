@@ -104,6 +104,7 @@ module.exports = function(sequelize) {
     }, { tableName: 'prv_calculated_segment_markups' });
 
     CalculatedSegment.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
+    CalculatedSegment.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     CalculatedSegment.hasMany(CalculatedSegmentMarkup, { foreignKey: 'segment_id', as: 'segment_markups' });
     CalculatedSegmentMarkup.belongsTo(CalculatedSegment, { foreignKey: 'segment_id', as: 'segment' });
 

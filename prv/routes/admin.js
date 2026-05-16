@@ -16,26 +16,31 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         });
         if (!video) { res.status(404).send('Video not found'); return; }
 
-        const [videoCalculated, markups, categories] = await Promise.all([
-            models.VideoCalculated.findOne({ where: { video_id: video.id } }),
-            models.Markup.findAll({
-                where: { video_id: video.id, deleted_at: null },
-                include: [
-                    { model: models.MarkupCategory, as: 'category' },
-                    { model: models.User, as: 'user' },
-                ],
-                order: [['id', 'ASC']],
-            }),
-            models.MarkupCategory.findAll(),
+        const calculatedSegments = await models.CalculatedSegment.findAll({
+            where: { video_id: video.id },
+            include: [
+                { model: models.MarkupCategory, as: 'category' },
+                { model: models.CalculatedSegmentMarkup, as: 'segment_markups' },
+            ],
+            order: [['start', 'ASC']],
+        });
+
+        const markupIds = [...new Set(calculatedSegments.flatMap(seg => seg.segment_markups.map(sm => sm.markup_id)))];
+
+        const [markups, intervals] = await Promise.all([
+            markupIds.length > 0
+                ? models.Markup.findAll({
+                    where: { id: markupIds, deleted_at: null },
+                    include: [{ model: models.User, as: 'user' }],
+                })
+                : [],
+            markupIds.length > 0
+                ? models.MarkupTimeInterval.findAll({ where: { markup_id: markupIds, deleted_at: null } })
+                : [],
         ]);
 
-        const categoryById = {};
-        for (const cat of categories) categoryById[cat.id] = cat.category;
-
-        const markupIds = markups.map(m => m.id);
-        const intervals = markupIds.length > 0
-            ? await models.MarkupTimeInterval.findAll({ where: { markup_id: markupIds, deleted_at: null } })
-            : [];
+        const markupById = {};
+        for (const markup of markups) markupById[markup.id] = markup;
 
         const intervalsByMarkup = {};
         for (const interval of intervals) {
@@ -43,35 +48,22 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             intervalsByMarkup[interval.markup_id].push(interval);
         }
 
-        const calculatedSegments = videoCalculated ? videoCalculated.data : [];
-
-        const markupsByBucket = {};
-        for (const markup of markups) {
-            const markupIntervals = intervalsByMarkup[markup.id] || [];
-            for (const interval of markupIntervals) {
-                const startRounded = Math.floor(interval.start) - (Math.floor(interval.start) % 3);
-                const key = `${markup.category_id}_${startRounded}`;
-                if (!markupsByBucket[key]) markupsByBucket[key] = [];
-                if (!markupsByBucket[key].find(m => m.id === markup.id)) {
-                    markupsByBucket[key].push(markup);
-                }
-            }
-        }
-
         const categoryColors = { intro: '#6366f1', sponsor: '#f59e0b', self_promotion: '#ec4899', credits: '#10b981' };
 
         const segmentRows = calculatedSegments.map(seg => {
-            const startRounded = Math.floor(seg.start) - (Math.floor(seg.start) % 3);
-            const key = `${seg.category_id}_${startRounded}`;
-            const bucketMarkups = markupsByBucket[key] || [];
-            const categoryName = categoryById[seg.category_id] || seg.category_id;
+            const segMarkups = seg.segment_markups
+                .map(sm => markupById[sm.markup_id])
+                .filter(m => m != null);
+            if (segMarkups.length === 0) return '';
+
+            const categoryName = seg.category?.category || seg.category_id;
             const color = categoryColors[categoryName] || '#64748b';
 
             const intervalGroups = {};
-            for (const markup of bucketMarkups) {
+            for (const markup of segMarkups) {
                 const mIntervals = intervalsByMarkup[markup.id] || [];
                 if (mIntervals.length === 0) continue;
-                const interval = mIntervals.find(i => (Math.floor(i.start) - (Math.floor(i.start) % 3)) === startRounded) || mIntervals[0];
+                const interval = mIntervals.find(i => i.start >= seg.start && i.start < seg.end) || mIntervals[0];
                 const gKey = `${interval.start}_${interval.end}`;
                 if (!intervalGroups[gKey]) intervalGroups[gKey] = { start: interval.start, end: interval.end, items: [] };
                 intervalGroups[gKey].items.push(markup);
@@ -79,7 +71,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             const markupRows = Object.values(intervalGroups)
                 .sort((a, b) => a.start - b.start)
                 .map((group, gIdx) => {
-                    const groupId = `${seg.category_id}_${startRounded}_${gIdx}`;
+                    const groupId = `${seg.id}_${gIdx}`;
                     const subRows = group.items.map(markup => {
                         const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
                         const userLink = markup.user?.prv_user_id != null
@@ -109,7 +101,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         <tbody>
             <tr class="segment-row" style="border-left: 4px solid ${color}">
                 <td colspan="2"><button class="toggle-btn" onclick="toggleSegment(this)">Hide</button> <strong><span class="interval-val" data-start="${seg.start}" data-end="${seg.end}"></span></strong> &nbsp;<span class="badge" style="background:${color}">${categoryName}</span></td>
-                <td colspan="5" class="muted">${bucketMarkups.length} markup${bucketMarkups.length !== 1 ? 's' : ''}</td>
+                <td colspan="5" class="muted">${segMarkups.length} markup${segMarkups.length !== 1 ? 's' : ''}</td>
             </tr>
             ${markupRows}
         </tbody>`;
@@ -166,7 +158,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         <span>Calculated segments: ${calculatedSegments.length}</span>
     </div>
 
-    ${!videoCalculated ? '<div class="no-calc">No calculated data for this video yet.</div>' : ''}
+    ${calculatedSegments.length === 0 ? '<div class="no-calc">No calculated data for this video yet.</div>' : ''}
 
     ${calculatedSegments.length > 0 ? `
     <table>
