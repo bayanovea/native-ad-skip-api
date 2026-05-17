@@ -53,6 +53,7 @@ module.exports = function(sequelize) {
         prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
         rating: { type: DataTypes.INTEGER, defaultValue: 0 },
         time_saved: { type: DataTypes.INTEGER, defaultValue: 0 },
+        banned_at: { type: DataTypes.DATE, allowNull: true },
     }, {
         tableName: 'users',
         indexes: [{ unique: true, fields: ['generated_user_id', 'prv_user_id'] }],
@@ -116,6 +117,19 @@ module.exports = function(sequelize) {
         data: { type: DataTypes.JSON, allowNull: true },
     }, { tableName: 'prv_events_client_failed' });
 
+    const AdminDecision = sequelize.define('admin_decision', {
+        target_type: { type: DataTypes.STRING(16), allowNull: false },
+        target_id: { type: DataTypes.INTEGER, allowNull: false },
+        decision: { type: DataTypes.STRING(16), allowNull: false },
+        signals_snapshot: { type: DataTypes.JSONB, allowNull: true },
+        decided_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+        decided_by: { type: DataTypes.STRING(16), allowNull: false },
+    }, {
+        tableName: 'prv_admin_decisions',
+        timestamps: false,
+        indexes: [{ fields: [{ name: 'target_type' }, { name: 'target_id' }, { name: 'decided_at', order: 'DESC' }] }],
+    });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -130,5 +144,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision };
 };

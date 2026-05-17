@@ -413,14 +413,34 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         const markup = await markupRepository.findByPk(markupId);
         if (!markup) { res.status(404).send('Not found'); return; }
 
-        await markupRepository.softDeleteByIds([markupId], 'admin', 1);
+        // Wrap the soft-delete and the follow-up bookkeeping in one
+        // transaction so a crash mid-way can't leave the calculator with a
+        // half-deleted markup and a stale VideoCalculated row. This endpoint
+        // is hit from the legacy /admin/video page AND the new
+        // /admin/user view's delete button, so both surfaces benefit.
+        const sequelize = models.Markup.sequelize;
+        await sequelize.transaction(async (transaction) => {
+            await markupRepository.softDeleteByIds([markupId], 'admin', 1, { transaction });
 
-        const videoMarkups = await markupRepository.findAll({ where: { video_id: markup.video_id } });
-        if (videoMarkups.length > 0) {
-            await models.Markup.update({ is_new: true }, { where: { video_id: markup.video_id } });
-        } else {
-            await models.VideoCalculated.destroy({ where: { video_id: markup.video_id } });
-        }
+            const videoMarkups = await markupRepository.findAll({
+                where: { video_id: markup.video_id },
+                transaction,
+            });
+            if (videoMarkups.length > 0) {
+                // Filter `deleted_at IS NULL` so we don't flip the just-
+                // soft-deleted target back to is_new=true — otherwise the
+                // calculator would resurrect it on its next pass.
+                await models.Markup.update(
+                    { is_new: true },
+                    { where: { video_id: markup.video_id, deleted_at: null }, transaction }
+                );
+            } else {
+                await models.VideoCalculated.destroy({
+                    where: { video_id: markup.video_id },
+                    transaction,
+                });
+            }
+        });
 
         res.status(200).send('Deleted');
     }));

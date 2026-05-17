@@ -5,7 +5,14 @@ const markupRepository = require('../repository/markup')(models, sequelize);
 const markupTimeIntervalRepository = require('../repository/markup-time-interval')(models);
 const durationLogRepository = require('../repository/duration-log')(models);
 const videoRepository = require('../repository/video')(models);
-const userService = require('../service/user')(models, { markupRepository, markupTimeIntervalRepository });
+// moderationRepository MUST be instantiated BEFORE userService — userService's
+// auto-ban hook depends on it to record the auto-decision row at rating threshold.
+const moderationRepository = require('../repository/moderation')(models, sequelize);
+const userService = require('../service/user')(models, {
+    markupRepository,
+    markupTimeIntervalRepository,
+    moderationRepository,
+});
 
 const router = express.Router();
 
@@ -15,5 +22,6 @@ router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('./users')(models));
 router.use('/', require('./events')(models));
 router.use('/', require('./admin')(models, { markupRepository }));
+router.use('/', require('./admin-moderation')(models, { markupRepository, moderationRepository }));
 
 module.exports = router;

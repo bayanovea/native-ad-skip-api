@@ -5,6 +5,7 @@ const yaml = require('js-yaml');
 const fs = require('fs');
 const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
+const { bootstrap } = require('./db');
 require('./prometheus-wrapper');
 
 const app = express();
@@ -24,6 +25,7 @@ const metricsMiddleware = promBundle({
     normalizePath: [
         [/^\/admin\/video\/[^/]+\/user\/\d+$/, '/admin/video/#video_id/user/#prv_user_id'],
         [/^\/admin\/video\/[^/]+$/, '/admin/video/#video_id'],
+        [/^\/admin\/user\/\d+$/, '/admin/user/#internal_id'],
         [/^\/admin\/markups\/\d+\/delete$/, '/admin/markups/#id/delete'],
         [/^(\/(rt|yt))?\/markups\/\d+\/delete$/, '$1/markups/#id/delete'],
         [/^(\/(rt|yt))?\/markups\/\d+$/, '$1/markups/#id'],
@@ -87,6 +89,15 @@ app.use((error, req, res, next) => {
     res.status(500).send('Internal Server Error');
 });
 
-app.listen(port, () => {
-    console.log(`I am alive, http://localhost:${port}`);
+// Block listen() until schema sync + idempotent ALTERs + category seeding all
+// finish. Otherwise Express would accept traffic against a half-migrated DB
+// (e.g. requests touching users.banned_at would fail with `column does not
+// exist` for the brief window between listen() and the ALTER completing).
+bootstrap().then(() => {
+    app.listen(port, () => {
+        console.log(`I am alive, http://localhost:${port}`);
+    });
+}).catch(err => {
+    console.error('Bootstrap failed; refusing to start HTTP server:', err);
+    process.exit(1);
 });

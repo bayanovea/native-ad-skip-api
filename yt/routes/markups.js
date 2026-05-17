@@ -48,6 +48,9 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
             return;
         }
 
+        // Note: banned-user gate is prv-only by design — yt_users has no banned_at column;
+        // moderation tooling and the banned_at column exist only for the prv users table.
+
         const markup = await models.Markup.create({
             video_id: video.id,
             user_id: generatedUserId,

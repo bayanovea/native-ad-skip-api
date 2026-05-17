@@ -58,17 +58,27 @@ module.exports = function createMarkupRepository(models, sequelize) {
             return markupIds;
         },
 
-        async softDeleteByIds(markupIds, userId, prvUserId) {
+        async softDeleteByIds(markupIds, userId, prvUserId, { transaction } = {}) {
             const updateValues = {
                 deleted_at: Date.now(),
                 deleted_by_user_id: userId,
                 deleted_by_prv_user_id: prvUserId,
             };
 
-            await sequelize.transaction(async (transaction) => {
-                await models.Markup.update(updateValues, { where: { id: markupIds }, transaction });
-                await models.MarkupTimeInterval.update(updateValues, { where: { markup_id: markupIds }, transaction });
-            });
+            const run = async (tx) => {
+                await models.Markup.update(updateValues, { where: { id: markupIds }, transaction: tx });
+                await models.MarkupTimeInterval.update(updateValues, { where: { markup_id: markupIds }, transaction: tx });
+            };
+
+            // If the caller already owns a transaction (e.g. /admin/moderation/decide
+            // wraps the whole decision flow in one), join it so the soft-delete is
+            // atomic with the decision-row insert and sibling-update. Otherwise open
+            // our own.
+            if (transaction) {
+                await run(transaction);
+            } else {
+                await sequelize.transaction(run);
+            }
         },
 
         _updateOptionsByDeleted(options, includeDeleted) {

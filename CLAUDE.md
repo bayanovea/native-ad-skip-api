@@ -118,11 +118,12 @@ The segment rows in `{provider}_calculated_segments` are the source of truth for
 
 All three providers share the same route shape; `prv/` has two extras.
 
-- **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
+- **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. It also silently returns 201 (no row created) when the user is hard-banned (banned_at IS NOT NULL); see Authentication. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
 - **`votes.js`** — Vote submission. On each new vote:
   - `{provider}_calculated_segments.rating` is incremented by `vote - prevVote.vote` (or just `vote` if no prior vote from this user)
   - the matching entry in `video_calculateds.data` is rewritten with the same `rating` delta so clients see the updated value
   - the markup author's user `rating` is adjusted via `prv/service/user.js` only when a single markup with an exact `(start, end)` match contributed to the segment
+  - if the rating mutation drops a user to rating ≤ −100, `prv/service/user.js` also sets `banned_at` and writes a `prv_admin_decisions` row with `decided_by='auto'` (idempotent — only the first crossing writes; the `banned_at == null` guard short-circuits repeat crossings)
 - **`videos.js`** — `GET /video-calculated` serves aggregated segments; prv additionally logs duration claims and tracks legacy client versions. Uses a read-only `findVideoForRead` helper (never creates Video rows): looks up by `(native_id, duration±1)`, then `(native_id, null duration)` updating it, then any `native_id` match, then 204.
 - **`prv/routes/events.js`** — `POST /events` (shared by all providers). Accepts a JSON array of mixed events; supported types below. Invalid events (unknown `type`, missing fields) are logged to stdout and skipped — the rest of the batch still processes. Returns `{ data: { time_saved: { ... } } }` when the batch contains at least one `time_saved` event.
   - **`interval_undo`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `category_id`, `start`, `end`. Stored in `{provider}_events_interval_undo`.
@@ -131,6 +132,10 @@ All three providers share the same route shape; `prv/` has two extras.
   - **`client_failed`** — fields: `user_id`, `prv_user_id`, `video_native_id`, `reason` (string), `data` (arbitrary JSON, optional). Stored in `{provider}_events_client_failed`.
 - **`prv/routes/users.js`** — Shared by all providers (currently empty; `POST /users/time-saved` was removed in favour of the events endpoint).
 - **`prv/routes/admin.js`** — Server-rendered HTML dashboard (`/admin/video/:video_id`) for viewing and deleting markups grouped by interval; protected by `AUTH_TOKEN` query param. prv only.
+- **`prv/routes/admin-moderation.js`** — prv-only moderation routes, protected by `AUTH_TOKEN` query param (`?verifyBearerToken=…`).
+  - `GET /admin/moderation?verifyBearerToken=…&show=all&format=json` — admin moderation page. Lists worst users + worst markups sorted by suspicion score (`3*dislikes + 1*undos` for users; `+ 3*max(0, -segment_rating)` for markups). Default view hides rows where a prior decision exists and `current_score - snapshot.score < 5` (`RESURFACE_THRESHOLD`). `?show=all` reveals all. `?format=json` returns structured data for tests/integrations.
+  - `POST /admin/moderation/decide?verifyBearerToken=…` — body `{target_type:'user'|'markup', target_id, decision:'approve'|'reject'}`. Returns `204`. Side effects: `user`+`reject` sets `users.banned_at=NOW()`; `user`+`approve` clears it; `markup`+`reject` soft-deletes the markup and (if no remaining siblings) destroys `VideoCalculated` else marks siblings `is_new=true`; `markup`+`approve` records the decision only. Writes a row to `prv_admin_decisions` with snapshot and `decided_by='admin'`.
+  - `GET /admin/user/:internal_id?verifyBearerToken=…` — video-less per-user view showing all markups across all videos. Param is the internal `users.id` PK, NOT `prv_user_id` (which is not unique — multiple `User` rows can share the same `prv_user_id` because the unique index is composite `(generated_user_id, prv_user_id)`).
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
 ### Authentication
@@ -139,6 +144,7 @@ All three providers share the same route shape; `prv/` has two extras.
 - **Admin dashboard**: `AUTH_TOKEN` as query param (checked directly in `routes/admin.js`)
 - **API docs** (`/api/doc`): HTTP Basic Auth — username `admin`, password `AUTH_TOKEN` env var
 - Public write endpoints (markup creation, votes) are unauthenticated
+- `POST /markup` silently returns 201 (no markup row created) when the user's `banned_at IS NOT NULL`, parallel to the existing `rating ≤ -2` soft gate.
 
 ### Database Models
 
@@ -152,7 +158,8 @@ All three providers share the same route shape; `prv/` has two extras.
 | `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating` updated by votes |
 | `CalculatedSegmentMarkup` | Junction linking a `CalculatedSegment` to each contributing `Markup` — table `{provider}_calculated_segment_markups` |
 | `Vote` | User vote on a calculated segment (-1, 0, +1) |
-| `User` | Internal user mapped to prv user ID; tracks `rating` and `time_saved` |
+| `User` | Internal user mapped to prv user ID; tracks `rating`, `time_saved`, and `banned_at` (hard ban — set by admin via /admin/moderation/decide or automatically when rating ≤ -100; gates POST /markup independently of the soft `rating ≤ -2` check) |
+| `AdminDecision` | Append-only log of admin moderation decisions — table `prv_admin_decisions` (prv only — no rt_ / yt_ analogue exists; moderation is prv-scoped per plan). Fields `target_type` ('user'\|'markup'), `target_id`, `decision` ('approve'\|'reject'), `signals_snapshot` (JSONB), `decided_at`, `decided_by` ('admin'\|'auto'). Latest row per target acts as a watermark for the re-surface threshold on /admin/moderation. All writes go through `moderationRepository.recordDecision()` — both the admin POST endpoint and the auto-ban hook share this single entrypoint to keep `signals_snapshot` consistent. |
 | `DurationLog` | Tracks claimed video durations for anomaly detection |
 | `IntervalUndo` | Records interval undo events — table `{provider}_events_interval_undo` |
 | `IntervalClick` | Records interval click events with `click_time` — table `{provider}_events_interval_click` |
@@ -162,6 +169,8 @@ All three providers share the same route shape; `prv/` has two extras.
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 
 **Dual User ID System:** Users have both a `generated_user_id` (UUID) and an optional `prv_user_id`. The codebase is transitioning to internal DB `id` references.
+
+**Schema bootstrap:** project has no migrations folder. New tables come from `sequelize.sync()` (run on every boot in `db.js`); new columns on existing tables are added with idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements queued inside the `sync().then(...)` callback. Example: `banned_at` on `users`.
 
 ### Prometheus Metrics (`prometheus-wrapper.js`, `server.js`)
 

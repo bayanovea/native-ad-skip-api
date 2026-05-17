@@ -54,6 +54,18 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
             return;
         }
 
+        if (user.banned_at != null) {
+            console.warn('Do not create markup because user is banned', {
+                generatedUserId,
+                prvUserId: req.body.prv_user_id,
+                videoId,
+                categoryId: req.body.category_id,
+                intervals: req.body.data.intervals,
+            });
+            res.status(201).send('Created');
+            return;
+        }
+
         const markup = await models.Markup.create({
             video_id: video.id,
             user_id: generatedUserId,
@@ -177,14 +189,18 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
             await models.Video.update({ duration: req.body.duration }, { where: { id: markup.video_id } });
         }
 
-        await markupRepository.softDeleteByIds([markupId], 'admin', 1);
-
-        const videoMarkups = await markupRepository.findAll({ where: { video_id: markup.video_id } });
-        if (videoMarkups.length > 0) {
-            await models.Markup.update({ is_new: true }, { where: { video_id: markup.video_id } });
-        } else {
-            await models.VideoCalculated.destroy({ where: { video_id: markup.video_id } });
-        }
+        await sequelize.transaction(async (transaction) => {
+            await markupRepository.softDeleteByIds([markupId], 'admin', 1, { transaction });
+            const videoMarkups = await markupRepository.findAll({ where: { video_id: markup.video_id }, transaction });
+            if (videoMarkups.length > 0) {
+                await models.Markup.update(
+                    { is_new: true },
+                    { where: { video_id: markup.video_id, deleted_at: null }, transaction }
+                );
+            } else {
+                await models.VideoCalculated.destroy({ where: { video_id: markup.video_id }, transaction });
+            }
+        });
 
         res.status(201).send('Deleted');
     }));
@@ -204,14 +220,18 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
             await models.Video.update({ duration: req.body.duration }, { where: { id: markup.video_id } });
         }
 
-        await markupRepository.softDeleteByIds([markupId], 'admin', 1);
-
-        const videoMarkups = await markupRepository.findAll({ where: { video_id: markup.video_id } });
-        if (videoMarkups.length > 0) {
-            await models.Markup.update({ is_new: true }, { where: { video_id: markup.video_id } });
-        } else {
-            await models.VideoCalculated.destroy({ where: { video_id: markup.video_id } });
-        }
+        await sequelize.transaction(async (transaction) => {
+            await markupRepository.softDeleteByIds([markupId], 'admin', 1, { transaction });
+            const videoMarkups = await markupRepository.findAll({ where: { video_id: markup.video_id }, transaction });
+            if (videoMarkups.length > 0) {
+                await models.Markup.update(
+                    { is_new: true },
+                    { where: { video_id: markup.video_id, deleted_at: null }, transaction }
+                );
+            } else {
+                await models.VideoCalculated.destroy({ where: { video_id: markup.video_id }, transaction });
+            }
+        });
 
         res.status(201).send('Deleted');
     }));
