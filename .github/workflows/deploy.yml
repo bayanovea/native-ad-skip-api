@@ -65,7 +65,7 @@ jobs:
         docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml down 2>/dev/null || true
 
         # Сборка и запуск с использованием Docker Compose
-        docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d app grafana
+        docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d app prometheus grafana
           # --scale app=2
         
         # Очистка
