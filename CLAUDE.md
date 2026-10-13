@@ -195,12 +195,12 @@ The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calcul
 
 **Storage / scrape:** Prometheus scrapes `app:3022/metrics` every 30 s and stores data on the `prometheus_data` named Docker volume (mounted at `/prometheus` in the container; pinned project name `native-ad-skip-api` → stable volume `native-ad-skip-api_prometheus_data`). Retention is bounded by **both** `--storage.tsdb.retention.time=30d` and `--storage.tsdb.retention.size=2GB`; whichever hits first wins, so the volume can never exceed ~2 GB. The size cap exists because the `path` label on `http_request_duration_seconds` is effectively unbounded (unmatched/404 URLs each create their own series), which previously grew the volume to 35 GB. Prometheus does not downsample — reclaiming space means dropping whole 2 h blocks, which it does on startup and every compaction cycle.
 
-**Grafana:** sibling repo at `../native-ad-skip-grafana` holds the Grafana compose stack. Both stacks attach to the external `main-network` (precondition on the host: `docker network create main-network`); Grafana's datasource points at `http://prometheus:9090` by DNS within that network. Dashboards are maintained manually and persisted on the `native-ad-skip-grafana_grafana_data` volume.
+**Grafana:** the `grafana` service in `docker-compose.yml` (the old `../native-ad-skip-grafana` repo is superseded). All services attach to the external `main-network` (precondition on the host: `docker network create main-network`). Datasources are provisioned from `grafana/provisioning/datasources/datasources.yml`: Prometheus at `http://prometheus:9090`, Postgres at `${DB_HOST}:5432` (= `host.docker.internal`). Dashboards are provisioned from `grafana/dashboards`; ad-hoc UI edits live only on the `native-ad-skip-api_grafana_data` volume. Grafana listens on plain HTTP `:3024`; access is limited to admin IPs by the **Timeweb cloud firewall** — host `ufw` rules do not apply to Docker-published ports.
 
 ### Environment Variables
 
 ```
-DB_NAME, DB_USER, DB_PASSWORD, DB_HOST   # PostgreSQL connection
+DB_NAME, DB_USER, DB_PASSWORD, DB_HOST   # PostgreSQL connection (prod: DB_HOST=host.docker.internal, set in docker-compose.yml)
 NODE_APP_PORT=3022                        # HTTP server port
 AUTH_TOKEN                                # Admin bearer token
 ENV=dev|production                        # Controls yarn dev vs yarn start
@@ -208,4 +208,9 @@ ENV=dev|production                        # Controls yarn dev vs yarn start
 
 ### Deployment
 
-CI/CD via GitHub Actions (`.github/workflows/deploy.yml`): pushes to `main` SSH-transfer the codebase to a Yandex Cloud VM and rebuild the Docker container. Supervisor inside Docker manages cron (Go CLI) and the Node.js app simultaneously.
+Prod is a single Timeweb Cloud VM in Novosibirsk (Ubuntu 24.04), migrated from Yandex Cloud in Oct 2026 — see `docs/plans/20261014-timeweb-migration.md`.
+
+- **CI/CD:** GitHub Actions (`.github/workflows/deploy.yml`): pushes to `main` tar the codebase over SSH as `skipper-admin` and run `docker compose -p native-ad-skip-api up --build -d app prometheus grafana`. Secrets: `HOST_IP`, `SSH_PRIVATE_KEY`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `NODE_APP_PORT`, `AUTH_TOKEN`, `GF_ADMIN_PASSWORD`. Supervisor inside the app container manages cron (Go CLI) and the Node.js app.
+- **TLS / reverse proxy:** nginx on the host terminates TLS for `${API_HOST}` (Let's Encrypt, certbot webroot renewals) and proxies to `127.0.0.1:3022`. The vhost is versioned in `infrastructure/nginx/` and copied to the host by hand. `.dev` is HSTS-preloaded, so the API is HTTPS-only.
+- **Postgres:** PostgreSQL 16 installed on the host via apt, not in Docker. Containers reach it at `host.docker.internal` (`extra_hosts: host-gateway`); `pg_hba` + `ufw` allow only `172.16.0.0/12` (Docker bridges) and localhost, so 5432 is never public.
+- **Backups:** nightly `pg_dump` to the Timeweb S3 bucket `adskip-backups` via `infrastructure/backup/pg-backup.sh` (root cron), plus Timeweb VM auto-backups. Restore drill in `infrastructure/backup/README.md`.

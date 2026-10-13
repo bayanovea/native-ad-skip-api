@@ -1,12 +1,11 @@
-version: '3.8'
-
 services:
   app:
     build: .
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3022:3022"
     extra_hosts:
-      - "database:178.154.241.202"
+      - "host.docker.internal:host-gateway"
     networks:
       - main-network
     environment:
@@ -14,7 +13,7 @@ services:
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_HOST=178.154.241.202
+      - DB_HOST=host.docker.internal
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
@@ -50,7 +49,7 @@ services:
     ports:
       - "3024:3024"
     extra_hosts:
-      - "database:178.154.241.202"
+      - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
     networks:
@@ -64,7 +63,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
-      - DB_HOST=database
+      - DB_HOST=host.docker.internal
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}

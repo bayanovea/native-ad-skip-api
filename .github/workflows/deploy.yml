@@ -1,4 +1,4 @@
-name: Build and Run Docker Image on YC
+name: Build and Run Docker Image on Timeweb
 
 on:
   push:
@@ -12,41 +12,32 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Setup SSH
       env:
-        PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_YC }}
+        PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       run: |
         mkdir -p ~/.ssh/
-        echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        echo "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+        echo "$PRIVATE_KEY" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
 
-    - name: Transfer Codebase to YC
+    - name: Transfer Codebase to Timeweb
       run: |
-        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP_YC }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
+        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
 
-    - name: Deploy to YC
+    - name: Deploy to Timeweb
       env:
         DB_NAME: ${{ secrets.DB_NAME }}
         DB_USER: ${{ secrets.DB_USER }}
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        DB_HOST: database
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
         AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
-        HOST_IP: ${{ secrets.HOST_IP_YC }}
+        HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
       run: |
         ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP "
-        # Остановка и удаление существующих контейнеров и образов
-        CONTAINER_ID=\$(docker ps -aq --filter 'ancestor=${IMAGE_NAME}_app')
-        if [ ! -z '\$CONTAINER_ID' ]; then 
-          docker stop \$CONTAINER_ID
-          docker rm \$CONTAINER_ID
-        fi
-        
         # Перенос и распаковка исходного кода
         cd /home/skipper-admin/tmp
         tar xzf codebase.tar.gz
@@ -55,18 +46,14 @@ jobs:
         export DB_NAME='$DB_NAME'
         export DB_USER='$DB_USER'
         export DB_PASSWORD='$DB_PASSWORD'
-        export DB_HOST='$DB_HOST'
         export NODE_APP_PORT='$NODE_APP_PORT'
         export AUTH_TOKEN='$AUTH_TOKEN'
         export GF_ADMIN_PASSWORD='$GF_ADMIN_PASSWORD'
         export HOST_IP='$HOST_IP'
 
-        # Удаление всех контейнеров проекта через compose (обход бага docker-compose v1 с ContainerConfig)
-        docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml down 2>/dev/null || true
+        # Сборка и запуск с использованием Docker Compose v2
+        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml down
+        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d app prometheus grafana
 
-        # Сборка и запуск с использованием Docker Compose
-        docker-compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d app prometheus grafana
-          # --scale app=2
-        
         # Очистка
         rm -rf /home/skipper-admin/tmp/codebase.tar.gz"
