@@ -75,8 +75,9 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [ ] sshd hardening: `PasswordAuthentication no`, `PermitRootLogin prohibit-password` in `/etc/ssh/sshd_config.d/99-hardening.conf`; `systemctl restart ssh`
 - [ ] install Docker Engine + compose plugin from Docker's apt repo (Ubuntu's `docker.io` package is fine too but older): follow https://docs.docker.com/engine/install/ubuntu/ ; `docker compose version` → v2.x
 - [ ] `docker network create main-network` (external network the compose file requires)
-- [ ] `ufw default deny incoming; ufw default allow outgoing; ufw allow 22; ufw allow 80; ufw allow 443; ufw allow from <ADMIN_IP> to any port 3024; ufw enable` — Timeweb panel firewall: mirror the same rules (both layers, belt and braces)
-- [ ] verify: `ssh skipper-admin@NEW_IP docker ps` works without sudo; `nmap -p 22,80,443,3022,3024,5432 NEW_IP` from the Mac shows only 22/80/443 open
+- [ ] `ufw default deny incoming; ufw default allow outgoing; ufw allow 22; ufw allow 80; ufw allow 443; ufw enable`
+- [ ] ⚠️ Timeweb panel → Firewall: inbound allow 22, 80, 443 from anywhere, **3024 only from `<ADMIN_IP>`**, deny the rest; attach to the server. This layer is the one that actually protects Grafana: Docker publishes `3024:3024` through its own iptables DNAT rules, which bypass `ufw` entirely, so a `ufw allow from <ADMIN_IP> to any port 3024` rule would be a no-op. If the panel firewall is unavailable, bind Grafana to `127.0.0.1:3024` and use `ssh -L 3024:localhost:3024` instead.
+- [ ] verify: `ssh skipper-admin@NEW_IP docker ps` works without sudo; `nmap -Pn -p 22,80,443,3022,3024,5432 NEW_IP` from the Mac shows only 22/80/443 open (re-check 3024 from a non-admin IP after Task 7, when Grafana is actually listening)
 
 ### Task 3: PostgreSQL 16 on the host, reachable only from Docker and localhost
 
@@ -96,8 +97,8 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 **Files:** `~/Web/dumps/outputfile-09-10-2026.sql` (Mac → VM)
 
 - [ ] `scp ~/Web/dumps/outputfile-09-10-2026.sql skipper-admin@NEW_IP:/home/skipper-admin/tmp/`
-- [ ] restore as superuser into the empty DB (the dump has `OWNER TO postgres` lines that a non-superuser cannot execute): `sudo -u postgres psql -v ON_ERROR_STOP=1 -d <DB_NAME> -f /home/skipper-admin/tmp/outputfile-09-10-2026.sql`
-- [ ] hand ownership to the app role: `sudo -u postgres psql -d <DB_NAME> -c "REASSIGN OWNED BY postgres TO <DB_USER>;"`
+- [ ] ➕ restore **as the app role** with the 85 `ALTER … OWNER TO postgres;` lines stripped (41 tables, 41 sequences, 3 enum types — checked against the dump; it has no extensions, grants or functions), so every object is created owned by `<DB_USER>`: `sed -E '/^ALTER (TABLE|SEQUENCE|TYPE) .* OWNER TO postgres;$/d' /home/skipper-admin/tmp/outputfile-09-10-2026.sql | psql -v ON_ERROR_STOP=1 -q "postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:5432/<DB_NAME>" > /dev/null` (stdout is just ~40 `setval` results). Rehearsed 2026-10-14 in `postgres:16` (16.15) against the real dump: row counts match, all 41 tables owned by the app role, `markups_id_seq` = 12901, `users.banned_at` present. The original "restore as postgres, then `REASSIGN OWNED BY postgres TO <DB_USER>`" does not work: Postgres refuses to reassign objects of the bootstrap superuser (`cannot reassign ownership of objects owned by role postgres because they are required by the database system`). The `public` schema is writable by `<DB_USER>` because PG 15+ grants it to the database owner.
+- [ ] verify ownership: `psql … -c "select count(*) from pg_tables where schemaname='public' and tableowner <> '<DB_USER>'"` → `0`
 - [ ] verify row counts match the dump: `psql ... -c "select (select count(*) from markups), (select count(*) from markup_time_intervals), (select count(*) from videos), (select count(*) from video_calculateds), (select count(*) from votes), (select count(*) from users)"` → `12531 | 12527 | 6326 | 6324 | 2628 | 1705`
 - [ ] verify sequences were restored (dump includes `setval`): `select last_value from markups_id_seq` ≥ 12531
 - [ ] verify `users.banned_at` column exists (it is in the dump; `db.js` bootstrap's `ADD COLUMN IF NOT EXISTS` would also handle it)
@@ -110,12 +111,12 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - Create: `infrastructure/nginx/README.md` (3 lines: where it goes, certbot command, reload)
 
 - [ ] reg.ru → DNS zone `${DNS_ZONE}` → edit `A api` → `NEW_IP`; set TTL to 300 if the panel allows (current TTL is 3600 s; lower it so a rollback to another host is fast). Nothing to protect on the old IP, so do this now rather than at the end.
-- [ ] `apt install -y nginx certbot python3-certbot-nginx`
-- [ ] write `infrastructure/nginx/api.conf` in the repo: `server_name ${API_HOST};` `location / { proxy_pass http://127.0.0.1:3022; proxy_set_header Host $host; X-Real-IP / X-Forwarded-For / X-Forwarded-Proto; proxy_read_timeout 60s; }` plus `client_max_body_size 1m;` (events batches are small JSON). `server.js` already has `trust proxy = true`, so `X-Forwarded-For` is what the rating/ban logic and `/metrics` see.
-- [ ] `scp` it to `/etc/nginx/sites-available/`, symlink into `sites-enabled`, remove `default`, `nginx -t && systemctl reload nginx`
-- [ ] wait for `dig +short ${API_HOST} @ns1.reg.ru` → `NEW_IP`, then `certbot --nginx -d ${API_HOST} --non-interactive --agree-tos -m <email> --redirect`
-- [ ] verify: `curl -sI https://${API_HOST}/` → `502` from nginx (app not up yet) with a valid LE cert; `systemctl list-timers | grep certbot` shows the renewal timer
-- [ ] commit the nginx config + README to the repo (`infra: nginx vhost for api (Timeweb host)`)
+- [ ] `apt install -y nginx certbot` (no `python3-certbot-nginx`: certbot runs with the webroot authenticator so it never rewrites the vhost, and the committed file stays identical to the host copy)
+- [x] write `infrastructure/nginx/api.conf` in the repo: `:80` serves `/.well-known/acme-challenge/` from `/var/www/html` and 301s everything else; `:443` with the LE cert paths, TLS 1.2/1.3, `client_max_body_size 1m`, `proxy_pass http://127.0.0.1:3022` with `Host` / `X-Real-IP` / `X-Forwarded-Proto`. `X-Forwarded-For` is set to `$remote_addr` (overwrite, not append) because `trust proxy = true` would otherwise make a client-supplied header `req.ip`; the app doesn't read client IPs today, so this is just hygiene. Validated with `nginx -t` on `nginx:1.24` (Ubuntu 24.04's version — hence `listen 443 ssl http2`, not `http2 on`).
+- [ ] wait for `dig +short ${API_HOST} @ns1.reg.ru` → `NEW_IP`; with the stock `default` site still enabled (it serves `/var/www/html` on `:80`): `certbot certonly --webroot -w /var/www/html -d ${API_HOST} --non-interactive --agree-tos -m <email> --deploy-hook "systemctl reload nginx"`
+- [ ] `scp` the vhost to `/etc/nginx/sites-available/`, symlink into `sites-enabled`, remove `default`, `nginx -t && systemctl reload nginx` (steps also in `infrastructure/nginx/README.md`)
+- [ ] verify: `curl -sI https://${API_HOST}/` → `502` from nginx (app not up yet) with a valid LE cert; `curl -sI http://${API_HOST}/` → `301`; `systemctl list-timers | grep certbot` shows the renewal timer; `certbot renew --dry-run` passes
+- [x] commit the nginx config + README to the repo (`infra: nginx vhost for api (Timeweb host)`)
 
 ### Task 6: Repo changes — compose, deploy workflow, docs
 
@@ -125,25 +126,27 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - Modify: `CLAUDE.md` (Deployment, Environment Variables, Grafana paragraph)
 - Modify: `docs/plans/20260925-close-db-public-exposure.md` (mark Tasks 1–6 superseded by this plan)
 
-- [ ] `docker-compose.yml` `app` and `grafana`: replace `extra_hosts: database:178.154.241.202` with `extra_hosts: - "host.docker.internal:host-gateway"`; `app` `DB_HOST=host.docker.internal`; `grafana` `DB_HOST=host.docker.internal` (Grafana's Postgres datasource reads `${DB_HOST}`, see `grafana/provisioning/datasources/datasources.yml`)
-- [ ] `docker-compose.yml` `grafana` ports: keep `3024:3024` (ufw restricts it); optionally change to `127.0.0.1:3024:3024` later when it goes behind nginx (Post-Completion)
-- [ ] remove `version: '3.8'` (compose v2 warns on it) — cosmetic, optional
-- [ ] `.github/workflows/deploy.yml`: rename secrets `SSH_PRIVATE_KEY_YC`→`SSH_PRIVATE_KEY`, `HOST_IP_YC`→`HOST_IP`; `docker-compose` → `docker compose` (both `down` and `up`); drop the now-unneeded `docker ps --filter ancestor` block and the v1 ContainerConfig comment; rename the workflow/job titles from "YC" to "Timeweb"; keep `DB_HOST: database` export or drop it (compose no longer reads it — drop it to avoid confusion)
-- [ ] `grep -rn "178.154.241.202" --exclude-dir=node_modules --exclude-dir=vendor .` → only `docs/` hits remain
-- [ ] `CLAUDE.md`: Deployment section → Timeweb Cloud Novosibirsk, nginx on host terminates TLS for `${API_HOST}`, Postgres 16 on host reached via `host.docker.internal`; Environment Variables → `DB_HOST=host.docker.internal` in prod; Grafana paragraph → remove the "sibling repo holds the Grafana compose stack" sentence (stale since the consolidation plan) and note `ufw`-restricted `:3024`
+- [x] `docker-compose.yml` `app` and `grafana`: replace `extra_hosts: database:178.154.241.202` with `extra_hosts: - "host.docker.internal:host-gateway"`; `app` `DB_HOST=host.docker.internal`; `grafana` `DB_HOST=host.docker.internal` (Grafana's Postgres datasource reads `${DB_HOST}`, see `grafana/provisioning/datasources/datasources.yml`)
+- [x] `docker-compose.yml` `grafana` ports: keep `3024:3024` (ufw restricts it); optionally change to `127.0.0.1:3024:3024` later when it goes behind nginx (Post-Completion)
+- [x] remove `version: '3.8'` (compose v2 warns on it) — cosmetic, optional
+- [x] ➕ `app`: add `restart: unless-stopped` (prometheus/grafana had it, app didn't — a host reboot or auto-backup restore left the API down until the next deploy)
+- [x] `.github/workflows/deploy.yml`: rename secrets `SSH_PRIVATE_KEY_YC`→`SSH_PRIVATE_KEY`, `HOST_IP_YC`→`HOST_IP`; `docker-compose` → `docker compose` (both `down` and `up`); drop the now-unneeded `docker ps --filter ancestor` block and the v1 ContainerConfig comment; rename the workflow/job titles from "YC" to "Timeweb"; keep `DB_HOST: database` export or drop it (compose no longer reads it — drop it to avoid confusion). ➕ Also bumped `actions/checkout@v2` → `@v4`, wrote the key to `~/.ssh/id_ed25519`, dropped the no-op `echo "Host *\n…"` line; `down` no longer swallows errors (it was only there for the v1 ContainerConfig bug)
+- [x] `grep -rn "178.154.241.202" --exclude-dir=node_modules --exclude-dir=vendor .` → only `docs/` hits remain
+- [x] `CLAUDE.md`: Deployment section → Timeweb Cloud Novosibirsk, nginx on host terminates TLS for `${API_HOST}`, Postgres 16 on host reached via `host.docker.internal`; Environment Variables → `DB_HOST=host.docker.internal` in prod; Grafana paragraph → remove the "sibling repo holds the Grafana compose stack" sentence (stale since the consolidation plan) and note `ufw`-restricted `:3024`
 - [ ] run `make test-e2e` locally — the e2e compose is independent of these edits, but it proves nothing else broke
-- [ ] commit: `chore: point deploy and compose at Timeweb host, DB via host-gateway`
+- [x] commit: `chore: point deploy and compose at Timeweb host, DB via host-gateway`
+- [x] ➕ `docs/plans/20260925-close-db-public-exposure.md`: status note at the top (superseded by this plan)
 
 ### Task 7: GitHub secrets + first deploy
 
 **Files:** none (GitHub settings)
 
-- [ ] repo Settings → Secrets: add `HOST_IP=NEW_IP`, `SSH_PRIVATE_KEY=<contents of ~/.ssh/adskip-deploy>`; set `DB_NAME`, `DB_USER`, `DB_PASSWORD` to the Task 3 values; `NODE_APP_PORT=3022`; `AUTH_TOKEN`, `GF_ADMIN_PASSWORD` (new or reused — see Development Approach); delete `*_YC` secrets
+- [ ] repo Settings → Secrets: add `HOST_IP=NEW_IP`, `SSH_PRIVATE_KEY=<contents of ~/.ssh/adskip-deploy>`; set `DB_NAME`, `DB_USER`, `DB_PASSWORD` to the Task 3 values; `NODE_APP_PORT=3022`; `AUTH_TOKEN`, `GF_ADMIN_PASSWORD` (new or reused — see Development Approach); delete `*_YC` secrets (`DB_HOST` is no longer read from secrets — compose hardcodes `host.docker.internal`)
 - [ ] push `main` (Task 5 + Task 6 commits) → Actions run; or trigger `workflow_dispatch`
 - [ ] on the VM: `docker ps` → `native-ad-skip-api-app-1`, `-prometheus-1`, `-grafana-1` up; `docker logs native-ad-skip-api-app-1` shows `Tables schemas synced` and the listen line, no `Unable to connect to the database`
 - [ ] verify Go cron: after 2 minutes `docker exec native-ad-skip-api-app-1 tail -5 /tmp/mycron.log` → clean runs for prv/rt/yt, no connection errors
 - [ ] verify: `curl -s https://${API_HOST}/` → `{"status":"ok"}`; `curl -s "https://${API_HOST}/video-calculated?v=1&native_id=<known id from dump>"` returns segments
-- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP, both datasources "Test" green, dashboards render with live data
+- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP, both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2)
 
 ### Task 8: Day-one reachability test from Russia
 
@@ -162,11 +165,11 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - Create: `infrastructure/backup/README.md`
 
 - [ ] Timeweb panel → S3 хранилище → create bucket `adskip-backups` (smallest tier), create access key; `apt install -y s3cmd` (or `awscli`), configure with Timeweb's endpoint `https://s3.twcstorage.ru` (check the panel for the exact endpoint/region)
-- [ ] `infrastructure/backup/pg-backup.sh`: `pg_dump -U <DB_USER> <DB_NAME> | gzip > /var/backups/pg/<DB_NAME>-$(date +%F).sql.gz`, upload to S3, delete local files older than 3 days; S3 lifecycle rule expires objects after 30 days
-- [ ] install to `/usr/local/bin`, credentials in `/root/.s3cfg` (mode 600), root cron `15 03 * * *` (00:15 Novosibirsk time ≈ low traffic), log to `/var/log/pg-backup.log`
+- [x] `infrastructure/backup/pg-backup.sh` (rehearsed in `postgres:16` with `s3cmd` stubbed: success path, failure path exits 1, restore drill row counts match): `runuser -u postgres -- pg_dump <DB_NAME> | gzip > /var/backups/pg/<DB_NAME>-$(date +%F).sql.gz` (peer auth, no password on disk; `pipefail` so a failed dump fails the run), `s3cmd put` to the bucket, delete local files older than 3 days; S3 lifecycle rule expires objects after 30 days (`s3cmd expire` or the panel)
+- [ ] install to `/usr/local/bin`, credentials in `/root/.s3cfg` (mode 600), root cron `15 0 * * * DB_NAME=<DB_NAME> /usr/local/bin/pg-backup.sh` (host clock UTC → 03:15 Moscow, low traffic; the original `15 03` was 06:15 MSK / 10:15 Novosibirsk), log to `/var/log/pg-backup.log`. Full recipe: `infrastructure/backup/README.md`
 - [ ] run it once by hand; verify `s3cmd ls s3://adskip-backups/` shows today's file and `gunzip -c <file> | head -20` is a valid dump
 - [ ] restore drill: `createdb restore_test && gunzip -c <file> | sudo -u postgres psql -v ON_ERROR_STOP=1 -d restore_test` → row counts match prod; `dropdb restore_test`
-- [ ] commit script + README (`infra: nightly pg_dump to Timeweb S3`)
+- [x] commit script + README (`infra: nightly pg_dump to Timeweb S3`)
 
 ### Task 10: Disable the stale Grafana pipeline and tidy the old infra references
 
