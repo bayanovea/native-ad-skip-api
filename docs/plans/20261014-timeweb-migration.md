@@ -155,11 +155,11 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 **Files:** none
 
-- [ ] from a Russian phone on mobile data (not Wi-Fi): open `https://${API_HOST}/` in the browser → `{"status":"ok"}`
-- [ ] from a home wired ISP in Russia: same curl
-- [ ] load the video platform with the extension installed, play a video that has segments in the dump → skip works; check `docker logs` for the `GET /video-calculated` line and the `/metrics` counter `video_calculated_lookup_total{outcome="match"}` incrementing
-- [ ] submit a test markup + vote through the extension (or curl per `api/doc/openapi.yaml`) → row appears, next cron tick updates `video_calculateds`
-- [ ] ⚠️ if the phone test fails while the wired one passes: that is the mobile-whitelist problem from the research, not a config bug; no host fix exists — record it and move on
+- [x] from a Russian phone on mobile data (not Wi-Fi): open `https://${API_HOST}/` in the browser → `{"status":"ok"}` → OK (owner, 2026-10-15)
+- [x] from a home wired ISP in Russia: same curl → OK (owner, 2026-10-15)
+- [x] load the video platform with the extension installed, play a video that has segments in the dump → skip works; check `docker logs` for the `GET /video-calculated` line and the `/metrics` counter `video_calculated_lookup_total{outcome="match"}` incrementing → skip works (owner); nginx log shows ~175 `/video-calculated` hits from real users within ~20 min of the deploy
+- [ ] submit a test markup + vote through the extension (or curl per `api/doc/openapi.yaml`) → row appears, next cron tick updates `video_calculateds` → markup half done: real-user markup #12902 (11:22 UTC) and owner's #12903 (11:40 UTC) both processed by the cron (`is_new=false`, 2 `Calculate video finish`, no errors). ⚠️ Vote not seen: no `/vote` request in the nginx access log, no new/updated `votes` row (max id 2781)
+- [x] ⚠️ if the phone test fails while the wired one passes: that is the mobile-whitelist problem from the research, not a config bug; no host fix exists — record it and move on → N/A, both passed
 
 ### Task 9: Off-host backups
 
