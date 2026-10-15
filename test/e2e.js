@@ -2658,7 +2658,11 @@ function loadKeyboardPage(html, storages) {
         localStorage: storages.local,
         sessionStorage: storages.session,
         location,
-        open: (url, target, features) => page.opened.push({ url, target, features }),
+        // A popup blocker returns null; otherwise a window whose opener the page may clear.
+        open: (url, target, features) => {
+            page.opened.push({ url, target, features });
+            return page.blockPopups ? null : { opener: window };
+        },
     };
     const ctx = vm.createContext({
         window, document: doc, console,
@@ -2687,6 +2691,12 @@ function loadKeyboardPage(html, storages) {
             }
         },
         type(text) { for (const ch of text) page.key(ch); },
+        // The review page the user looks at after switching: the new tab when
+        // the switch swapped tabs (this one became the player), else this tab.
+        reviewUrl() {
+            const tab = [...page.opened].reverse().find(o => o.url.startsWith('/admin/review/') && o.target === '_blank');
+            return tab ? tab.url : page.navigatedTo;
+        },
     });
     return page;
 }
@@ -2703,7 +2713,7 @@ async function saveAndFollow(page, opts) {
     page.key('Enter', opts);
     for (let i = 0; i < 200 && !page.navigatedTo; i++) await sleep(10);
     assert.ok(page.navigatedTo, `save did not navigate; status: ${page.els.status.textContent}`);
-    return page.navigatedTo;
+    return page.reviewUrl();
 }
 
 // Items C1..Cn at 10·n s, each with the stored player link at start − 2 s.
@@ -2735,16 +2745,17 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     page.key('k');
     assert.equal(page.navigatedTo, null, 'no previous item on C1');
     assert.deepEqual(page.opened, [], 'no item switch, no player');
-    // Switching items also opens the new item's player.
+    // Switching items swaps tabs: the new item opens in a new tab in front,
+    // this tab turns into its player (loading behind the review page).
     page.key('j');
-    assert.equal(page.navigatedTo, itemPath('C2'));
-    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=18s', target: '_blank', features: 'noopener,noreferrer' }]);
-    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.deepEqual(page.opened, [{ url: itemPath('C2'), target: '_blank', features: undefined }]);
+    assert.equal(page.navigatedTo, 'https://example.invalid/video-1_3?t=18s');
+    ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     assert.equal(page.state().item_code, 'C2');
     page.key('k');
-    assert.equal(page.navigatedTo, itemPath('C1'));
-    assert.deepEqual(page.opened.map(o => o.url), ['https://example.invalid/video-1_3?t=8s']);
-    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.equal(page.reviewUrl(), itemPath('C1'));
+    assert.equal(page.navigatedTo, 'https://example.invalid/video-1_3?t=8s');
+    ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     page.key('o');
     assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener,noreferrer' }]);
 
@@ -2761,14 +2772,13 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     page.key('Escape');
     assert.equal(page.active(), 'BODY');
     page.opened.length = 0;
-    assert.equal(await saveAndFollow(page), itemPath('C2'));
-    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=18s', target: '_blank', features: 'noopener,noreferrer' }],
-        'save → next item opens its player');
+    assert.equal(await saveAndFollow(page), itemPath('C2'), 'save → next item in a new tab');
+    assert.equal(page.navigatedTo, 'https://example.invalid/video-1_3?t=18s', 'this tab turns into its player');
     assert.equal(storages.local.getItem('adminReview.reviewer'), 'kbd');
 
     // C2: flash from the previous save; reviewer remembered; c → comment,
     // a digit typed there is text; Ctrl+Enter saves from the comment box.
-    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     assert.equal(page.els.status.textContent, 'Saved C1: sponsor. Flagged by: run-kbd');
     assert.equal(page.els.status.className, 'status ok');
     assert.equal(storages.session.getItem('adminReview.flash'), null, 'flash shown once');
@@ -2782,7 +2792,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.equal(await saveAndFollow(page, { ctrl: true }), itemPath('C3'));
 
     // C3: Enter without a verdict is refused; then 3 + Enter.
-    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     page.key('Enter');
     await sleep(20);
     assert.equal(page.navigatedTo, null);
@@ -2791,11 +2801,12 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.equal(await saveAndFollow(page), itemPath('C4'));
 
     // C4: last open item → the page reloads C4, now decided and unblinded.
-    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     page.key('4');
     assert.equal(await saveAndFollow(page), itemPath('C4'));
     assert.deepEqual(page.opened, [], 'last open item reloads itself, no player');
-    ({ page, html } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.equal(page.navigatedTo, itemPath('C4'));
+    ({ page, html } = await openKeyboardPage(page.reviewUrl(), storages));
     assert.ok(html.includes('4 / 4 decided · 0 open'));
     assert.ok(html.includes('class="current flagged-by"') && html.includes('run-kbd'));
     assert.deepEqual(page.selected(), ['unclear']);
@@ -2867,8 +2878,12 @@ test('review page: keyboard edge cases (Russian layout, focused link, Enter in R
     assert.equal(page.els.status.textContent, '');
 
     // Russian layout: letters arrive as Cyrillic, the physical key decides.
+    // With popups blocked the switch falls back to plain navigation (no player).
+    page.blockPopups = true;
     page.key('о', { code: 'KeyJ' });
+    assert.deepEqual(page.opened.map(o => o.url), [itemPath('C2')], 'tried the new tab');
     assert.equal(page.navigatedTo, itemPath('C2'));
+    page.blockPopups = false;
     page.navigatedTo = null;
     page.opened.length = 0;
 

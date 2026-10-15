@@ -229,7 +229,7 @@ function renderItemPage(payload, token) {
     const itemHref = (code) =>
         `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;verifyBearerToken=${t}`;
     const navLink = (ref, label) => ref
-        ? `<a class="nav-btn" href="${itemHref(ref.item_code)}"${ref.player_link ? ` data-player-link="${escapeHtml(ref.player_link)}"` : ''}>${label}</a>`
+        ? `<a class="nav-btn" href="${itemHref(ref.item_code)}" data-item-code="${escapeHtml(ref.item_code)}"${ref.player_link ? ` data-player-link="${escapeHtml(ref.player_link)}"` : ''}>${label}</a>`
         : `<span class="nav-btn disabled">${label}</span>`;
 
     const proposed = String(item.proposed || '').split('+').filter(Boolean).map(badge).join(' ');
@@ -345,14 +345,24 @@ function renderItemPage(payload, token) {
         return '/admin/review/' + encodeURIComponent(STATE.batch) + '?item=' + encodeURIComponent(code)
             + '&verifyBearerToken=' + encodeURIComponent(STATE.token);
     }
-    // Switching items opens the new item's player in a tab, like "Open in
-    // player". It runs inside the key/click/save gesture that switches, since
-    // the next page cannot open a tab on load (popup blocker).
     function openPlayer(link) {
         if (link) window.open(link, '_blank', 'noopener,noreferrer');
     }
+    // Switching items also starts loading the new item's player behind the
+    // review page. A page cannot open a tab behind itself, so the tabs swap
+    // roles: the next item opens in a new tab in front, and this tab turns
+    // into the player (the browser puts the new tab right after it). Runs
+    // inside the key/click/save gesture, since the next page cannot open a
+    // tab on load (popup blocker). Blocked popup or no link: plain navigation.
     function goTo(code, link) {
-        openPlayer(link);
+        if (link) {
+            const tab = window.open(itemUrl(code), '_blank');
+            if (tab) {
+                tab.opener = null;
+                window.location.href = link;
+                return;
+            }
+        }
         window.location.href = itemUrl(code);
     }
     function setStatus(text, kind) {
@@ -456,12 +466,13 @@ function renderItemPage(payload, token) {
             case 'o': openPlayer(STATE.player_link); break;
         }
     });
-    // Plain clicks on ◀ / ▶ / first open also open the player (a modified
-    // click opens the review page in a new tab instead, so no player).
+    // Plain clicks on ◀ / ▶ / first open switch like j / k (a modified click
+    // keeps the browser's meaning: the review page in a new tab, no player).
     document.addEventListener('click', function (e) {
         const a = e.target && e.target.closest ? e.target.closest('a.nav-btn[data-player-link]') : null;
         if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-        openPlayer(a.dataset.playerLink);
+        e.preventDefault();
+        goTo(a.dataset.itemCode, a.dataset.playerLink);
     });
     (function init() {
         document.getElementById('reviewer').value = storageGet('localStorage', REVIEWER_KEY) || '';
