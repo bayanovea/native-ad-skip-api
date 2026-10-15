@@ -182,9 +182,9 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - Modify: `../native-ad-skip-grafana/.github/workflows/deploy.yml` (delete) or archive the repo
 - Modify: `docs/research/20261013-yandex-cloud-outage-analysis.md`, `docs/research/20261014-hosting-selection.md` (one-line "migrated on <date>, see this plan" note at the top)
 
-- [ ] `native-ad-skip-grafana`: delete the deploy workflow and add a README line "superseded by `native-ad-skip-api/docker-compose.yml` (grafana service)"; or archive the GitHub repo
-- [ ] add the status line to both research docs
-- [ ] update project memory (`project_yc_outage_2026-10.md`, `project_hosting_selection_2026-10.md`) → migration done, new IP, backup bucket name
+- [x] `native-ad-skip-grafana`: delete the deploy workflow and add a README line "superseded by `native-ad-skip-api/docker-compose.yml` (grafana service)"; or archive the GitHub repo → workflow deleted + "Superseded" note at the top of its README, commit `c779a0a` in that repo
+- [x] add the status line to both research docs → "Status 2026-10-15: migrated (Almaty)" under each title
+- [x] update project memory (`project_yc_outage_2026-10.md`, `project_hosting_selection_2026-10.md`) → migration done, new IP, backup bucket name → done 2026-10-15; no S3 bucket yet, backups tracked in new `project_backups.md`
 
 ### Task 11: Verify acceptance criteria
 

@@ -1,5 +1,7 @@
 # Yandex Cloud outage (October 2026) — impact on native-ad-skip-api and migration decision
 
+> **Status 2026-10-15: migrated.** Prod runs on Timeweb Cloud **Almaty** (`ala-1`, `${HOST_IP}`) — Novosibirsk had no free capacity that day, so the documented exit location was used. DNS, TLS, first deploy and RU mobile/wired reachability verified; nightly S3 backups still open (`docs/backlog/offhost-pg-backup-s3.md`). See `docs/plans/20261014-timeweb-migration.md`.
+
 Date: 2026-10-13. Status of our VM: `178.154.241.202`, zone `ru-central1-a`, console shows RUNNING, serial console does not load, SSH/HTTP unreachable from every external vantage point (check-host.net report `50b3c5c8k1ce`: Moscow, Kazakhstan, Romania, Germany, US all time out on :22 and :3022).
 
 ## TL;DR
@@ -43,7 +45,7 @@ Outlook: zone a will not be back in October. Weeks is the optimistic case if sto
 - Stack: single `docker-compose.yml` (app, prometheus, grafana), Postgres on the host, app reaches DB via `DB_HOST=<public ip>` + `extra_hosts` (see `docs/plans/20260925-close-db-public-exposure.md`; fix this on the new host instead of carrying the workaround over).
 - Data: restore schema with `scripts/sync-db.js`, then load `outputfile-09-10-2026.sql`.
 - **Unverified blocker:** how the browser extension addresses the API. If it hardcodes `178.154.241.202` instead of a domain, the IP cannot follow us and a client release is required.
-- Provider: not Yandex zones d/e (quotas frozen, Kaluga damaged, Yandex itself recommends leaving). Any Russian provider meets the traffic-locality requirement that drove the DO → YC move. Selectel / prv Cloud have priority onboarding this week; Timeweb / Beget are cheaper for a pet project.
+- Provider decision (2026-10-14): **Timeweb Cloud, Novosibirsk** (landed in Almaty on 2026-10-15, no Novosibirsk capacity) — see `20261014-hosting-selection.md`. Earlier note: not Yandex zones d/e (quotas frozen, Kaluga damaged, Yandex itself recommends leaving). Any Russian provider meets the traffic-locality requirement that drove the DO → YC move. Selectel / prv Cloud have priority onboarding this week; Timeweb / Beget are cheaper for a pet project.
 - After the move: set up off-host `pg_dump` on a schedule. The absence of one is what made this decision a data-loss question in the first place.
 
 ## Sources
