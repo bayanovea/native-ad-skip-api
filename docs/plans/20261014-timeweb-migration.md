@@ -2,6 +2,8 @@
 
 Date: 2026-10-14. Follows `docs/research/20261013-yandex-cloud-outage-analysis.md` (why we leave) and `docs/research/20261014-hosting-selection.md` (why Timeweb Novosibirsk).
 
+> **Status 2026-10-15:** Tasks 1–4 done, Task 5 in progress. ⚠️ The VM landed in **Timeweb Almaty (`ala-1`), not Novosibirsk**: Novosibirsk had no free capacity (the panel only offered a preorder queue), so the exit-route location was used up front. `NEW_IP` = **`${HOST_IP}`**, hostname `api`. A plain-HTTP probe from Russian networks (mobile + home wired, no VPN) reached it; the full HTTPS check is still Task 8. Wherever this plan says Novosibirsk, read Almaty.
+
 ## Overview
 
 Production is down since 2026-10-11: the only VM (`178.154.241.202`, YC zone `ru-central1-a`) is unreachable and the zone has no recovery ETA. This plan rebuilds the whole stack on a fresh Timeweb Cloud VM in Novosibirsk, restores data from the local dump `~/Web/dumps/outputfile-09-10-2026.sql`, repoints DNS, re-enables CI/CD, and closes the two long-standing operational gaps that turned an outage into a data-loss question: no off-host backups and the reverse proxy / TLS config living only on the dead host.
@@ -59,49 +61,50 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 **Files:** none (Timeweb panel)
 
-- [ ] Timeweb Cloud panel → Облачные серверы → Создать: location **Новосибирск**, OS **Ubuntu 24.04**, tariff **Cloud 50** (2 vCPU / 4 GB / 50 GB NVMe, ~3 840 ₽/mo); fallback per research: Beget SPb or RUVDS Novosibirsk if provisioning fails today
-- [ ] add the Mac's public key (`~/.ssh/id_ed25519.pub`) as the server SSH key; disable password login in the panel if offered
-- [ ] enable **Автобэкапы** for the server (daily, keep 7) — cheap insurance that covers nginx/certs/postgres config, not just data
-- [ ] note the public IPv4 as `NEW_IP` (used everywhere below); skip IPv6 for now
-- [ ] verify: `ssh root@NEW_IP 'lsb_release -ds; nproc; free -h; df -h /'` → Ubuntu 24.04, 2 CPU, ~4 GB, ~50 GB
+- [x] Timeweb Cloud panel → Облачные серверы → Создать: location **Новосибирск**, OS **Ubuntu 24.04**, tariff **Cloud 50** (2 vCPU / 4 GB / 50 GB NVMe, ~3 840 ₽/mo); fallback per research: Beget SPb or RUVDS Novosibirsk if provisioning fails today. ⚠️ Done 2026-10-15 in **Almaty** (Novosibirsk = preorder only): fixed preset 2×3.3 GHz / 4 GB / 50 GB NVMe, public IPv4 200 ₽, no IPv6, no private network, project ADSKIP
+- [x] add the Mac's public key (`~/.ssh/id_ed25519.pub`) as the server SSH key; disable password login in the panel if offered (the panel switch was locked; password login disabled in sshd in Task 2 instead)
+- [x] enable **Автобэкапы** for the server (daily, keep 7) — cheap insurance that covers nginx/certs/postgres config, not just data (enabled at creation, 300 ₽/mo)
+- [x] note the public IPv4 as `NEW_IP` (used everywhere below); skip IPv6 for now → `${HOST_IP}`
+- [x] verify: `ssh root@NEW_IP 'lsb_release -ds; nproc; free -h; df -h /'` → Ubuntu 24.04, 2 CPU, ~4 GB, ~50 GB
+- [x] ➕ reachability probe before any setup: `python3 -m http.server 80` in an empty dir, opened from a Russian phone on mobile data and a home wired ISP (VPN off) → `ok`. Running it over an ssh session that drops (e.g. toggling a VPN on the Mac) kills the server; use `ssh -t` so Ctrl+C reaches the remote process
 
 ### Task 2: Base host setup (user, firewall, Docker)
 
 **Files:** none (host shell)
 
-- [ ] `apt update && apt upgrade -y && apt install -y ufw git curl jq`
-- [ ] create deploy user: `adduser --disabled-password skipper-admin && usermod -aG sudo,docker skipper-admin` (docker group after Docker install below); `mkdir -p /home/skipper-admin/tmp /home/skipper-admin/.ssh`; copy `authorized_keys` from root; `chown -R skipper-admin:skipper-admin /home/skipper-admin`
-- [ ] on the Mac generate a dedicated CI key: `ssh-keygen -t ed25519 -f ~/.ssh/adskip-deploy -C deploy@native-ad-skip-api -N ''`; append the `.pub` to `/home/skipper-admin/.ssh/authorized_keys`
-- [ ] sshd hardening: `PasswordAuthentication no`, `PermitRootLogin prohibit-password` in `/etc/ssh/sshd_config.d/99-hardening.conf`; `systemctl restart ssh`
-- [ ] install Docker Engine + compose plugin from Docker's apt repo (Ubuntu's `docker.io` package is fine too but older): follow https://docs.docker.com/engine/install/ubuntu/ ; `docker compose version` → v2.x
-- [ ] `docker network create main-network` (external network the compose file requires)
-- [ ] `ufw default deny incoming; ufw default allow outgoing; ufw allow 22; ufw allow 80; ufw allow 443; ufw enable`
-- [ ] ⚠️ Timeweb panel → Firewall: inbound allow 22, 80, 443 from anywhere, **3024 only from `<ADMIN_IP>`**, deny the rest; attach to the server. This layer is the one that actually protects Grafana: Docker publishes `3024:3024` through its own iptables DNAT rules, which bypass `ufw` entirely, so a `ufw allow from <ADMIN_IP> to any port 3024` rule would be a no-op. If the panel firewall is unavailable, bind Grafana to `127.0.0.1:3024` and use `ssh -L 3024:localhost:3024` instead.
-- [ ] verify: `ssh skipper-admin@NEW_IP docker ps` works without sudo; `nmap -Pn -p 22,80,443,3022,3024,5432 NEW_IP` from the Mac shows only 22/80/443 open (re-check 3024 from a non-admin IP after Task 7, when Grafana is actually listening)
+- [x] `apt update && apt upgrade -y && apt install -y ufw git curl jq`
+- [x] create deploy user: `adduser --disabled-password skipper-admin && usermod -aG sudo,docker skipper-admin` (docker group after Docker install below); `mkdir -p /home/skipper-admin/tmp /home/skipper-admin/.ssh`; copy `authorized_keys` from root; `chown -R skipper-admin:skipper-admin /home/skipper-admin`. ➕ Added to `docker` only, not `sudo`: the user has no password, so sudo would never work; host admin is done as root
+- [x] on the Mac generate a dedicated CI key: `ssh-keygen -t ed25519 -f ~/.ssh/adskip-deploy -C deploy@native-ad-skip-api -N ''`; append the `.pub` to `/home/skipper-admin/.ssh/authorized_keys`. Verified: `ssh -i ~/.ssh/adskip-deploy -o IdentitiesOnly=yes skipper-admin@NEW_IP 'echo ok'` → `ok`
+- [x] sshd hardening: `PasswordAuthentication no`, `PermitRootLogin prohibit-password` in `/etc/ssh/sshd_config.d/99-hardening.conf`; `systemctl restart ssh`. ➕ File is **`00-hardening.conf`**, not `99-`: Ubuntu cloud images ship `50-cloud-init.conf` with `PasswordAuthentication yes` and sshd keeps the first value it reads. Verified with `sshd -T` and `ssh -o PubkeyAuthentication=no root@NEW_IP` → `Permission denied (publickey)`
+- [x] install Docker Engine + compose plugin from Docker's apt repo (Ubuntu's `docker.io` package is fine too but older): follow https://docs.docker.com/engine/install/ubuntu/ ; `docker compose version` → v2.x. ➕ Used Ubuntu packages instead: `apt install -y docker.io docker-compose-v2 docker-buildx` (Docker 29.1, Compose 2.40.3, buildx 0.30.1). `docker-buildx` is required — recent Compose refuses `build` without it
+- [x] `docker network create main-network` (external network the compose file requires)
+- [x] `ufw default deny incoming; ufw default allow outgoing; ufw allow 22; ufw allow 80; ufw allow 443; ufw enable`. ➕ Also `ufw allow 10050/tcp` for the Timeweb Zabbix agent (panel CPU/RAM graphs); the agent's `Server=` only admits `92.53.116.12,.111,.119`
+- [x] ⚠️ Timeweb panel → Firewall: inbound allow 22, 80, 443 from anywhere, **3024 only from `<ADMIN_IP>`**, deny the rest; attach to the server. This layer is the one that actually protects Grafana: Docker publishes `3024:3024` through its own iptables DNAT rules, which bypass `ufw` entirely, so a `ufw allow from <ADMIN_IP> to any port 3024` rule would be a no-op. If the panel firewall is unavailable, bind Grafana to `127.0.0.1:3024` and use `ssh -L 3024:localhost:3024` instead. ➕ Done as an allow-list group with inbound TCP 22, 80, 443, 10050 for all addresses; **3024 not opened at all** (admin IP changes with VPN) → Grafana via `ssh -L 3024:localhost:3024 root@NEW_IP`. Outbound list left empty = unrestricted (checked: `apt update` and `curl https://github.com` → 200)
+- [x] verify: `ssh skipper-admin@NEW_IP docker ps` works without sudo; `nmap -Pn -p 22,80,443,3022,3024,5432 NEW_IP` from the Mac shows only 22/80/443 open (re-check 3024 from a non-admin IP after Task 7, when Grafana is actually listening). Checked with `nc -zv -G 3`: only 22 open. 3022/3024 still need the re-check in Task 7 — nothing listens there yet
 
 ### Task 3: PostgreSQL 16 on the host, reachable only from Docker and localhost
 
 **Files:** none (host config); recipe is recorded in `docs/plans/20260925-close-db-public-exposure.md` Task 2 and gets closed by this task
 
-- [ ] `apt install -y postgresql-16 postgresql-client-16`; confirm `psql --version` ≥ 16.10 (needed for `\restrict`); if Ubuntu's package is older, use the PGDG apt repo
-- [ ] create role + DB: `sudo -u postgres psql -c "CREATE ROLE <DB_USER> LOGIN PASSWORD '<DB_PASSWORD>';" -c "CREATE DATABASE <DB_NAME> OWNER <DB_USER>;"` (pick `DB_NAME`/`DB_USER` equal to the old secrets if you remember them — keeps GitHub secrets unchanged)
-- [ ] `/etc/postgresql/16/main/postgresql.conf`: `listen_addresses = '*'` (ufw blocks it from outside; `pg_hba` restricts who may connect)
-- [ ] `/etc/postgresql/16/main/pg_hba.conf` append: `host <DB_NAME> <DB_USER> 172.16.0.0/12 scram-sha-256` (covers `docker0` 172.17/16 and `main-network` 172.18+/16)
-- [ ] `ufw allow from 172.16.0.0/12 to any port 5432` (host-level service, so Docker's iptables bypass does not apply here)
-- [ ] `systemctl restart postgresql`
-- [ ] verify from a throwaway container on the external network: `docker run --rm --network main-network --add-host=host.docker.internal:host-gateway postgres:16 psql "postgresql://<DB_USER>:<DB_PASSWORD>@host.docker.internal:5432/<DB_NAME>" -c 'select 1'` → `1`
-- [ ] verify from the Mac: `nc -zv -w3 NEW_IP 5432` → timeout (this is the C2 finding closed on day one)
+- [x] `apt install -y postgresql-16 postgresql-client-16`; confirm `psql --version` ≥ 16.10 (needed for `\restrict`); if Ubuntu's package is older, use the PGDG apt repo → `16.15-0ubuntu0.24.04.1`, same as the old host
+- [x] create role + DB: `sudo -u postgres psql -c "CREATE ROLE <DB_USER> LOGIN PASSWORD '<DB_PASSWORD>';" -c "CREATE DATABASE <DB_NAME> OWNER <DB_USER>;"` (pick `DB_NAME`/`DB_USER` equal to the old secrets if you remember them — keeps GitHub secrets unchanged). ➕ Old values unknown (GitHub secrets are write-only) → **`DB_NAME=adskip`, `DB_USER=adskip`**, password from `openssl rand -hex 24`, kept in the password manager. Task 7 must set all three secrets
+- [x] `/etc/postgresql/16/main/postgresql.conf`: `listen_addresses = '*'` (ufw blocks it from outside; `pg_hba` restricts who may connect)
+- [x] `/etc/postgresql/16/main/pg_hba.conf` append: `host <DB_NAME> <DB_USER> 172.16.0.0/12 scram-sha-256` (covers `docker0` 172.17/16 and `main-network` 172.18+/16)
+- [x] `ufw allow from 172.16.0.0/12 to any port 5432` (host-level service, so Docker's iptables bypass does not apply here)
+- [x] `systemctl restart postgresql`
+- [x] verify from a throwaway container on the external network: `docker run --rm --network main-network --add-host=host.docker.internal:host-gateway postgres:16 psql "postgresql://<DB_USER>:<DB_PASSWORD>@host.docker.internal:5432/<DB_NAME>" -c 'select 1'` → `1`
+- [x] verify from the Mac: `nc -zv -w3 NEW_IP 5432` → timeout (this is the C2 finding closed on day one)
 
 ### Task 4: Restore the dump
 
 **Files:** `~/Web/dumps/outputfile-09-10-2026.sql` (Mac → VM)
 
-- [ ] `scp ~/Web/dumps/outputfile-09-10-2026.sql skipper-admin@NEW_IP:/home/skipper-admin/tmp/`
-- [ ] ➕ restore **as the app role** with the 85 `ALTER … OWNER TO postgres;` lines stripped (41 tables, 41 sequences, 3 enum types — checked against the dump; it has no extensions, grants or functions), so every object is created owned by `<DB_USER>`: `sed -E '/^ALTER (TABLE|SEQUENCE|TYPE) .* OWNER TO postgres;$/d' /home/skipper-admin/tmp/outputfile-09-10-2026.sql | psql -v ON_ERROR_STOP=1 -q "postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:5432/<DB_NAME>" > /dev/null` (stdout is just ~40 `setval` results). Rehearsed 2026-10-14 in `postgres:16` (16.15) against the real dump: row counts match, all 41 tables owned by the app role, `markups_id_seq` = 12901, `users.banned_at` present. The original "restore as postgres, then `REASSIGN OWNED BY postgres TO <DB_USER>`" does not work: Postgres refuses to reassign objects of the bootstrap superuser (`cannot reassign ownership of objects owned by role postgres because they are required by the database system`). The `public` schema is writable by `<DB_USER>` because PG 15+ grants it to the database owner.
-- [ ] verify ownership: `psql … -c "select count(*) from pg_tables where schemaname='public' and tableowner <> '<DB_USER>'"` → `0`
-- [ ] verify row counts match the dump: `psql ... -c "select (select count(*) from markups), (select count(*) from markup_time_intervals), (select count(*) from videos), (select count(*) from video_calculateds), (select count(*) from votes), (select count(*) from users)"` → `12531 | 12527 | 6326 | 6324 | 2628 | 1705`
-- [ ] verify sequences were restored (dump includes `setval`): `select last_value from markups_id_seq` ≥ 12531
-- [ ] verify `users.banned_at` column exists (it is in the dump; `db.js` bootstrap's `ADD COLUMN IF NOT EXISTS` would also handle it)
+- [x] `scp ~/Web/dumps/outputfile-09-10-2026.sql skipper-admin@NEW_IP:/home/skipper-admin/tmp/`
+- [x] ➕ restore **as the app role** with the 85 `ALTER … OWNER TO postgres;` lines stripped (41 tables, 41 sequences, 3 enum types — checked against the dump; it has no extensions, grants or functions), so every object is created owned by `<DB_USER>`: `sed -E '/^ALTER (TABLE|SEQUENCE|TYPE) .* OWNER TO postgres;$/d' /home/skipper-admin/tmp/outputfile-09-10-2026.sql | psql -v ON_ERROR_STOP=1 -q "postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:5432/<DB_NAME>" > /dev/null` (stdout is just ~40 `setval` results). Rehearsed 2026-10-14 in `postgres:16` (16.15) against the real dump: row counts match, all 41 tables owned by the app role, `markups_id_seq` = 12901, `users.banned_at` present. The original "restore as postgres, then `REASSIGN OWNED BY postgres TO <DB_USER>`" does not work: Postgres refuses to reassign objects of the bootstrap superuser (`cannot reassign ownership of objects owned by role postgres because they are required by the database system`). The `public` schema is writable by `<DB_USER>` because PG 15+ grants it to the database owner.
+- [x] verify ownership: `psql … -c "select count(*) from pg_tables where schemaname='public' and tableowner <> '<DB_USER>'"` → `0`
+- [x] verify row counts match the dump: `psql ... -c "select (select count(*) from markups), (select count(*) from markup_time_intervals), (select count(*) from videos), (select count(*) from video_calculateds), (select count(*) from votes), (select count(*) from users)"` → `12531 | 12527 | 6326 | 6324 | 2628 | 1705`
+- [x] verify sequences were restored (dump includes `setval`): `select last_value from markups_id_seq` ≥ 12531 → `12901`
+- [x] verify `users.banned_at` column exists (it is in the dump; `db.js` bootstrap's `ADD COLUMN IF NOT EXISTS` would also handle it)
 - [ ] `rm /home/skipper-admin/tmp/outputfile-09-10-2026.sql` (contains `prv_user_id`s; don't leave it in a world-readable tmp dir)
 
 ### Task 5: DNS at reg.ru + nginx + Let's Encrypt
@@ -146,7 +149,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [ ] on the VM: `docker ps` → `native-ad-skip-api-app-1`, `-prometheus-1`, `-grafana-1` up; `docker logs native-ad-skip-api-app-1` shows `Tables schemas synced` and the listen line, no `Unable to connect to the database`
 - [ ] verify Go cron: after 2 minutes `docker exec native-ad-skip-api-app-1 tail -5 /tmp/mycron.log` → clean runs for prv/rt/yt, no connection errors
 - [ ] verify: `curl -s https://${API_HOST}/` → `{"status":"ok"}`; `curl -s "https://${API_HOST}/video-calculated?v=1&native_id=<known id from dump>"` returns segments
-- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP, both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2)
+- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP (➕ 3024 is not opened in the panel firewall — use `ssh -L 3024:localhost:3024 root@NEW_IP` and `http://localhost:3024`), both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2)
 
 ### Task 8: Day-one reachability test from Russia
 
