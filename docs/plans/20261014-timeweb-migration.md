@@ -105,7 +105,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [x] verify row counts match the dump: `psql ... -c "select (select count(*) from markups), (select count(*) from markup_time_intervals), (select count(*) from videos), (select count(*) from video_calculateds), (select count(*) from votes), (select count(*) from users)"` → `12531 | 12527 | 6326 | 6324 | 2628 | 1705`
 - [x] verify sequences were restored (dump includes `setval`): `select last_value from markups_id_seq` ≥ 12531 → `12901`
 - [x] verify `users.banned_at` column exists (it is in the dump; `db.js` bootstrap's `ADD COLUMN IF NOT EXISTS` would also handle it)
-- [ ] `rm /home/skipper-admin/tmp/outputfile-09-10-2026.sql` (contains `prv_user_id`s; don't leave it in a world-readable tmp dir)
+- [x] `rm /home/skipper-admin/tmp/outputfile-09-10-2026.sql` (contains `prv_user_id`s; don't leave it in a world-readable tmp dir) (confirmed 2026-10-15: tmp dir empty)
 
 ### Task 5: DNS at reg.ru + nginx + Let's Encrypt
 
