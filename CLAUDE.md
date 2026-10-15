@@ -46,13 +46,26 @@ make test-e2e                                   # Full Docker e2e: spins up Post
                                                 # and exercises HTTP endpoints + Go calc binary
 ```
 
-`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite.
+`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL, in its own DB). DB-free unit tests run directly: `node --test test/review-sheet.test.js test/db-config.test.js`.
 
 ### Ops
 
 ```bash
 make pull-dump                                  # gzipped prod pg_dump over SSH → ~/Web/dumps/adskip-prod/ (weekly)
+
+# Assessor review (local restored dump on localhost:5433/skipper, user postgres / password local)
+DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
+  node scripts/sync-db.js                       # once per fresh dump: creates prv_review_* tables
+DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
+  node scripts/import-review-sheet.js ~/Web/data/review/<sheet>.md [--batch NAME]
+DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
+  AUTH_TOKEN=<token> NODE_APP_PORT=3022 node server.js   # then open /admin/review?verifyBearerToken=<token>
+scripts/export-review-verdicts.sh <batch>       # psql (PG* env, defaults localhost:5433/skipper)
+                                                # → ${ADSKIP_DATA:-~/Web/data}/review/<batch>.verdicts.tsv
 ```
+
+- **Importer** reads `<sheet>.md` + `<sheet>.key.tsv` (written by `adskip sheet` in `ad-skip-segment-eval`; blind `C<n>` sheets only, `K<n>` conflict sheets are rejected). It first copies the md to `<sheet>.md.bak-YYYYMMDDHHMMSS` (suffix `-1`, `-2` instead of overwriting) and never writes the md. One transaction: items `ON CONFLICT (batch, item_code) DO NOTHING`; md verdicts (`source='import'`, `reviewer='owner'`) go through `recordVerdict` and only for items with no verdict yet, so re-running after more md marks adds only the new ones. An unknown verdict text fails the whole import (nothing written). Batch defaults to the md file name.
+- **Export** writes the latest verdict per decided item as `provider native_id category start end verdict item note` for `adskip review -file`: `sponsor`/`self_promotion` → `gold_missing` (category = the verdict), `not_ad` → `model_wrong`, `unclear` → `definition_unclear` (category = first proposed). Times with one decimal, note = comment with tabs/newlines collapsed. Exits 1 (nothing written) on an unknown batch.
 
 ## Architecture
 
@@ -102,6 +115,8 @@ Each provider directory has the same internal layout:
 | `prv/`, `rt/`, `yt/` | Per-provider Express routes, repositories, and Go CLI entry points |
 | `calculator/` | Shared Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
+| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`, `playerLink`) |
+| `scripts/` | Local/ops scripts: `sync-db.js`, `pull-prod-dump.sh`, review import/export, gold export (`export-gold.sh`) |
 | `db.js` | Sequelize models and associations for all providers |
 | `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
 | `grafana/` | Grafana provisioning configs and dashboard JSONs; service runs on port 3024 |
@@ -142,6 +157,11 @@ All three providers share the same route shape; `prv/` has two extras.
   - `GET /admin/moderation?verifyBearerToken=…&show=all&format=json` — admin moderation page. Lists worst users + worst markups sorted by suspicion score (`3*dislikes + 1*undos` for users; `+ 3*max(0, -segment_rating)` for markups). Default view hides rows where a prior decision exists and `current_score - snapshot.score < 5` (`RESURFACE_THRESHOLD`). `?show=all` reveals all. `?format=json` returns structured data for tests/integrations.
   - `POST /admin/moderation/decide?verifyBearerToken=…` — body `{target_type:'user'|'markup', target_id, decision:'approve'|'reject'}`. Returns `204`. Side effects: `user`+`reject` sets `users.banned_at=NOW()`; `user`+`approve` clears it; `markup`+`reject` soft-deletes the markup and (if no remaining siblings) destroys `VideoCalculated` else marks siblings `is_new=true`; `markup`+`approve` records the decision only. Writes a row to `prv_admin_decisions` with snapshot and `decided_by='admin'`.
   - `GET /admin/user/:internal_id?verifyBearerToken=…` — video-less per-user view showing all markups across all videos. Param is the internal `users.id` PK, NOT `prv_user_id` (which is not unique — multiple `User` rows can share the same `prv_user_id` because the unique index is composite `(generated_user_id, prv_user_id)`).
+- **`prv/routes/admin-review.js`** — prv-only assessor review page (sibling of moderation, same `?verifyBearerToken=…` auth, but an unset `AUTH_TOKEN` refuses every request). One verdict per AI-flagged segment from an imported review sheet (see Ops). Reads/writes only through `prv/repository/review.js`.
+  - `GET /admin/review?verifyBearerToken=…[&format=json]` — batch list: total / decided / open per batch.
+  - `GET /admin/review/:batch?verifyBearerToken=…&item=C7&format=json` — item page; without `item` the first open item by `position`, or the last item when the batch is done; 404 on unknown batch/item. Shows times in player format (`m:ss` / `h:mm:ss`), the stored `link` from the sheet (already at start − 2 s; `playerLink()` is only the fallback when it is not http(s)), cues, and a signals panel (±30 s, across all `videos` rows of the native_id: live markups with author rating, calculated segments with rating + vote counts, undo/click counts). JSON shape `{batch, item, nav: {prev, next, first_open}, signals}`. Hotkeys: `1`–`4` verdict, `c` comment, `Enter` / Ctrl+Enter save, `j`/`k` next/prev, `o` open player, `Esc` leave a field. Reviewer field is required, starts empty, remembered in `localStorage`.
+  - `POST /admin/review/decide?verifyBearerToken=…` — body `{item_id, verdict: 'sponsor'|'self_promotion'|'not_ad'|'unclear', comment?, reviewer}`. Appends a `prv_review_verdicts` row (`source='page'`); returns `201 {item_id, item_code, verdict, flagged_by, next_item}` (`next_item` = next open item after this one, wrapping round, `null` when done); `400` on invalid input or unknown item.
+  - **Blind rule**: `flagged_by` (which detector runs flagged the segment) is stripped in the repository from every item without a verdict, so neither HTML nor JSON shows it until the item is decided.
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
 ### Authentication
@@ -171,6 +191,8 @@ All three providers share the same route shape; `prv/` has two extras.
 | `IntervalClick` | Records interval click events with `click_time` — table `{provider}_events_interval_click` |
 | `TimeSavedEvent` | Records time_saved events — table `{provider}_events_time_saved` |
 | `ClientFailed` | Records client-side failures with free-form `reason` and `data` JSON — table `{provider}_events_client_failed` |
+| `ReviewItem` | One AI-flagged segment from an imported review sheet — table `prv_review_items` (prv only). Fields `batch` (sheet name), `item_code` (`C7`), `position`, `native_id`, `start`/`end` (seconds, from key.tsv), `proposed` (`sponsor` or `sponsor+self_promotion`), `cues`, `link`, `flagged_by` (JSONB run ids, blind until decided). Unique `(batch, item_code)` |
+| `ReviewVerdict` | Append-only assessor verdicts — table `prv_review_verdicts`, FK `item_id` (cascade). `verdict` (`sponsor`\|`self_promotion`\|`not_ad`\|`unclear`), `comment`, `reviewer` (free text from the page; `owner` for md imports), `source` (`page`\|`import`), `decided_at`. Latest row per item is the verdict, older rows are history. All writes go through `reviewRepository.recordVerdict()` (page and importer), which throws `ReviewInputError` with a `code` on bad input |
 
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 
@@ -197,7 +219,7 @@ The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calcul
 
 **`request_without_version_total{method, provider}`** — count of legacy client requests that omit the `v` query/body param. `method` is the route key (`GET /video-calculated`, `POST /markup`).
 
-**`http_request_duration_seconds_{bucket|count|sum}{method, path, status_code}`** — `express-prom-bundle` histogram with buckets `[0.05, 0.1, 0.25, 0.5, 1, 2.5]`. `path` is normalized via `normalizePath` rules in `server.js` so dynamic segments collapse (`/admin/video/12345` → `/admin/video/#video_id`, `/markups/42` → `/markups/#id`, etc.). The default `url-value-parser` catches any unmapped numeric/UUID IDs as defense-in-depth.
+**`http_request_duration_seconds_{bucket|count|sum}{method, path, status_code}`** — `express-prom-bundle` histogram with buckets `[0.05, 0.1, 0.25, 0.5, 1, 2.5]`. `path` is normalized via `normalizePath` rules in `server.js` so dynamic segments collapse (`/admin/video/12345` → `/admin/video/#video_id`, `/markups/42` → `/markups/#id`, `/admin/review/<batch>` → `/admin/review/#batch` except `/admin/review/decide`, etc.). The default `url-value-parser` catches any unmapped numeric/UUID IDs as defense-in-depth.
 
 **Storage / scrape:** Prometheus scrapes `app:3022/metrics` every 30 s and stores data on the `prometheus_data` named Docker volume (mounted at `/prometheus` in the container; pinned project name `native-ad-skip-api` → stable volume `native-ad-skip-api_prometheus_data`). Retention is bounded by **both** `--storage.tsdb.retention.time=30d` and `--storage.tsdb.retention.size=2GB`; whichever hits first wins, so the volume can never exceed ~2 GB. The size cap exists because the `path` label on `http_request_duration_seconds` is effectively unbounded (unmatched/404 URLs each create their own series), which previously grew the volume to 35 GB. Prometheus does not downsample — reclaiming space means dropping whole 2 h blocks, which it does on startup and every compaction cycle.
 
@@ -207,6 +229,7 @@ The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calcul
 
 ```
 DB_NAME, DB_USER, DB_PASSWORD, DB_HOST   # PostgreSQL connection (prod: DB_HOST=host.docker.internal, set in docker-compose.yml)
+DB_PORT=5432                              # Optional; honoured by db.js, sync-db.js and the review importer (e.g. 5433 for the local dump). The Go calculator ignores it (hardcodes 5432)
 NODE_APP_PORT=3022                        # HTTP server port
 AUTH_TOKEN                                # Admin bearer token
 ENV=dev|production                        # Controls yarn dev vs yarn start

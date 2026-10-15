@@ -509,6 +509,82 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /admin/review:
+    get:
+      tags: [Admin]
+      summary: Assessor review — batch list with progress
+      description: "Refuses every request when AUTH_TOKEN is unset."
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: format, in: query, required: false, schema: { type: string, enum: [json] } }
+      responses:
+        '200':
+          description: "HTML page, or `{batches: [{batch, total, decided, open}]}` with format=json"
+          content:
+            text/html:
+              schema: { type: string }
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/review/{batch}:
+    get:
+      tags: [Admin]
+      summary: Assessor review — item page
+      description: "Without `item`: the first open item by position, or the last item when the batch is done. `flagged_by` is present only once the item has a verdict."
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: batch,  in: path,  required: true,  schema: { type: string } }
+        - { name: item,   in: query, required: false, schema: { type: string, example: C7 } }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [json] } }
+      responses:
+        '200':
+          description: "HTML page, or `{batch, item, nav: {prev, next, first_open}, signals}` with format=json"
+          content:
+            text/html:
+              schema: { type: string }
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Batch or item not found }
+
+  /admin/review/decide:
+    post:
+      tags: [Admin]
+      summary: Assessor review — append a verdict
+      description: "Append-only; the latest verdict per item wins."
+      security:
+        - tokenQuery: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, verdict, reviewer]
+              properties:
+                item_id:  { type: integer }
+                verdict:  { type: string, enum: [sponsor, self_promotion, not_ad, unclear] }
+                comment:  { type: string }
+                reviewer: { type: string, maxLength: 64 }
+      responses:
+        '201':
+          description: Verdict recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item_id:    { type: integer }
+                  item_code:  { type: string }
+                  verdict:    { type: string }
+                  flagged_by: { type: array, items: { type: string } }
+                  next_item:  { type: string, nullable: true, description: "Next open item after this one, wrapping round; null when the batch is done" }
+        '400': { description: Invalid verdict, reviewer, comment or unknown item }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   # ── RT ──────────────────────────────────────────────────────────────────────
   /rt/video-calculated:
     get:
