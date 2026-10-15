@@ -1,7 +1,11 @@
 const { Sequelize } = require('sequelize');
 
+// DB_PORT is optional (default 5432, what prod uses); set it to reach a local
+// Postgres on another port, e.g. the restored prod dump on 5433. Same rule as
+// scripts/sync-db.js and scripts/import-review-sheet.js.
 const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASSWORD, {
     host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT || '5432', 10),
     dialect: 'postgres',
     logging: false,
     dialectOptions: { connectTimeout: 60000 },

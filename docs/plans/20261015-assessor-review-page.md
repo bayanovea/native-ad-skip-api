@@ -249,10 +249,21 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] a full review pass works with the keyboard only (1–4, Enter, j/k)
-- [ ] blind holds: `flagged_by` is absent from HTML and JSON before a verdict
-- [ ] re-running the import after new md marks adds only the new verdicts
-- [ ] run all unit tests and `make test-e2e`
+**Files:**
+- ➕ Modify: `db.js`, `config/config.js` (honour `DB_PORT`)
+- ➕ Create: `test/db-config.test.js`
+- ➕ Modify: `test/e2e.js` (keyboard-only pass)
+
+- [x] a full review pass works with the keyboard only (1–4, Enter, j/k)
+- [x] blind holds: `flagged_by` is absent from HTML and JSON before a verdict
+- [x] re-running the import after new md marks adds only the new verdicts
+- [x] run all unit tests and `make test-e2e`
+- ➕ `db.js` ignored `DB_PORT`, so the real server could not run against the local dump on 5433. It now takes `port: parseInt(DB_PORT || '5432')`, the same rule as `scripts/sync-db.js` and the importer; prod is unchanged (no compose file or `init_env.sh` sets `DB_PORT`). `config/config.js` (unused sequelize-cli config) got the same `port` so every Node connection agrees; `prv/db`, `rt/db`, `yt/db` only receive the `sequelize` instance. `test/db-config.test.js` checks the default 5432 and `DB_PORT=5433` without a DB. ⚠️ The Go calculator still hardcodes 5432 (`calculator/calculate.go` `ConnectDb`); not needed for the page, left as is.
+- ➕ Real server smoke against the local dump (`DB_HOST=localhost DB_PORT=5433 DB_NAME=skipper NODE_APP_PORT=3098 node server.js`; normal boot = `sync()` + idempotent ALTER, then GETs only): 401 without token; batch list 39 / 6 decided / 33 open; default item C7 (`1:02 – 1:18`), nav C6 / C8; all 33 open items have no `flagged_by` key in JSON and no run id in JSON or HTML; all 6 decided items show the Flagged by block with the run. `prv_review_verdicts` still 6 rows (max id 6), md and key.tsv checksums unchanged.
+- ➕ Keyboard-only pass, two ways. (1) Real headless Chrome (local Google Chrome driven over the DevTools protocol on `--remote-debugging-pipe`, no npm deps, only localhost resolvable; scratch script, not committed) against the real server on a throwaway DB `skipper_review_smoke` on 5433 with a copy of the real sheet as batch `zz-throwaway-kbd`: j/k moved C9 → C10 → C9, `o` opened a new tab, first Enter refused with focus on Reviewer, typed the name, Esc, Enter saved; `c` + typing (a digit stays text) + Ctrl+Enter saved with the comment; then digit + Enter through every open item until `39 / 39 decided · 0 open`; all 31 verdicts checked (reviewer, source `page`, comment, one history row each, flagged_by shown). DB dropped afterwards. (2) Committed e2e test `review page: keyboard-only pass…`: runs the page's real inline script from the served HTML in a `vm` context with a **stubbed DOM** (the elements the script touches, keydown dispatch, focus/blur, storages, `location.href`, `window.open`) and real `fetch` to the e2e server; drives 1–4 / Enter / Ctrl+Enter / c / Esc / j / k / o through a 4-item batch to completion and checks the DB rows.
+- ➕ Re-import (same throwaway DB): the sheet copy imported 39 items + 6 verdicts; adding md marks for C7, C8 and changing C2 then re-importing added exactly C7 and C8 (C1–C6 rows untouched, C2's changed mark skipped); a third import after the page pass added 0. The e2e test from Task 3 covers the same rule.
+- ➕ Blind: covered by the Task 5 e2e tests (JSON + HTML before/after decide), the new keyboard test (no run id in the open item's HTML) and the local-dump smoke above.
+- ➕ Validation: `node --test test/review-sheet.test.js test/db-config.test.js test/find-video-for-read.test.js test/prometheus-wrapper.test.js` 23/23; `go test ./calculator -skip TestIntegration` ok (`TestIntegration` needs a DB, fails the same on the baseline); `make test-e2e` 96/99, failures only the known baseline 39, 56, 57.
 
 ### Task 8: [Final] Update documentation
 

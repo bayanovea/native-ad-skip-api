@@ -2343,3 +2343,217 @@ test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
     assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-1'));
     assert.ok(httpDurationHasPath(text, '/admin/review/decide'), 'decide keeps its own label');
 });
+
+// ── Review page: keyboard-only pass ──────────────────────────────────────────
+//
+// Executes the page's real inline <script> (taken from the served HTML) in a
+// vm context with a small stubbed DOM: the elements the script touches
+// (#status, #reviewer, #comment, #save-btn, .verdict-btn), document keydown
+// listeners, focus/blur, localStorage/sessionStorage, location.href and
+// window.open. fetch() goes to the real e2e server, so every save is a real
+// POST /admin/review/decide and every navigation loads the real next page.
+// No browser in the e2e container; the same pass was also run once in
+// headless Chrome against a throwaway local DB (see the plan, Task 7).
+
+const vm = require('node:vm');
+
+function htmlUnescape(s) {
+    return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+
+function memoryStorage() {
+    const m = new Map();
+    return {
+        getItem: (k) => (m.has(k) ? m.get(k) : null),
+        setItem: (k, v) => m.set(k, String(v)),
+        removeItem: (k) => m.delete(k),
+    };
+}
+
+// One loaded page: parses the served HTML into stub elements and runs its script.
+function loadKeyboardPage(html, storages) {
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    assert.equal(scripts.length, 1, 'exactly one inline script');
+    for (const id of ['status', 'reviewer', 'comment', 'save-btn']) {
+        assert.ok(html.includes(`id="${id}"`), `page has #${id}`);
+    }
+
+    const page = { navigatedTo: null, opened: [], keydown: [] };
+    const body = { tagName: 'BODY', id: '' };
+    const doc = { body, activeElement: body };
+    const field = (tagName, id, value = '') => ({
+        tagName, id, value, isContentEditable: false, textContent: '', className: '', disabled: false,
+        focus() { doc.activeElement = this; },
+        blur() { if (doc.activeElement === this) doc.activeElement = body; },
+    });
+    const comment = html.match(/<textarea id="comment"[^>]*>([\s\S]*?)<\/textarea>/);
+    const els = {
+        status: field('DIV', 'status'),
+        reviewer: field('INPUT', 'reviewer'),
+        comment: field('TEXTAREA', 'comment', comment ? htmlUnescape(comment[1]) : ''),
+        'save-btn': field('BUTTON', 'save-btn'),
+    };
+    const buttons = [...html.matchAll(/<button type="button" class="verdict-btn( selected)?" data-verdict="([^"]+)"/g)].map(m => {
+        const classes = new Set(['verdict-btn', ...(m[1] ? ['selected'] : [])]);
+        return {
+            tagName: 'BUTTON',
+            dataset: { verdict: m[2] },
+            classList: {
+                contains: (c) => classes.has(c),
+                toggle: (c, force) => { (force ?? !classes.has(c)) ? classes.add(c) : classes.delete(c); },
+            },
+        };
+    });
+    assert.equal(buttons.length, 4, 'four verdict buttons');
+
+    Object.assign(doc, {
+        getElementById: (id) => els[id] || null,
+        querySelectorAll: (sel) => {
+            assert.equal(sel, '.verdict-btn', `unexpected selector ${sel}`);
+            return buttons;
+        },
+        addEventListener: (type, fn) => { if (type === 'keydown') page.keydown.push(fn); },
+    });
+    const location = {};
+    Object.defineProperty(location, 'href', { set: (v) => { page.navigatedTo = v; }, get: () => '' });
+    const window = {
+        localStorage: storages.local,
+        sessionStorage: storages.session,
+        location,
+        open: (url, target, features) => page.opened.push({ url, target, features }),
+    };
+    const ctx = vm.createContext({
+        window, document: doc, console,
+        fetch: (url, opts) => fetch(`http://localhost:${E2E_PORT}${url}`, opts),
+    });
+    vm.runInContext(scripts[0][1], ctx);
+
+    Object.assign(page, {
+        els, doc,
+        state: () => vm.runInContext('STATE', ctx),
+        selected: () => buttons.filter(b => b.classList.contains('selected')).map(b => b.dataset.verdict),
+        active: () => doc.activeElement.id || doc.activeElement.tagName,
+        // A key press as the browser delivers it: keydown to the focused
+        // element (bubbling to document); a printable key not prevented by the
+        // handler is typed into a focused text box.
+        key(key, { ctrl = false } = {}) {
+            const target = doc.activeElement;
+            const ev = {
+                key, target, ctrlKey: ctrl, metaKey: false, altKey: false, defaultPrevented: false,
+                preventDefault() { this.defaultPrevented = true; },
+            };
+            page.keydown.forEach(fn => fn(ev));
+            if (!ev.defaultPrevented && !ctrl && key.length === 1 && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                target.value += key;
+            }
+        },
+        type(text) { for (const ch of text) page.key(ch); },
+    });
+    return page;
+}
+
+async function openKeyboardPage(path, storages) {
+    const res = await request('GET', path, null);
+    assert.equal(res.status, 200, `GET ${path} → ${res.status}`);
+    assert.equal(typeof res.body, 'string');
+    return { html: res.body, page: loadKeyboardPage(res.body, storages) };
+}
+
+// Press Enter (or Ctrl+Enter) and wait for the async save to navigate.
+async function saveAndFollow(page, opts) {
+    page.key('Enter', opts);
+    for (let i = 0; i < 200 && !page.navigatedTo; i++) await sleep(10);
+    assert.ok(page.navigatedTo, `save did not navigate; status: ${page.els.status.textContent}`);
+    return page.navigatedTo;
+}
+
+test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o) decides a whole batch', async () => {
+    const batch = 'e2e-review-keyboard';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        for (const pos of [1, 2, 3, 4]) {
+            await c.query(
+                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, flagged_by, created_at)
+                 VALUES ($1, $2, $3, '-1_3', $4, $5, 'sponsor', 'cue', '["run-kbd"]', NOW())`,
+                [batch, `C${pos}`, pos, 10 * pos, 10 * pos + 5]);
+        }
+    } finally {
+        await c.end();
+    }
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&verifyBearerToken=${MOD_AUTH}`;
+
+    // Default item = first open; j / k navigate; o opens the player link.
+    let { page, html } = await openKeyboardPage(reviewPath(`/admin/review/${batch}`), storages);
+    assert.equal(page.state().item_code, 'C1');
+    assert.ok(!html.includes('run-kbd'), 'blind before a verdict');
+    page.key('k');
+    assert.equal(page.navigatedTo, null, 'no previous item on C1');
+    page.key('j');
+    assert.equal(page.navigatedTo, itemPath('C2'));
+    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.equal(page.state().item_code, 'C2');
+    page.key('k');
+    assert.equal(page.navigatedTo, itemPath('C1'));
+    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    page.key('o');
+    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener' }]);
+
+    // C1: no reviewer yet → refused, focus jumps to Reviewer; type, Esc, Enter.
+    page.key('1');
+    assert.deepEqual(page.selected(), ['sponsor']);
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.match(page.els.status.textContent, /Enter your name/);
+    assert.equal(page.active(), 'reviewer');
+    page.type('kbd');
+    assert.deepEqual(page.selected(), ['sponsor'], 'typing in Reviewer does not pick verdicts');
+    page.key('Escape');
+    assert.equal(page.active(), 'BODY');
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+    assert.equal(storages.local.getItem('adminReview.reviewer'), 'kbd');
+
+    // C2: flash from the previous save; reviewer remembered; c → comment,
+    // a digit typed there is text; Ctrl+Enter saves from the comment box.
+    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.equal(page.els.status.textContent, 'Saved C1: sponsor. Flagged by: run-kbd');
+    assert.equal(page.els.status.className, 'status ok');
+    assert.equal(storages.session.getItem('adminReview.flash'), null, 'flash shown once');
+    assert.equal(page.els.reviewer.value, 'kbd');
+    page.key('2');
+    page.key('c');
+    assert.equal(page.active(), 'comment');
+    page.type('note 4');
+    assert.deepEqual(page.selected(), ['self_promotion']);
+    assert.equal(page.els.comment.value, 'note 4');
+    assert.equal(await saveAndFollow(page, { ctrl: true }), itemPath('C3'));
+
+    // C3: Enter without a verdict is refused; then 3 + Enter.
+    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.match(page.els.status.textContent, /Pick a verdict first/);
+    page.key('3');
+    assert.equal(await saveAndFollow(page), itemPath('C4'));
+
+    // C4: last open item → the page reloads C4, now decided and unblinded.
+    ({ page } = await openKeyboardPage(page.navigatedTo, storages));
+    page.key('4');
+    assert.equal(await saveAndFollow(page), itemPath('C4'));
+    ({ page, html } = await openKeyboardPage(page.navigatedTo, storages));
+    assert.ok(html.includes('4 / 4 decided · 0 open'));
+    assert.ok(html.includes('class="current flagged-by"') && html.includes('run-kbd'));
+    assert.deepEqual(page.selected(), ['unclear']);
+    assert.equal(page.els.status.textContent, 'Saved C4: unclear. Flagged by: run-kbd');
+
+    const st = await reviewState(batch);
+    assert.deepEqual(st.verdicts, [
+        { item_code: 'C1', verdict: 'sponsor', comment: null, reviewer: 'kbd', source: 'page' },
+        { item_code: 'C2', verdict: 'self_promotion', comment: 'note 4', reviewer: 'kbd', source: 'page' },
+        { item_code: 'C3', verdict: 'not_ad', comment: null, reviewer: 'kbd', source: 'page' },
+        { item_code: 'C4', verdict: 'unclear', comment: null, reviewer: 'kbd', source: 'page' },
+    ]);
+});
