@@ -354,16 +354,24 @@ function renderItemPage(payload, token) {
     // into the player (the browser puts the new tab right after it). Runs
     // inside the key/click/save gesture, since the next page cannot open a
     // tab on load (popup blocker). Blocked popup or no link: plain navigation.
+    // The new tab keeps its opener (the player tab), so saving can close it.
     function goTo(code, link) {
         if (link) {
             const tab = window.open(itemUrl(code), '_blank');
             if (tab) {
-                tab.opener = null;
                 window.location.href = link;
                 return;
             }
         }
         window.location.href = itemUrl(code);
+    }
+    // After a save the item's player tab (this tab's opener after a switch) is
+    // done with. The browser closes it only when a script opened it, so the
+    // tab the review started in stays open.
+    function closePlayerTab() {
+        try {
+            if (window.opener && !window.opener.closed) window.opener.close();
+        } catch (e) { /* not closable: leave it */ }
     }
     function setStatus(text, kind) {
         const el = document.getElementById('status');
@@ -424,6 +432,7 @@ function renderItemPage(payload, token) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
                 storageSet('sessionStorage', FLASH_KEY, 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged);
+                closePlayerTab();
                 if (data.next_item) goTo(data.next_item, data.next_player_link);
                 else window.location.href = itemUrl(STATE.item_code);
                 return;

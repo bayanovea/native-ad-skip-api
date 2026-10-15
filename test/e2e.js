@@ -2654,7 +2654,10 @@ function loadKeyboardPage(html, storages) {
     });
     const location = {};
     Object.defineProperty(location, 'href', { set: (v) => { page.navigatedTo = v; }, get: () => '' });
+    // This tab's opener: the previous item's player tab after a switch.
+    const opener = { closed: false, close() { this.closed = true; } };
     const window = {
+        opener,
         localStorage: storages.local,
         sessionStorage: storages.session,
         location,
@@ -2671,7 +2674,7 @@ function loadKeyboardPage(html, storages) {
     vm.runInContext(scripts[0][1], ctx);
 
     Object.assign(page, {
-        els, doc, ctx,
+        els, doc, ctx, opener,
         state: () => vm.runInContext('STATE', ctx),
         selected: () => buttons.filter(b => b.classList.contains('selected')).map(b => b.dataset.verdict),
         active: () => doc.activeElement.id || doc.activeElement.tagName,
@@ -2750,6 +2753,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     page.key('j');
     assert.deepEqual(page.opened, [{ url: itemPath('C2'), target: '_blank', features: undefined }]);
     assert.equal(page.navigatedTo, 'https://example.invalid/video-1_3?t=18s');
+    assert.equal(page.opener.closed, false, 'only a save closes the player tab');
     ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
     assert.equal(page.state().item_code, 'C2');
     page.key('k');
@@ -2774,6 +2778,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     page.opened.length = 0;
     assert.equal(await saveAndFollow(page), itemPath('C2'), 'save → next item in a new tab');
     assert.equal(page.navigatedTo, 'https://example.invalid/video-1_3?t=18s', 'this tab turns into its player');
+    assert.equal(page.opener.closed, true, 'save closes the saved item\'s player tab');
     assert.equal(storages.local.getItem('adminReview.reviewer'), 'kbd');
 
     // C2: flash from the previous save; reviewer remembered; c → comment,
@@ -2913,6 +2918,7 @@ test('review page: keyboard edge cases (Russian layout, focused link, Enter in R
     assert.match(page.els.status.textContent, /^Error 400: unknown review item 2147483647/);
     assert.equal(page.els.status.className, 'status error');
     assert.equal(page.els['save-btn'].disabled, false, 'button re-enabled after an error');
+    assert.equal(page.opener.closed, false, 'a failed save keeps the player tab');
     assert.equal(page.navigatedTo, null);
     vm.runInContext(`STATE.item_id = ${realId}`, page.ctx);
     page.key('Enter');
