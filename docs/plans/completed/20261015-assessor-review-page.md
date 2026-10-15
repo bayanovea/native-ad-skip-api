@@ -271,7 +271,7 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 
 - [x] `CLAUDE.md`: routes (`admin-review.js`), models (`ReviewItem`, `ReviewVerdict`), scripts (import, export)
 - [x] `api/doc/openapi.yaml` only if admin routes are documented there
-- [x] move this plan to `docs/plans/completed/` (deferred: moved after review phases by the orchestrator)
+- [x] move this plan to `docs/plans/completed/` (deferred: moved to `docs/plans/completed/` after the review phases, in the finalize step)
 - ➕ `CLAUDE.md`: Tests note (unit tests, e2e also runs `review-export.test.js`), Ops (sync/import/server/export commands against the local dump on 5433 + importer and export rules), Key Directories (`lib/`, `scripts/`), Routes (`admin-review.js` with the three routes, blind rule, stricter auth), Database Models (`ReviewItem`, `ReviewVerdict`), Prometheus `normalizePath` (`/admin/review/#batch`), Environment Variables (`DB_PORT`, Go calculator still on 5432).
 - ➕ `openapi.yaml` documents the `/admin/video` HTML dashboard (not `/admin/moderation`), so the three review routes were added under the Admin tag with `tokenQuery` security.
 
