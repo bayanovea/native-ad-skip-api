@@ -1,6 +1,6 @@
 # Yandex Cloud outage (October 2026) — impact on native-ad-skip-api and migration decision
 
-> **Status 2026-10-15: migrated.** Prod runs on Timeweb Cloud **Almaty** (`ala-1`, `${HOST_IP}`) — Novosibirsk had no free capacity that day, so the documented exit location was used. DNS, TLS, first deploy and RU mobile/wired reachability verified; nightly S3 backups still open (`docs/backlog/offhost-pg-backup-s3.md`). See `docs/plans/20261014-timeweb-migration.md`.
+> **Status 2026-10-15: migrated.** Prod runs on Timeweb Cloud **Almaty** (`ala-1`, `${HOST_IP}`) — Novosibirsk had no free capacity that day, so the documented exit location was used. DNS, TLS, first deploy and RU mobile/wired reachability verified; nightly S3 backups still open (`docs/backlog/offhost-pg-backup-s3.md`). See `docs/plans/completed/20261014-timeweb-migration.md`.
 
 Date: 2026-10-13. Status of our VM: `178.154.241.202`, zone `ru-central1-a`, console shows RUNNING, serial console does not load, SSH/HTTP unreachable from every external vantage point (check-host.net report `50b3c5c8k1ce`: Moscow, Kazakhstan, Romania, Germany, US all time out on :22 and :3022).
 

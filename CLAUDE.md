@@ -48,6 +48,12 @@ make test-e2e                                   # Full Docker e2e: spins up Post
 
 `make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite.
 
+### Ops
+
+```bash
+make pull-dump                                  # gzipped prod pg_dump over SSH → ~/Web/dumps/adskip-prod/ (weekly)
+```
+
 ## Architecture
 
 ### Dual-Process Design
@@ -208,9 +214,10 @@ ENV=dev|production                        # Controls yarn dev vs yarn start
 
 ### Deployment
 
-Prod is a single Timeweb Cloud VM in Almaty, `ala-1` (Ubuntu 24.04, `${HOST_IP}`; Novosibirsk had no capacity), migrated from Yandex Cloud in Oct 2026 — see `docs/plans/20261014-timeweb-migration.md`.
+Prod is a single Timeweb Cloud VM in Almaty, `ala-1` (Ubuntu 24.04, `${HOST_IP}`; Novosibirsk had no capacity), migrated from Yandex Cloud in Oct 2026 — see `docs/plans/completed/20261014-timeweb-migration.md`.
 
 - **CI/CD:** GitHub Actions (`.github/workflows/deploy.yml`): pushes to `main` tar the codebase over SSH as `skipper-admin` and run `docker compose -p native-ad-skip-api up --build -d app prometheus grafana`. Secrets: `HOST_IP`, `SSH_PRIVATE_KEY`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `NODE_APP_PORT`, `AUTH_TOKEN`, `GF_ADMIN_PASSWORD`. Supervisor inside the app container manages cron (Go CLI) and the Node.js app.
+- **DNS:** reg.ru, zone `${DNS_ZONE}` on reg.ru's free NS; A records `api`, `www.api`, `test-api`, `adskip`, `www.adskip` → `${HOST_IP}`, zone TTL 1h (panel minimum). Only `api` has a vhost and cert; the landing `adskip`/`www.adskip` resolves here but is not served yet (cert mismatch).
 - **TLS / reverse proxy:** nginx on the host terminates TLS for `${API_HOST}` (Let's Encrypt, certbot webroot renewals) and proxies to `127.0.0.1:3022`. The vhost is versioned in `infrastructure/nginx/` and copied to the host by hand. `.dev` is HSTS-preloaded, so the API is HTTPS-only.
 - **Postgres:** PostgreSQL 16 installed on the host via apt, not in Docker. Containers reach it at `host.docker.internal` (`extra_hosts: host-gateway`); `pg_hba` + `ufw` allow only `172.16.0.0/12` (Docker bridges) and localhost, so 5432 is never public.
 - **Backups:** Timeweb VM auto-backups (daily, keep 7) plus `make pull-dump` (`scripts/pull-prod-dump.sh`), which streams a gzipped `pg_dump --no-owner` over SSH to `~/Web/dumps/adskip-prod/` on the owner's Mac (`latest.sql.gz` symlink) — run weekly. The nightly S3 job (`infrastructure/backup/pg-backup.sh`, restore drill in its README) is written but **not installed yet**: `docs/backlog/offhost-pg-backup-s3.md`.

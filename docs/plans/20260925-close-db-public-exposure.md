@@ -1,6 +1,6 @@
 # Close DB Public Exposure
 
-> **Status 2026-10-14: superseded.** The Yandex Cloud host this plan targets is gone (zone `ru-central1-a` outage). Tasks 1–6 are replaced by `docs/plans/20261014-timeweb-migration.md`: on the new host Postgres is never public (Task 3 there), and compose uses `host.docker.internal` via `host-gateway` from the start. Task 7 (TLS to Postgres) stays optional and unscheduled.
+> **Status 2026-10-14: superseded.** The Yandex Cloud host this plan targets is gone (zone `ru-central1-a` outage). Tasks 1–6 are replaced by `docs/plans/completed/20261014-timeweb-migration.md`: on the new host Postgres is never public (Task 3 there), and compose uses `host.docker.internal` via `host-gateway` from the start. Task 7 (TLS to Postgres) stays optional and unscheduled.
 
 ## Overview
 

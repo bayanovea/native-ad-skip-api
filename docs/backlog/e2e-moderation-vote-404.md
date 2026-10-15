@@ -8,7 +8,7 @@ added: 2026-10-14
 `make test-e2e` passes 82 of 85. The 3 failures are moderation tests, and each fails in the `postVote`
 helper's assertion, where `POST /vote` returns 404 instead of 204. The same tests fail the same way on a
 clean checkout of HEAD (`c54b323`), so the duration-tolerance changes did not cause this. Found while
-verifying Task 11 of `docs/plans/20261014-timeweb-migration.md`. That task requires a green e2e run, so this
+verifying Task 11 of `docs/plans/completed/20261014-timeweb-migration.md`. That task requires a green e2e run, so this
 blocks it.
 
 The vote handler can return 404 from three places (`prv/routes/votes.js:25,28,36`):

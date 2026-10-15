@@ -2,7 +2,7 @@
 
 Date: 2026-10-14. Follows `docs/research/20261013-yandex-cloud-outage-analysis.md` (why we leave) and `docs/research/20261014-hosting-selection.md` (why Timeweb Novosibirsk).
 
-> **Status 2026-10-15:** Tasks 1–5 done (DNS → new IP, nginx + LE cert live), Task 7 done (first deploy live, Grafana on `:3024`), Task 8 next (reachability from RU + extension round-trip). ⚠️ The VM landed in **Timeweb Almaty (`ala-1`), not Novosibirsk**: Novosibirsk had no free capacity (the panel only offered a preorder queue), so the exit-route location was used up front. `NEW_IP` = **`${HOST_IP}`**, hostname `api`. A plain-HTTP probe from Russian networks (mobile + home wired, no VPN) reached it; the full HTTPS check is still Task 8. Wherever this plan says Novosibirsk, read Almaty.
+> **Status 2026-10-15: COMPLETED.** Prod live on the new host; Tasks 1–8, 10, 12 done. Task 9 (S3 backups) and the S3/e2e acceptance items moved to `docs/backlog/` (`offhost-pg-backup-s3.md`, `e2e-moderation-vote-404.md`). Landing site `${LANDING_HOST}` is a separate follow-up. ⚠️ The VM landed in **Timeweb Almaty (`ala-1`), not Novosibirsk**: Novosibirsk had no free capacity (the panel only offered a preorder queue), so the exit-route location was used up front. `NEW_IP` = **`${HOST_IP}`**, hostname `api`. A plain-HTTP probe from Russian networks (mobile + home wired, no VPN) reached it; the full HTTPS check is still Task 8. Wherever this plan says Novosibirsk, read Almaty.
 
 ## Overview
 
@@ -188,18 +188,18 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 ### Task 11: Verify acceptance criteria
 
-- [ ] `https://${API_HOST}/` reachable from RU mobile + RU wired (Task 8 evidence)
-- [ ] markup → calculate → video-calculated → vote round-trip on prod
-- [ ] `git push` to `main` redeploys without manual steps (push a trivial commit and watch Actions)
-- [ ] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` intentionally open (Grafana login), see Task 2
-- [ ] yesterday's backup object exists in S3; restore drill passed (deferred with Task 9 → backlog; interim local dump restore-tested 2026-10-15)
-- [ ] `make test-e2e` green on the committed compose/workflow changes
+- [x] `https://${API_HOST}/` reachable from RU mobile + RU wired (Task 8 evidence) → owner verified 2026-10-15
+- [x] markup → calculate → video-calculated → vote round-trip on prod → Task 8 (markup #12903, vote #2782)
+- [x] `git push` to `main` redeploys without manual steps (push a trivial commit and watch Actions) → three pushes on 2026-10-15 (incl. the history-rewrite force-push) each restarted the app and answered 200
+- [x] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` intentionally open (Grafana login), see Task 2 → checked 2026-10-15
+- [ ] ~~yesterday's backup object exists in S3; restore drill passed~~ → out of scope: deferred with Task 9 to `docs/backlog/offhost-pg-backup-s3.md`; interim local dump restore-tested 2026-10-15
+- [ ] ~~`make test-e2e` green on the committed compose/workflow changes~~ → out of scope: the 3 failures predate the migration, tracked in `docs/backlog/e2e-moderation-vote-404.md`
 
 ### Task 12: [Final] Update documentation
 
-- [ ] `CLAUDE.md` reflects Timeweb host, nginx/TLS, `host.docker.internal`, backups (done in Task 6/9 — re-read and confirm)
-- [ ] `README.md` is empty; add a 10-line "Ops" section pointing at `infrastructure/` and this plan (optional)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] `CLAUDE.md` reflects Timeweb host, nginx/TLS, `host.docker.internal`, backups (done in Task 6/9 — re-read and confirm) → confirmed; added DNS records and an Ops section (`make pull-dump`)
+- [ ] ~~`README.md` is empty; add a 10-line "Ops" section pointing at `infrastructure/` and this plan (optional)~~ → skipped: CLAUDE.md Deployment + Ops cover it
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 

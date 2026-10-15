@@ -1,6 +1,6 @@
 # Hosting selection after the Yandex Cloud outage (October 2026)
 
-> **Status 2026-10-15: migrated.** Prod runs on Timeweb Cloud **Almaty** (`ala-1`, `${HOST_IP}`) — Novosibirsk had no free capacity that day, so the documented exit location was used. DNS, TLS, first deploy and RU mobile/wired reachability verified; nightly S3 backups still open (`docs/backlog/offhost-pg-backup-s3.md`). See `docs/plans/20261014-timeweb-migration.md`.
+> **Status 2026-10-15: migrated.** Prod runs on Timeweb Cloud **Almaty** (`ala-1`, `${HOST_IP}`) — Novosibirsk had no free capacity that day, so the documented exit location was used. DNS, TLS, first deploy and RU mobile/wired reachability verified; nightly S3 backups still open (`docs/backlog/offhost-pg-backup-s3.md`). See `docs/plans/completed/20261014-timeweb-migration.md`.
 
 Date: 2026-10-14. Follow-up to `20261013-yandex-cloud-outage-analysis.md`.
 

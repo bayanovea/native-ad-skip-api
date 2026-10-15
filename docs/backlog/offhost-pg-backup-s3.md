@@ -5,7 +5,7 @@ added: 2026-10-15
 ---
 # nightly pg_dump to Timeweb S3 not installed on prod
 
-Task 9 of `docs/plans/20261014-timeweb-migration.md`, deferred when the rest of the migration closed. Script and
+Task 9 of `docs/plans/completed/20261014-timeweb-migration.md`, deferred when the rest of the migration closed. Script and
 restore drill are in the repo (`infrastructure/backup/`, rehearsed in `postgres:16` with `s3cmd` stubbed); nothing is
 installed on `${HOST_IP}` yet. Prod data currently lives only on the VM plus Timeweb auto-backups (same provider,
 daily, keep 7) — the single-host situation that made the Yandex Cloud outage a data-loss question.
