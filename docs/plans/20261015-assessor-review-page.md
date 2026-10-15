@@ -181,14 +181,17 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 **Files:**
 - Create: `scripts/import-review-sheet.js`
 - Modify: `test/e2e.js`
+- ➕ Modify: `scripts/sync-db.js` (honour `DB_PORT`, needed to reach the local dump on 5433)
 
-- [ ] `node scripts/import-review-sheet.js <sheet.md> [--batch NAME]`: key path = `<sheet>.key.tsv`, batch defaults to the file name without `.md`; DB connection like `scripts/sync-db.js`
-- [ ] before anything else, copy the md to `<sheet>.md.bak-YYYYMMDDHHMMSS`; never write to the md
-- [ ] in one transaction: insert items (`ON CONFLICT (batch, item_code) DO NOTHING`); insert md verdicts with `source='import'`, `reviewer='owner'` only for items that have no verdict yet (safe to re-run after more md marking)
-- [ ] print a summary: items inserted / already present, verdicts imported (item code + verdict), verdicts skipped because the item already has one
-- [ ] write e2e test: import the fixture twice → items not duplicated, verdicts not duplicated; a later page verdict is not overwritten by a re-import
-- [ ] run `make test-e2e`, must pass
-- [ ] run against the local restored dump (`localhost:5433/skipper`) for `~/Web/data/review/2026-10-14-clean.md`; verify: 39 items, verdict rows = number of non-empty `Verdict:` lines in the md at import time (6 on 2026-10-15: C1 self_promotion, C2 sponsor, C3 self_promotion, C4 sponsor, C5 not_ad with comment, C6 self_promotion); backup file exists
+- [x] `node scripts/import-review-sheet.js <sheet.md> [--batch NAME]`: key path = `<sheet>.key.tsv`, batch defaults to the file name without `.md`; DB connection like `scripts/sync-db.js`
+- [x] before anything else, copy the md to `<sheet>.md.bak-YYYYMMDDHHMMSS`; never write to the md
+- [x] in one transaction: insert items (`ON CONFLICT (batch, item_code) DO NOTHING`); insert md verdicts with `source='import'`, `reviewer='owner'` only for items that have no verdict yet (safe to re-run after more md marking)
+- [x] print a summary: items inserted / already present, verdicts imported (item code + verdict), verdicts skipped because the item already has one
+- [x] write e2e test: import the fixture twice → items not duplicated, verdicts not duplicated; a later page verdict is not overwritten by a re-import
+- [x] run `make test-e2e`, must pass
+- [x] run against the local restored dump (`localhost:5433/skipper`) for `~/Web/data/review/2026-10-14-clean.md`; verify: 39 items, verdict rows = number of non-empty `Verdict:` lines in the md at import time (6 on 2026-10-15: C1 self_promotion, C2 sponsor, C3 self_promotion, C4 sponsor, C5 not_ad with comment, C6 self_promotion); backup file exists
+- ➕ the local dump had no review tables: created them with `DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper node scripts/sync-db.js` (sync created only `prv_review_items` and `prv_review_verdicts`). Import result: 39 items, 6 verdicts (C1–C6 as listed), backup `2026-10-14-clean.md.bak-20261015230918`, md and key.tsv checksums unchanged.
+- ➕ importer never overwrites a backup: two runs in the same second get a `-1`, `-2` suffix.
 
 ### Task 4: Review repository and signals query
 

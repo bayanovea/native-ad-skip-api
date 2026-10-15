@@ -1,7 +1,7 @@
 'use strict';
 
 // Creates schema and seeds categories for the DB specified by DB_NAME env var.
-// Usage: DB_NAME=mydb node scripts/sync-db.js
+// Usage: DB_NAME=mydb [DB_HOST=localhost DB_PORT=5432] node scripts/sync-db.js
 
 const { Sequelize } = require('sequelize');
 
@@ -11,6 +11,7 @@ const sequelize = new Sequelize(
     process.env.DB_PASSWORD,
     {
         host: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || '5432', 10),
         dialect: 'postgres',
         logging: false,
         dialectOptions: { connectTimeout: 10000 },

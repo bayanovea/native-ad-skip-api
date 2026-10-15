@@ -1821,3 +1821,158 @@ test('GET /admin/user/:internal_id unknown internal_id returns 404', async () =>
     const res = await request('GET', path, null);
     assert.equal(res.status, 404, `expected 404, got ${res.status}`);
 });
+
+// ── Review sheet importer (scripts/import-review-sheet.js) ───────────────────
+
+const fs = require('node:fs');
+const os = require('node:os');
+const pathMod = require('node:path');
+
+// Copy the fixture sheet into a temp dir (the importer writes a .bak next to
+// the md) and return the md path there.
+function copyReviewFixture(name) {
+    const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'review-import-'));
+    const md = pathMod.join(dir, `${name}.md`);
+    fs.copyFileSync(pathMod.join(APP_DIR, 'test/fixtures/review-sheet.md'), md);
+    fs.copyFileSync(pathMod.join(APP_DIR, 'test/fixtures/review-sheet.key.tsv'), pathMod.join(dir, `${name}.key.tsv`));
+    return md;
+}
+
+function runImport(mdPath, extraArgs = []) {
+    const { spawnSync } = require('node:child_process');
+    const r = spawnSync('node', ['scripts/import-review-sheet.js', mdPath, ...extraArgs], {
+        cwd: APP_DIR,
+        env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) },
+        encoding: 'utf8',
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+function setVerdictLine(mdPath, itemCode, verdict) {
+    const lines = fs.readFileSync(mdPath, 'utf8').split('\n');
+    let inItem = false;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith('###')) inItem = lines[i].startsWith(`### ${itemCode}.`);
+        else if (inItem && lines[i].startsWith('Verdict:')) lines[i] = `Verdict: ${verdict}`;
+    }
+    fs.writeFileSync(mdPath, lines.join('\n'));
+}
+
+async function reviewState(batch) {
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        const items = (await c.query(
+            `SELECT id, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by
+               FROM prv_review_items WHERE batch = $1 ORDER BY position`, [batch])).rows;
+        const verdicts = (await c.query(
+            `SELECT i.item_code, v.verdict, v.comment, v.reviewer, v.source
+               FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id
+              WHERE i.batch = $1 ORDER BY i.position, v.decided_at, v.id`, [batch])).rows;
+        return { items, verdicts };
+    } finally {
+        await c.end();
+    }
+}
+
+test('review import: items and md verdicts imported, md untouched, backup written', async () => {
+    const batch = 'e2e-review-import-basic';
+    const md = copyReviewFixture(batch);
+    const before = fs.readFileSync(md, 'utf8');
+
+    const r = runImport(md);
+    assert.equal(r.status, 0, `import failed: ${r.stderr}`);
+    assert.match(r.stdout, /items inserted: 3/);
+    assert.match(r.stdout, /verdicts imported: 2/);
+    assert.match(r.stdout, /C2 sponsor/);
+    assert.match(r.stdout, /C5 not_ad \(with comment\)/);
+
+    assert.equal(fs.readFileSync(md, 'utf8'), before, 'md must not be modified');
+    const backups = fs.readdirSync(pathMod.dirname(md)).filter(f => /\.md\.bak-\d{14}(-\d+)?$/.test(f));
+    assert.equal(backups.length, 1, `expected one backup, got ${backups}`);
+    assert.equal(fs.readFileSync(pathMod.join(pathMod.dirname(md), backups[0]), 'utf8'), before);
+
+    const { items, verdicts } = await reviewState(batch);
+    assert.deepEqual(items.map(i => i.item_code), ['C2', 'C5', 'C7']);
+    const c2 = items[0];
+    assert.equal(c2.native_id, '-1_456000901');
+    assert.equal(c2.start, 262.4);
+    assert.equal(c2.end, 269.2);
+    assert.equal(c2.proposed, 'sponsor');
+    assert.equal(c2.link, 'https://example.invalid/video-1_456000901?t=4m20s');
+    assert.deepEqual(c2.flagged_by, ['2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think']);
+
+    assert.equal(verdicts.length, 2);
+    assert.deepEqual(verdicts.map(v => [v.item_code, v.verdict, v.reviewer, v.source]),
+        [['C2', 'sponsor', 'owner', 'import'], ['C5', 'not_ad', 'owner', 'import']]);
+    assert.equal(verdicts[0].comment, null);
+    assert.ok(verdicts[1].comment.startsWith('Просьба покомментить есть'));
+    assert.equal(verdicts[1].comment.split('\n').length, 2, 'multi-line comment kept as two lines');
+});
+
+test('review import: re-import does not duplicate items or verdicts; later page verdict wins over md', async () => {
+    const batch = 'e2e-review-import-rerun';
+    const md = copyReviewFixture(batch);
+    assert.equal(runImport(md).status, 0);
+
+    // Second run, md unchanged: nothing new.
+    const r2 = runImport(md);
+    assert.equal(r2.status, 0, `re-import failed: ${r2.stderr}`);
+    assert.match(r2.stdout, /items inserted: 0/);
+    assert.match(r2.stdout, /items already present: 3/);
+    assert.match(r2.stdout, /verdicts imported: 0/);
+    assert.match(r2.stdout, /verdicts skipped, item already has one: 2 \(C2, C5\)/);
+    let st = await reviewState(batch);
+    assert.equal(st.items.length, 3);
+    assert.equal(st.verdicts.length, 2);
+
+    // More md marking: C7 gets a verdict → only that one is added.
+    setVerdictLine(md, 'C7', 'Unclear');
+    const r3 = runImport(md);
+    assert.equal(r3.status, 0, `re-import failed: ${r3.stderr}`);
+    assert.match(r3.stdout, /verdicts imported: 1\n {2}C7 unclear/);
+    st = await reviewState(batch);
+    assert.equal(st.verdicts.length, 3);
+    assert.deepEqual(st.verdicts.find(v => v.item_code === 'C7'),
+        { item_code: 'C7', verdict: 'unclear', comment: null, reviewer: 'owner', source: 'import' });
+
+    // A page verdict on C2, then the md changes C2: re-import must not touch it.
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        await c.query(
+            `INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, decided_at)
+             VALUES ($1, 'self_promotion', 'changed my mind', 'assessor', 'page', NOW())`,
+            [st.items.find(i => i.item_code === 'C2').id]);
+    } finally {
+        await c.end();
+    }
+    setVerdictLine(md, 'C2', 'not an ad');
+    const r4 = runImport(md);
+    assert.equal(r4.status, 0, `re-import failed: ${r4.stderr}`);
+    assert.match(r4.stdout, /verdicts imported: 0/);
+    st = await reviewState(batch);
+    assert.equal(st.items.length, 3);
+    const c2 = st.verdicts.filter(v => v.item_code === 'C2');
+    assert.deepEqual(c2.map(v => [v.verdict, v.source]), [['sponsor', 'import'], ['self_promotion', 'page']]);
+
+    const backups = fs.readdirSync(pathMod.dirname(md)).filter(f => f.includes('.md.bak-'));
+    assert.equal(backups.length, 4, 'one backup per run, none overwritten');
+});
+
+test('review import: --batch overrides the name; unknown verdict fails and writes nothing', async () => {
+    const md = copyReviewFixture('e2e-review-sheet-file');
+    const ok = runImport(md, ['--batch', 'e2e-review-import-named']);
+    assert.equal(ok.status, 0, `import failed: ${ok.stderr}`);
+    assert.equal((await reviewState('e2e-review-import-named')).items.length, 3);
+    assert.equal((await reviewState('e2e-review-sheet-file')).items.length, 0);
+
+    const bad = copyReviewFixture('e2e-review-import-bad');
+    setVerdictLine(bad, 'C7', 'maybe');
+    const r = runImport(bad);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /C7: unknown verdict "maybe"/);
+    const st = await reviewState('e2e-review-import-bad');
+    assert.equal(st.items.length, 0);
+    assert.equal(st.verdicts.length, 0);
+});
