@@ -1,35 +1,13 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
-const { VERDICTS, formatPlayerTime, playerLink } = require('../../lib/review-sheet');
+const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
+const { ReviewInputError, SIGNALS_WINDOW, REVIEWER_MAX } = require('../repository/review');
+const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 
 // Assessor review page (prv only). Sibling of admin-moderation.js: same
 // `?verifyBearerToken=` query auth, server-rendered HTML + AJAX decide,
 // `?format=json` for tests. All reads/writes go through prv/repository/review.js,
 // which also enforces the blind rule (no `flagged_by` on undecided items).
-
-const VERDICT_LABELS = {
-    sponsor: 'sponsor',
-    self_promotion: 'self_promotion',
-    not_ad: 'not_ad',
-    unclear: 'unclear',
-};
-const CATEGORY_COLORS = { intro: '#6366f1', sponsor: '#f59e0b', self_promotion: '#ec4899', credits: '#10b981' };
-
-function escapeHtml(value) {
-    if (value == null) return '';
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-// See admin-moderation.js: URL-encode before embedding into an href.
-function urlToken(value) {
-    if (value == null) return '';
-    return encodeURIComponent(String(value));
-}
 
 // JSON for an inline <script>: escape everything that could close the script
 // element or start an HTML comment, plus the JS line separators.
@@ -42,15 +20,8 @@ function scriptJson(value) {
         .replace(/\u2029/g, '\\u2029');
 }
 
-function formatDate(value) {
-    if (value == null) return '—';
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toISOString().replace('T', ' ').replace(/\..*$/, '');
-}
-
-// Only http(s) links are rendered as hrefs; anything else falls back to the
-// computed player link.
+// Only http(s) links are rendered as hrefs (the importer requires one; this
+// guards rows written by other means).
 function safeLink(link) {
     return typeof link === 'string' && /^https?:\/\//i.test(link.trim()) ? link.trim() : null;
 }
@@ -73,19 +44,15 @@ function authorized(req, res) {
 
 // Item as the page shows it: repository fields plus player times and the
 // player link. The stored link (from `adskip sheet`) already sits at
-// start − 2 s; it is used as is, never offset again.
+// start − 2 s; it is used as is, never offset again. Null when not http(s).
 function presentItem(item) {
     return {
         ...item,
         start_player: formatPlayerTime(item.start),
         end_player: formatPlayerTime(item.end),
         duration_s: Math.round(item.end - item.start),
-        player_link: safeLink(item.link) || playerLink(item.native_id, item.start),
+        player_link: safeLink(item.link),
     };
-}
-
-function navRef(item) {
-    return item ? { item_code: item.item_code, decided: item.verdict != null } : null;
 }
 
 const STYLE = `
@@ -137,6 +104,7 @@ function page(title, body) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
     <title>${escapeHtml(title)}</title>
     <style>${STYLE}</style>
 </head>
@@ -196,7 +164,7 @@ function renderSignals(signals, token) {
             </tr>`).join('');
 
     return `
-    <h2>Signals <span class="muted">(±30 s: ${windowText})</span></h2>
+    <h2>Signals <span class="muted">(±${SIGNALS_WINDOW} s: ${windowText})</span></h2>
     <div class="signals-line">
         Undos: <strong>${Number(signals.undos)}</strong> · Clicks: <strong>${Number(signals.clicks)}</strong>
         ${signals.videos.length > 0 ? ` · ${videoLinks}` : ' · <span class="muted">no video rows for this native_id</span>'}
@@ -245,7 +213,7 @@ function renderItemPage(payload, token) {
     </div>` : '';
 
     const verdictButtons = VERDICTS.map((v, i) => `
-            <button type="button" class="verdict-btn${current && current.verdict === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${VERDICT_LABELS[v]}</button>`).join('');
+            <button type="button" class="verdict-btn${current && current.verdict === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${v}</button>`).join('');
 
     // Client state: only what the script needs. Never includes flagged_by.
     const state = {
@@ -257,6 +225,8 @@ function renderItemPage(payload, token) {
         next: nav.next ? nav.next.item_code : null,
         player_link: item.player_link,
         verdict: current ? current.verdict : null,
+        comment: current && current.comment ? current.comment : '',
+        reviewer: current ? current.reviewer : null,
         verdicts: VERDICTS,
     };
 
@@ -276,8 +246,10 @@ function renderItemPage(payload, token) {
     <div class="card">
         <div class="item-head">${escapeHtml(item.item_code)} · <code>${escapeHtml(item.native_id)}</code> · ${item.start_player} – ${item.end_player} (${item.duration_s} s)
             <span class="muted" style="margin-left:10px">Proposed as:</span> ${proposed}</div>
-        <a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">Open in player ↗</a>
-        <span class="muted">(starts 2 s before the stretch)</span>
+        ${item.player_link
+        ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">Open in player ↗</a>
+        <span class="muted">(starts 2 s before the stretch)</span>`
+        : '<span class="muted">No player link for this item.</span>'}
         ${item.cues ? `<blockquote>${escapeHtml(item.cues)}</blockquote>` : ''}
     </div>
 
@@ -294,7 +266,7 @@ function renderItemPage(payload, token) {
             </div>
             <div>
                 <label for="reviewer">Reviewer</label>
-                <input type="text" id="reviewer" maxlength="64" placeholder="your name">
+                <input type="text" id="reviewer" maxlength="${REVIEWER_MAX}" placeholder="your name">
             </div>
         </div>
         <button type="button" class="save-btn" id="save-btn" onclick="save()">Save ⏎</button>
@@ -339,8 +311,16 @@ function renderItemPage(payload, token) {
     async function save() {
         if (saving) return;
         if (!picked) { setStatus('Pick a verdict first (1–4).', 'error'); return; }
+        const comment = document.getElementById('comment').value;
         const reviewerEl = document.getElementById('reviewer');
         const reviewer = reviewerEl.value.trim();
+        // A stray Enter on a decided item must not append a copy of its
+        // verdict; another reviewer saving the same verdict is a new opinion.
+        if (picked === STATE.verdict && comment.trim() === STATE.comment
+            && (reviewer === '' || reviewer === STATE.reviewer)) {
+            setStatus('No change: ' + STATE.item_code + ' is already ' + picked + '.');
+            return;
+        }
         if (!reviewer) { setStatus('Enter your name in Reviewer.', 'error'); reviewerEl.focus(); return; }
         storageSet('localStorage', REVIEWER_KEY, reviewer);
         saving = true;
@@ -353,7 +333,7 @@ function renderItemPage(payload, token) {
                 body: JSON.stringify({
                     item_id: STATE.item_id,
                     verdict: picked,
-                    comment: document.getElementById('comment').value,
+                    comment: comment,
                     reviewer: reviewer,
                 }),
             });
@@ -371,24 +351,35 @@ function renderItemPage(payload, token) {
         saving = false;
         btn.disabled = false;
     }
+    // Letter hotkeys by key, or by physical key when the layout is not Latin
+    // (a Russian layout gives с/о/л/щ for c/j/k/o).
+    const LETTER_CODES = { KeyC: 'c', KeyJ: 'j', KeyK: 'k', KeyO: 'o' };
     document.addEventListener('keydown', function (e) {
         const el = e.target;
-        const typing = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable);
+        const tag = el && el.tagName;
+        const typing = tag === 'TEXTAREA' || tag === 'INPUT' || (el && el.isContentEditable);
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); return; }
-        if (el && el.tagName === 'A') return;
         if (typing) {
             if (e.key === 'Escape') el.blur();
+            // Enter in the one-line Reviewer box saves (the first save sends the user there).
+            else if (e.key === 'Enter' && el.id === 'reviewer') { e.preventDefault(); save(); }
             return;
         }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        const n = Number(e.key);
+        const digit = /^Digit([0-9])$/.exec(e.code || '');
+        const n = digit ? Number(digit[1]) : Number(e.key);
         if (Number.isInteger(n) && n >= 1 && n <= STATE.verdicts.length) { e.preventDefault(); pick(STATE.verdicts[n - 1]); return; }
-        switch (e.key) {
-            case 'Enter': e.preventDefault(); save(); break;
+        if (e.key === 'Enter') {
+            // Enter on a focused link (e.g. after clicking "Open in player") keeps following it.
+            if (tag === 'A') return;
+            e.preventDefault(); save(); return;
+        }
+        const letter = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : LETTER_CODES[e.code];
+        switch (letter) {
             case 'c': e.preventDefault(); document.getElementById('comment').focus(); break;
             case 'j': if (STATE.next) window.location.href = itemUrl(STATE.next); break;
             case 'k': if (STATE.prev) window.location.href = itemUrl(STATE.prev); break;
-            case 'o': window.open(STATE.player_link, '_blank', 'noopener'); break;
+            case 'o': if (STATE.player_link) window.open(STATE.player_link, '_blank', 'noopener,noreferrer'); break;
         }
     });
     (function init() {
@@ -399,6 +390,7 @@ function renderItemPage(payload, token) {
 </script>`);
 }
 
+// `models` is unused here; kept for the shared route-factory signature (see index.js).
 module.exports = function createAdminReviewRoutes(models, { reviewRepository }) {
     const router = express.Router();
 
@@ -423,30 +415,31 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             res.status(400).send('request body must be a JSON object');
             return;
         }
-        const item_id = typeof body.item_id === 'string' && /^\d+$/.test(body.item_id)
-            ? Number(body.item_id)
-            : body.item_id;
+        let row;
         try {
-            await reviewRepository.recordVerdict({
-                item_id,
+            row = await reviewRepository.recordVerdict({
+                item_id: body.item_id,
                 verdict: body.verdict,
                 comment: body.comment,
                 reviewer: body.reviewer,
                 source: 'page',
             });
         } catch (err) {
-            if (err instanceof reviewRepository.ReviewInputError) {
+            if (err instanceof ReviewInputError) {
                 res.status(400).send(err.message);
                 return;
             }
             throw err;
         }
-        const item = await reviewRepository.getItemById(item_id);
+        // The verdict comes from the row just written (another reviewer may
+        // have decided the same item meanwhile); the item only adds code,
+        // position and flagged_by.
+        const item = await reviewRepository.getItemById(row.item_id);
         const next = await reviewRepository.nextOpenItem(item.batch, item.position);
         res.status(201).json({
             item_id: item.id,
             item_code: item.item_code,
-            verdict: item.verdict.verdict,
+            verdict: row.verdict,
             flagged_by: item.flagged_by || [],
             next_item: next ? next.item_code : null,
         });
@@ -475,7 +468,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         const payload = {
             batch: progress,
             item,
-            nav: { prev: navRef(prev), next: navRef(next), first_open: navRef(firstOpen) },
+            nav: { prev, next, first_open: firstOpen },
             signals,
         };
 

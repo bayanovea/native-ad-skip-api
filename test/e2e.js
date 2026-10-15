@@ -4,9 +4,17 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('node:http');
-const { execSync, spawn } = require('node:child_process');
+const os = require('node:os');
+const path = require('node:path');
+const vm = require('node:vm');
+const { execSync, spawn, spawnSync } = require('node:child_process');
 const { Client } = require('pg');
+const { Sequelize } = require('sequelize');
+const definePrvModels = require('../prv/db');
+const createReviewRepository = require('../prv/repository/review');
+const { ReviewInputError } = createReviewRepository;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -1824,22 +1832,23 @@ test('GET /admin/user/:internal_id unknown internal_id returns 404', async () =>
 
 // ── Review sheet importer (scripts/import-review-sheet.js) ───────────────────
 
-const fs = require('node:fs');
-const os = require('node:os');
-const pathMod = require('node:path');
-
 // Copy the fixture sheet into a temp dir (the importer writes a .bak next to
-// the md) and return the md path there.
+// the md) and return the md path there. The dirs are removed after the run.
+const reviewTmpDirs = [];
+after(() => {
+    for (const dir of reviewTmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function copyReviewFixture(name) {
-    const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'review-import-'));
-    const md = pathMod.join(dir, `${name}.md`);
-    fs.copyFileSync(pathMod.join(APP_DIR, 'test/fixtures/review-sheet.md'), md);
-    fs.copyFileSync(pathMod.join(APP_DIR, 'test/fixtures/review-sheet.key.tsv'), pathMod.join(dir, `${name}.key.tsv`));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-import-'));
+    reviewTmpDirs.push(dir);
+    const md = path.join(dir, `${name}.md`);
+    fs.copyFileSync(path.join(APP_DIR, 'test/fixtures/review-sheet.md'), md);
+    fs.copyFileSync(path.join(APP_DIR, 'test/fixtures/review-sheet.key.tsv'), path.join(dir, `${name}.key.tsv`));
     return md;
 }
 
 function runImport(mdPath, extraArgs = []) {
-    const { spawnSync } = require('node:child_process');
     const r = spawnSync('node', ['scripts/import-review-sheet.js', mdPath, ...extraArgs], {
         cwd: APP_DIR,
         env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) },
@@ -1888,9 +1897,9 @@ test('review import: items and md verdicts imported, md untouched, backup writte
     assert.match(r.stdout, /C5 not_ad \(with comment\)/);
 
     assert.equal(fs.readFileSync(md, 'utf8'), before, 'md must not be modified');
-    const backups = fs.readdirSync(pathMod.dirname(md)).filter(f => /\.md\.bak-\d{14}(-\d+)?$/.test(f));
+    const backups = fs.readdirSync(path.dirname(md)).filter(f => /\.md\.bak-\d{14}(-\d+)?$/.test(f));
     assert.equal(backups.length, 1, `expected one backup, got ${backups}`);
-    assert.equal(fs.readFileSync(pathMod.join(pathMod.dirname(md), backups[0]), 'utf8'), before);
+    assert.equal(fs.readFileSync(path.join(path.dirname(md), backups[0]), 'utf8'), before);
 
     const { items, verdicts } = await reviewState(batch);
     assert.deepEqual(items.map(i => i.item_code), ['C2', 'C5', 'C7']);
@@ -1956,7 +1965,7 @@ test('review import: re-import does not duplicate items or verdicts; later page 
     const c2 = st.verdicts.filter(v => v.item_code === 'C2');
     assert.deepEqual(c2.map(v => [v.verdict, v.source]), [['sponsor', 'import'], ['self_promotion', 'page']]);
 
-    const backups = fs.readdirSync(pathMod.dirname(md)).filter(f => f.includes('.md.bak-'));
+    const backups = fs.readdirSync(path.dirname(md)).filter(f => f.includes('.md.bak-'));
     assert.equal(backups.length, 4, 'one backup per run, none overwritten');
 });
 
@@ -1977,17 +1986,124 @@ test('review import: --batch overrides the name; unknown verdict fails and write
     assert.equal(st.verdicts.length, 0);
 });
 
+test('review import: verdict typed on the line after an empty "Verdict:" is imported', async () => {
+    const batch = 'e2e-review-import-next-line';
+    const md = copyReviewFixture(batch);
+    const withNextLine = (text) => fs.readFileSync(md, 'utf8').replace(/(### C7\.[\s\S]*?Verdict:) ?\n/, `$1 \n${text}\n`);
+    fs.writeFileSync(md, withNextLine('not an ad\nПросто шутка ведущего'));
+    const r = runImport(md);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /verdicts imported: 3/);
+    assert.deepEqual((await reviewState(batch)).verdicts.find(v => v.item_code === 'C7'),
+        { item_code: 'C7', verdict: 'not_ad', comment: 'Просто шутка ведущего', reviewer: 'owner', source: 'import' });
+
+    // Text after an empty Verdict: that is not a verdict fails the import, never silently dropped.
+    const bad = copyReviewFixture('e2e-review-import-next-line-bad');
+    fs.writeFileSync(bad, fs.readFileSync(bad, 'utf8').replace(/(### C7\.[\s\S]*?Verdict:) ?\n/, '$1 \nпросто шутка\n'));
+    const rb = runImport(bad);
+    assert.equal(rb.status, 1);
+    assert.match(rb.stderr, /C7: empty "Verdict:" line and "просто шутка" after it is not a verdict/);
+    const st = await reviewState('e2e-review-import-next-line-bad');
+    assert.equal(st.items.length, 0);
+    assert.equal(st.verdicts.length, 0);
+});
+
+test('review import: a DB error on a later item rolls back the whole import', async () => {
+    const batch = 'e2e-review-import-rollback';
+    const md = copyReviewFixture(batch);
+    // C7 is the last item: C2 and C5 are inserted before its proposed value
+    // overflows VARCHAR(64) inside the transaction.
+    fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(
+        /(### C7\.[\s\S]*?)Proposed as: self_promotion/, `$1Proposed as: ${'x'.repeat(70)}`));
+    const r = runImport(md);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /import failed/);
+    const st = await reviewState(batch);
+    assert.equal(st.items.length, 0, 'C2 and C5 rolled back too');
+    assert.equal(st.verdicts.length, 0);
+});
+
+test('review import: re-import with a different stretch under an existing code fails and writes nothing', async () => {
+    const batch = 'e2e-review-import-mismatch';
+    const md = copyReviewFixture(batch);
+    assert.equal(runImport(md).status, 0);
+
+    // Sheet regenerated under the same name: C7 is now another stretch and
+    // already carries a verdict in the md.
+    const keyPath = md.replace(/\.md$/, '.key.tsv');
+    fs.writeFileSync(keyPath, fs.readFileSync(keyPath, 'utf8').replace(/^(C7\t[^\t]+\t)62\.2/m, '$150.0'));
+    setVerdictLine(md, 'C7', 'sponsor');
+    const r = runImport(md);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /C7: batch e2e-review-import-mismatch already has a different item under this code \(start 62\.2 ≠ 50\)/);
+    const st = await reviewState(batch);
+    assert.equal(st.items.find(i => i.item_code === 'C7').start, 62.2, 'existing item untouched');
+    assert.deepEqual(st.verdicts.map(v => v.item_code), ['C2', 'C5'], 'no verdict for the changed item');
+});
+
+test('review import: works on review tables created without timestamp defaults; sync-db.js adds them', async () => {
+    // The local dump's review tables were created by sync() from the first
+    // model (JS-only DataTypes.NOW): created_at / decided_at NOT NULL with no
+    // DB default. Reproduce that DDL in a separate DB.
+    const db = `${TEST_DB}_oldschema`;
+    const env = { ...process.env, DB_NAME: db, DB_HOST, DB_PORT: String(DB_PORT) };
+    const admin = adminClient();
+    await admin.connect();
+    await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+    await admin.query(`CREATE DATABASE "${db}"`);
+    const c = adminClient(db);
+    let connected = false;
+    try {
+        const sync = () => spawnSync('node', ['scripts/sync-db.js'], { cwd: APP_DIR, env, encoding: 'utf8' });
+        let r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        await c.connect();
+        connected = true;
+        await c.query('ALTER TABLE prv_review_items ALTER COLUMN created_at DROP DEFAULT');
+        await c.query('ALTER TABLE prv_review_verdicts ALTER COLUMN decided_at DROP DEFAULT');
+        const defaults = async () => (await c.query(
+            `SELECT table_name, column_default FROM information_schema.columns
+              WHERE (table_name, column_name) IN (('prv_review_items', 'created_at'), ('prv_review_verdicts', 'decided_at'))
+              ORDER BY table_name`)).rows.map(row => [row.table_name, row.column_default]);
+        assert.deepEqual(await defaults(), [['prv_review_items', null], ['prv_review_verdicts', null]]);
+
+        const md = copyReviewFixture('e2e-review-import-oldschema');
+        const importOld = () => spawnSync('node', ['scripts/import-review-sheet.js', md],
+            { cwd: APP_DIR, env, encoding: 'utf8' });
+        r = importOld();
+        assert.equal(r.status, 0, `import on old schema failed: ${r.stderr}`);
+        assert.match(r.stdout, /items inserted: 3/);
+        assert.match(r.stdout, /verdicts imported: 2/);
+        // Re-import: NOT NULL is checked before ON CONFLICT DO NOTHING.
+        r = importOld();
+        assert.equal(r.status, 0, `re-import on old schema failed: ${r.stderr}`);
+        assert.match(r.stdout, /items already present: 3/);
+        const { rows } = await c.query(
+            `SELECT (SELECT COUNT(*)::int FROM prv_review_items WHERE created_at IS NOT NULL) AS items,
+                    (SELECT COUNT(*)::int FROM prv_review_verdicts WHERE decided_at IS NOT NULL) AS verdicts`);
+        assert.deepEqual(rows[0], { items: 3, verdicts: 2 });
+
+        // sync-db.js on the existing tables: same ALTERs as app boot.
+        r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        assert.deepEqual(await defaults(),
+            [['prv_review_items', 'CURRENT_TIMESTAMP'], ['prv_review_verdicts', 'CURRENT_TIMESTAMP']]);
+    } finally {
+        if (connected) await c.end();
+        await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+        await admin.end();
+    }
+});
+
 // ── Review repository (prv/repository/review.js) ──────────────────────────────
 
 // The repository is exercised in-process against the e2e DB (no route yet).
 async function withReviewRepo(fn) {
-    const { Sequelize } = require('sequelize');
     const sequelize = new Sequelize(TEST_DB, DB_USER, DB_PASSWORD, {
         host: DB_HOST, port: DB_PORT, dialect: 'postgres', logging: false,
     });
     try {
-        const models = require('../prv/db')(sequelize);
-        return await fn(require('../prv/repository/review')(models, sequelize), sequelize);
+        return await fn(createReviewRepository(definePrvModels(sequelize), sequelize), sequelize);
     } finally {
         await sequelize.close();
     }
@@ -2006,10 +2122,13 @@ test('review repository: getSignals collects live markups, segments + votes, und
         const v1 = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 600, NOW(), NOW()) RETURNING id`, [nid])).id;
         const v2 = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 603, NOW(), NOW()) RETURNING id`, [nid])).id;
         const v3 = (await one(`INSERT INTO videos (native_id, "createdAt", "updatedAt") VALUES ($1, NOW(), NOW()) RETURNING id`, [other])).id;
-        const author = (await one(
+        ids.author = (await one(
             `INSERT INTO users (generated_user_id, rating, "createdAt", "updatedAt") VALUES ($1, 7, NOW(), NOW()) RETURNING id`,
             ['e2e-review-signals-author'])).id;
-        const markup = async (key, video, start, end, { markupDeleted = false, intervalDeleted = false } = {}) => {
+        ids.banned = (await one(
+            `INSERT INTO users (generated_user_id, rating, banned_at, "createdAt", "updatedAt") VALUES ($1, -150, NOW(), NOW(), NOW()) RETURNING id`,
+            ['e2e-review-signals-banned'])).id;
+        const markup = async (key, video, start, end, { markupDeleted = false, intervalDeleted = false, author = ids.author } = {}) => {
             const m = await one(
                 `INSERT INTO markups (video_id, user_id, internal_user_id, category_id, is_new, deleted_at, "createdAt", "updatedAt")
                  VALUES ($1, 'e2e-review-signals-author', $2, $3, false, $4, NOW(), NOW()) RETURNING id`,
@@ -2022,7 +2141,10 @@ test('review repository: getSignals collects live markups, segments + votes, und
         };
         // Stretch 100–120 s, window 30 → 70–150.
         await markup('inA', v1, 140, 160);                       // overlaps the window end
-        await markup('inB', v2, 60, 75);                         // other videos row, overlaps the start
+        await markup('inB', v2, 60, 75, { author: ids.banned }); // other videos row, overlaps the start
+        await markup('edgeLo', v1, 50, 70);                      // ends exactly at the window start
+        await markup('edgeHi', v1, 150, 170);                    // starts exactly at the window end
+        await markup('justOut', v1, 50, 69.9);                   // ends just before the window
         await markup('deletedMarkup', v1, 100, 110, { markupDeleted: true });
         await markup('deletedInterval', v1, 100, 110, { intervalDeleted: true });
         await markup('outside', v1, 200, 220);
@@ -2033,10 +2155,12 @@ test('review repository: getSignals collects live markups, segments + votes, und
              VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING id`, [video, sponsor, start, end, rating])).id;
         ids.segIn = await seg(v1, 101, 119, 1);
         ids.segOut = await seg(v1, 300, 310, 0);
-        for (const [i, vote] of [1, 1, -1].entries()) {
+        // Votes match by (video, category, start, end): the intro vote with the
+        // same times belongs to another segment and must not be counted.
+        for (const [i, [vote, category]] of [[1, sponsor], [1, sponsor], [-1, sponsor], [-1, cats.prv.intro]].entries()) {
             await c.query(
                 `INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
-                 VALUES ($1, $2, $3, 101, 119, $4, NOW(), NOW())`, [`e2e-review-voter-${i}`, v1, sponsor, vote]);
+                 VALUES ($1, $2, $3, 101, 119, $4, NOW(), NOW())`, [`e2e-review-voter-${i}`, v1, category, vote]);
         }
 
         for (const table of ['prv_events_interval_undo', 'prv_events_interval_click']) {
@@ -2056,15 +2180,17 @@ test('review repository: getSignals collects live markups, segments + votes, und
     const s = await withReviewRepo(repo => repo.getSignals(nid, 100, 120));
     assert.deepEqual(s.window, { start: 70, end: 150 });
     assert.equal(s.videos.length, 2, 'both videos rows for the native_id');
-    assert.deepEqual(s.markups.map(m => m.markup_id), [ids.inB, ids.inA],
-        'only live, in-window markups of this native_id, ordered by start');
+    assert.deepEqual(s.markups.map(m => m.markup_id), [ids.edgeLo, ids.inB, ids.inA, ids.edgeHi],
+        'only live, in-window markups of this native_id (bounds inclusive), ordered by start');
     const a = s.markups.find(m => m.markup_id === ids.inA);
     assert.equal(a.category, 'sponsor');
     assert.equal(a.start, 140);
     assert.equal(a.end, 160);
     assert.equal(a.author_rating, 7);
     assert.equal(a.author_banned, false);
-    assert.ok(Number.isInteger(a.user_id));
+    assert.equal(a.user_id, ids.author);
+    const b = s.markups.find(m => m.markup_id === ids.inB);
+    assert.deepEqual([b.user_id, b.author_rating, b.author_banned], [ids.banned, -150, true]);
 
     assert.deepEqual(s.segments.map(x => x.segment_id), [ids.segIn]);
     assert.deepEqual(
@@ -2075,40 +2201,44 @@ test('review repository: getSignals collects live markups, segments + votes, und
 
     const none = await withReviewRepo(repo => repo.getSignals('__e2e__review_no_video', 100, 120));
     assert.deepEqual(none, { window: { start: 70, end: 150 }, videos: [], markups: [], segments: [], undos: 0, clicks: 0 });
+    const early = await withReviewRepo(repo => repo.getSignals('__e2e__review_no_video', 10, 20));
+    assert.deepEqual(early.window, { start: 0, end: 50 }, 'window start clamped at 0');
 });
 
 test('review repository: latest verdict wins, history kept, blind until decided, navigation helpers', async () => {
     const batch = 'e2e-review-repo';
     assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C2 sponsor, C5 not_ad, C7 open
 
-    await withReviewRepo(async (repo) => {
+    await withReviewRepo(async (repo, sequelize) => {
         const open = await repo.getItem(batch, 'C7');
         assert.equal(open.verdict, null);
         assert.deepEqual(open.history, []);
         assert.ok(!('flagged_by' in open), 'flagged_by hidden before a verdict');
-        assert.equal((await repo.firstOpenItem(batch)).item_code, 'C7');
+        assert.deepEqual(await repo.firstOpenItem(batch), { item_code: 'C7', decided: false });
         assert.equal((await repo.defaultItem(batch)).item_code, 'C7');
-        assert.equal((await repo.nextOpenItem(batch, 2)).item_code, 'C7');
-        assert.equal((await repo.nextOpenItem(batch, 7)).item_code, 'C7', 'wraps round to the first open item');
+        assert.deepEqual(await repo.nextOpenItem(batch, 2), { item_code: 'C7', decided: false });
+        assert.deepEqual(await repo.nextOpenItem(batch, 7), { item_code: 'C7', decided: false }, 'wraps round to the first open item');
         assert.deepEqual(await repo.getBatchProgress(batch), { batch, total: 3, decided: 2, open: 1 });
         const listed = (await repo.listBatches()).find(b => b.batch === batch);
         assert.deepEqual(listed, { batch, total: 3, decided: 2, open: 1 });
 
-        const nb = await repo.neighbours(batch, 5);
-        assert.equal(nb.prev.item_code, 'C2');
-        assert.equal(nb.next.item_code, 'C7');
-        assert.equal(nb.prev.verdict.verdict, 'sponsor');
+        assert.deepEqual(await repo.neighbours(batch, 5),
+            { prev: { item_code: 'C2', decided: true }, next: { item_code: 'C7', decided: false } });
         assert.equal((await repo.neighbours(batch, 2)).prev, null);
 
         // Bad input never writes a row.
+        const inputError = (re) => (e) => e instanceof ReviewInputError && re.test(e.message);
         await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'maybe', reviewer: 'owner', source: 'page' }),
-            e => e.code === 'invalid_verdict');
+            inputError(/verdict must be one of/));
         await assert.rejects(repo.recordVerdict({ item_id: 99999999, verdict: 'sponsor', reviewer: 'owner', source: 'page' }),
-            e => e.code === 'unknown_item');
+            inputError(/unknown review item/));
+        await assert.rejects(repo.recordVerdict({ item_id: 2147483648, verdict: 'sponsor', reviewer: 'owner', source: 'page' }),
+            inputError(/item_id must be a positive integer/), 'beyond INTEGER → input error, not a DB error');
         await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', reviewer: '  ', source: 'page' }),
-            e => e.code === 'invalid_reviewer');
+            inputError(/reviewer/));
         await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', reviewer: 'owner', source: 'api' }),
-            e => e.code === 'invalid_source');
+            (e) => !(e instanceof ReviewInputError) && /bad source/.test(e.message), 'source is a caller bug, not input');
+        assert.equal(await repo.getItemById(2147483648), null);
         assert.equal((await repo.getItem(batch, 'C7')).history.length, 0);
 
         await repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', comment: '   ', reviewer: 'owner', source: 'page' });
@@ -2123,6 +2253,23 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.deepEqual(decided.flagged_by, ['2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think'],
             'flagged_by shown once decided');
 
+        // decided_at comes from the DB clock: a raw insert without it works,
+        // and two rows with the same decided_at are ordered by id (higher wins).
+        const [[{ decided_at: sameTime }]] = await sequelize.query(
+            'SELECT decided_at FROM prv_review_verdicts WHERE item_id = $1 ORDER BY id DESC LIMIT 1', { bind: [open.id] });
+        assert.ok(sameTime instanceof Date);
+        await sequelize.query(
+            `INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source) VALUES ($1, 'unclear', 'raw', 'page')`,
+            { bind: [open.id] });
+        await sequelize.query(
+            `INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source, decided_at)
+             VALUES ($1, 'sponsor', 'tie-a', 'page', '2100-01-01T00:00:00Z'), ($1, 'self_promotion', 'tie-b', 'page', '2100-01-01T00:00:00Z')`,
+            { bind: [open.id] });
+        const tie = await repo.getItem(batch, 'C7');
+        assert.deepEqual(tie.history.slice(0, 3).map(h => h.reviewer), ['tie-b', 'tie-a', 'raw'],
+            'same decided_at → higher id first; raw insert got a decided_at');
+        assert.equal(tie.verdict.verdict, 'self_promotion');
+
         assert.equal(await repo.firstOpenItem(batch), null);
         assert.equal(await repo.nextOpenItem(batch, 2), null);
         assert.equal((await repo.defaultItem(batch)).item_code, 'C7', 'all decided → last item');
@@ -2136,9 +2283,9 @@ test('review repository: latest verdict wins, history kept, blind until decided,
 
 const REVIEW_RUN = '2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think';
 
-function reviewPath(path, query = {}) {
+function reviewPath(route, query = {}) {
     const qs = new URLSearchParams({ ...query, verifyBearerToken: MOD_AUTH });
-    return `${path}?${qs}`;
+    return `${route}?${qs}`;
 }
 
 function getReview(batch, query = {}) {
@@ -2232,7 +2379,7 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C7');
 
     // Change of mind appends; latest wins, history kept.
-    assert.equal((await decideReview({ item_id: String(item.id), verdict: 'not_ad', reviewer: 'owner' })).status, 201);
+    assert.equal((await decideReview({ item_id: item.id, verdict: 'not_ad', reviewer: 'owner' })).status, 201);
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'not_ad');
     assert.equal(r.body.item.verdict.comment, null);
@@ -2254,7 +2401,14 @@ test('review page: decide validation → 400 and no row written', async () => {
         [{ item_id: c7.id, verdict: 'sponsor', reviewer: '   ' }, /reviewer/],
         [{ item_id: c7.id, verdict: 'sponsor', reviewer: 'owner', comment: 42 }, /comment/],
         [{ item_id: 99999999, verdict: 'sponsor', reviewer: 'owner' }, /unknown review item/],
+        [{ item_id: c7.id, verdict: 'sponsor', reviewer: 'x'.repeat(65) }, /reviewer must be 1-64/],
         [{ item_id: 'abc', verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: String(c7.id), verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: '07', verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: 0, verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: -1, verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: 1.5, verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ item_id: 9999999999, verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
         [{ verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
     ]) {
         const res = await decideReview(payload);
@@ -2267,6 +2421,12 @@ test('review page: decide validation → 400 and no row written', async () => {
 
     assert.equal((await getReview('e2e-review-no-such-batch', { format: 'json' })).status, 404);
     assert.equal((await getReview(batch, { item: 'C99', format: 'json' })).status, 404);
+
+    // Reviewer limit is on the trimmed name (the column is VARCHAR(64)).
+    const max = 'r'.repeat(64);
+    assert.equal((await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: max })).status, 201);
+    assert.equal((await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: `  ${max}  ` })).status, 201);
+    assert.deepEqual((await getReview(batch, { item: 'C7', format: 'json' })).body.item.history.map(h => h.reviewer), [max, max]);
 });
 
 test('review page: save → next open item after the current one, wrapping round', async () => {
@@ -2278,8 +2438,8 @@ test('review page: save → next open item after the current one, wrapping round
         // Extra open items before and after C7.
         for (const [code, pos] of [['C1', 1], ['C9', 9]]) {
             await c.query(
-                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, created_at)
-                 VALUES ($1, $2, $3, '-1_1', 10, 20, 'sponsor', NOW())`, [batch, code, pos]);
+                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed)
+                 VALUES ($1, $2, $3, '-1_1', 10, 20, 'sponsor')`, [batch, code, pos]);
         }
     } finally {
         await c.end();
@@ -2289,13 +2449,18 @@ test('review page: save → next open item after the current one, wrapping round
 
     let d = await decideReview({ item_id: await id('C7'), verdict: 'sponsor', reviewer: 'owner' });
     assert.equal(d.body.next_item, 'C9');
+    // Re-deciding an already decided item also moves on to the next open one.
+    d = await decideReview({ item_id: await id('C5'), verdict: 'unclear', reviewer: 'owner' });
+    assert.equal(d.body.next_item, 'C9');
     d = await decideReview({ item_id: await id('C9'), verdict: 'unclear', reviewer: 'owner' });
     assert.equal(d.body.next_item, 'C1', 'wraps round to the first open item');
     d = await decideReview({ item_id: await id('C1'), verdict: 'not_ad', reviewer: 'owner' });
     assert.equal(d.body.next_item, null);
-    // C1 had no stored link → computed one at start − 2 s.
-    assert.equal((await getReview(batch, { item: 'C1', format: 'json' })).body.item.player_link,
-        'https://example.invalid/video-1_1?t=8s');
+    // C1 has no stored link → no player link (never computed).
+    assert.equal((await getReview(batch, { item: 'C1', format: 'json' })).body.item.player_link, null);
+    const c1html = (await getReview(batch, { item: 'C1' })).body;
+    assert.ok(c1html.includes('No player link for this item.'));
+    assert.ok(!c1html.includes('id="player-link"'));
 });
 
 test('review page: user-controlled text is escaped in HTML and inline JSON', async () => {
@@ -2306,8 +2471,8 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
     let itemId;
     try {
         itemId = (await c.query(
-            `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
-             VALUES ($1, 'C1', 1, '-1_2', 30, 40, 'sponsor', $2, 'javascript:alert(3)', $3, NOW()) RETURNING id`,
+            `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by)
+             VALUES ($1, 'C1', 1, '-1_2', 30, 40, 'sponsor', $2, 'javascript:alert(3)', $3) RETURNING id`,
             [batch, evil, JSON.stringify([evil])])).rows[0].id;
     } finally {
         await c.end();
@@ -2324,7 +2489,9 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
     assert.ok(!html.includes('e2e-review-xss<b>'), 'batch name escaped');
     assert.ok(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)'));
     assert.ok(!html.includes('href="javascript:'), 'non-http link never rendered as href');
-    assert.ok(html.includes('href="https://example.invalid/video-1_2?t=28s"'));
+    assert.ok(!html.includes('javascript:alert(3)'), 'nor anywhere else (inline STATE included)');
+    assert.ok(html.includes('No player link for this item.'));
+    assert.ok(html.includes('<meta name="referrer" content="no-referrer">'), 'token in the URL never sent as Referer');
     // Exactly one <script> element: the page's own, nothing injected.
     assert.equal(html.split('<script>').length - 1, 1);
     assert.equal(html.split('</script>').length - 1, 1);
@@ -2332,6 +2499,61 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
     const list = await request('GET', reviewPath('/admin/review'), null);
     assert.ok(!list.body.includes('e2e-review-xss<b>'));
     assert.ok(list.body.includes(`/admin/review/${encodeURIComponent(batch).replace(/'/g, '&#39;')}?`));
+});
+
+test('review page: signals panel renders markups, segments, votes and links for the item stretch', async () => {
+    const batch = 'e2e-review-page-signals';
+    const nid = '__e2e__review_page_signals';
+    const sponsor = cats.prv.sponsor;
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    const ids = {};
+    try {
+        const one = async (sql, params) => (await c.query(sql, params)).rows[0];
+        await c.query(
+            `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, link, flagged_by)
+             VALUES ($1, 'C1', 1, $2, 200, 230, 'sponsor', 'https://example.invalid/video-1_9?t=3m18s', '["run-sig"]')`, [batch, nid]);
+        ids.video = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 900, NOW(), NOW()) RETURNING id`, [nid])).id;
+        ids.user = (await one(
+            `INSERT INTO users (generated_user_id, rating, banned_at, "createdAt", "updatedAt") VALUES ('e2e-review-page-banned', -120, NOW(), NOW(), NOW()) RETURNING id`)).id;
+        ids.markup = (await one(
+            `INSERT INTO markups (video_id, user_id, internal_user_id, category_id, is_new, "createdAt", "updatedAt")
+             VALUES ($1, 'e2e-review-page-banned', $2, $3, false, NOW(), NOW()) RETURNING id`, [ids.video, ids.user, sponsor])).id;
+        await c.query(
+            `INSERT INTO markup_time_intervals (markup_id, start, "end", "createdAt", "updatedAt") VALUES ($1, 205, 228, NOW(), NOW())`, [ids.markup]);
+        ids.segment = (await one(
+            `INSERT INTO prv_calculated_segments (video_id, category_id, start, "end", rating, "createdAt", "updatedAt")
+             VALUES ($1, $2, 204, 229, -1, NOW(), NOW()) RETURNING id`, [ids.video, sponsor])).id;
+        for (const [i, vote] of [1, -1, -1].entries()) {
+            await c.query(
+                `INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
+                 VALUES ($1, $2, $3, 204, 229, $4, NOW(), NOW())`, [`e2e-review-page-voter-${i}`, ids.video, sponsor, vote]);
+        }
+        await c.query(
+            `INSERT INTO prv_events_interval_undo (user_id, video_native_id, category_id, start, "end", "createdAt", "updatedAt")
+             VALUES ('e2e-review-page', $1, $2, 210, 220, NOW(), NOW())`, [nid, sponsor]);
+    } finally {
+        await c.end();
+    }
+
+    const r = await getReview(batch, { format: 'json' });
+    assert.equal(r.status, 200);
+    const sig = r.body.signals;
+    assert.deepEqual(sig.window, { start: 170, end: 260 });
+    assert.deepEqual(sig.videos, [{ id: ids.video, duration: 900 }]);
+    assert.deepEqual(sig.markups.map(m => [m.markup_id, m.user_id, m.author_banned]), [[ids.markup, ids.user, true]]);
+    assert.deepEqual(sig.segments.map(x => [x.segment_id, x.rating, x.likes, x.dislikes]), [[ids.segment, -1, 1, 2]]);
+    assert.equal(sig.undos, 1);
+
+    const html = (await getReview(batch)).body;
+    assert.ok(html.includes('Signals <span class="muted">(±30 s: 2:50 – 4:20)</span>'));
+    assert.ok(html.includes(`href="/admin/video/${ids.video}?verifyBearerToken=${MOD_AUTH}"`), 'video page link');
+    assert.ok(html.includes(`href="/admin/user/${ids.user}?verifyBearerToken=${MOD_AUTH}"`), 'author link by internal id');
+    assert.ok(html.includes('<span class="badge badge-banned">banned</span>'));
+    assert.ok(html.includes('3:25 – 3:48'), 'markup interval in player time');
+    assert.ok(html.includes('>1 / 2</td>'), 'likes / dislikes');
+    assert.ok(html.includes('Undos: <strong>1</strong>'));
+    assert.ok(!html.includes('run-sig'), 'still blind');
 });
 
 test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
@@ -2348,14 +2570,14 @@ test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
 //
 // Executes the page's real inline <script> (taken from the served HTML) in a
 // vm context with a small stubbed DOM: the elements the script touches
-// (#status, #reviewer, #comment, #save-btn, .verdict-btn), document keydown
-// listeners, focus/blur, localStorage/sessionStorage, location.href and
-// window.open. fetch() goes to the real e2e server, so every save is a real
-// POST /admin/review/decide and every navigation loads the real next page.
+// (#status, #reviewer, #comment, #save-btn, #player-link, the [data-verdict]
+// buttons), document keydown listeners, focus/blur, localStorage /
+// sessionStorage, location.href and window.open. fetch() goes to the real e2e
+// server, so every save is a real POST /admin/review/decide and every
+// navigation loads the real next page. The stubs are found by id /
+// data-verdict only, so styling and attribute order can change freely.
 // No browser in the e2e container; the same pass was also run once in
 // headless Chrome against a throwaway local DB (see the plan, Task 7).
-
-const vm = require('node:vm');
 
 function htmlUnescape(s) {
     return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
@@ -2368,6 +2590,19 @@ function memoryStorage() {
         setItem: (k, v) => m.set(k, String(v)),
         removeItem: (k) => m.delete(k),
     };
+}
+
+// Storage that throws on every access (private window, blocked site data).
+function brokenStorage() {
+    const fail = () => { throw new Error('SecurityError: storage disabled'); };
+    return { getItem: fail, setItem: fail, removeItem: fail };
+}
+
+// KeyboardEvent.code for a Latin key or digit, as a US layout reports it.
+function keyCode(key) {
+    if (/^[a-z]$/i.test(key)) return `Key${key.toUpperCase()}`;
+    if (/^[0-9]$/.test(key)) return `Digit${key}`;
+    return key;
 }
 
 // One loaded page: parses the served HTML into stub elements and runs its script.
@@ -2386,18 +2621,20 @@ function loadKeyboardPage(html, storages) {
         focus() { doc.activeElement = this; },
         blur() { if (doc.activeElement === this) doc.activeElement = body; },
     });
-    const comment = html.match(/<textarea id="comment"[^>]*>([\s\S]*?)<\/textarea>/);
+    const comment = html.match(/<textarea[^>]*\bid="comment"[^>]*>([\s\S]*?)<\/textarea>/);
     const els = {
         status: field('DIV', 'status'),
         reviewer: field('INPUT', 'reviewer'),
         comment: field('TEXTAREA', 'comment', comment ? htmlUnescape(comment[1]) : ''),
         'save-btn': field('BUTTON', 'save-btn'),
     };
-    const buttons = [...html.matchAll(/<button type="button" class="verdict-btn( selected)?" data-verdict="([^"]+)"/g)].map(m => {
-        const classes = new Set(['verdict-btn', ...(m[1] ? ['selected'] : [])]);
+    if (html.includes('id="player-link"')) els['player-link'] = field('A', 'player-link');
+    const buttons = [...html.matchAll(/<button\b[^>]*\bdata-verdict="([^"]+)"[^>]*>/g)].map(m => {
+        const classAttr = (m[0].match(/\bclass="([^"]*)"/) || [, ''])[1];
+        const classes = new Set(classAttr.split(/\s+/).filter(Boolean));
         return {
             tagName: 'BUTTON',
-            dataset: { verdict: m[2] },
+            dataset: { verdict: m[1] },
             classList: {
                 contains: (c) => classes.has(c),
                 toggle: (c, force) => { (force ?? !classes.has(c)) ? classes.add(c) : classes.delete(c); },
@@ -2429,17 +2666,18 @@ function loadKeyboardPage(html, storages) {
     vm.runInContext(scripts[0][1], ctx);
 
     Object.assign(page, {
-        els, doc,
+        els, doc, ctx,
         state: () => vm.runInContext('STATE', ctx),
         selected: () => buttons.filter(b => b.classList.contains('selected')).map(b => b.dataset.verdict),
         active: () => doc.activeElement.id || doc.activeElement.tagName,
         // A key press as the browser delivers it: keydown to the focused
         // element (bubbling to document); a printable key not prevented by the
-        // handler is typed into a focused text box.
-        key(key, { ctrl = false } = {}) {
+        // handler is typed into a focused text box. `code` defaults to the US
+        // layout's; pass it for another layout (e.g. key 'о', code 'KeyJ').
+        key(key, { ctrl = false, code = keyCode(key) } = {}) {
             const target = doc.activeElement;
             const ev = {
-                key, target, ctrlKey: ctrl, metaKey: false, altKey: false, defaultPrevented: false,
+                key, code, target, ctrlKey: ctrl, metaKey: false, altKey: false, defaultPrevented: false,
                 preventDefault() { this.defaultPrevented = true; },
             };
             page.keydown.forEach(fn => fn(ev));
@@ -2467,20 +2705,25 @@ async function saveAndFollow(page, opts) {
     return page.navigatedTo;
 }
 
-test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o) decides a whole batch', async () => {
-    const batch = 'e2e-review-keyboard';
+// Items C1..Cn at 10·n s, each with the stored player link at start − 2 s.
+async function seedKeyboardBatch(batch, count) {
     const c = adminClient(TEST_DB);
     await c.connect();
     try {
-        for (const pos of [1, 2, 3, 4]) {
+        for (let pos = 1; pos <= count; pos++) {
             await c.query(
-                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, flagged_by, created_at)
-                 VALUES ($1, $2, $3, '-1_3', $4, $5, 'sponsor', 'cue', '["run-kbd"]', NOW())`,
-                [batch, `C${pos}`, pos, 10 * pos, 10 * pos + 5]);
+                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by)
+                 VALUES ($1, $2, $3, '-1_3', $4, $5, 'sponsor', 'cue', $6, '["run-kbd"]')`,
+                [batch, `C${pos}`, pos, 10 * pos, 10 * pos + 5, `https://example.invalid/video-1_3?t=${10 * pos - 2}s`]);
         }
     } finally {
         await c.end();
     }
+}
+
+test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o) decides a whole batch', async () => {
+    const batch = 'e2e-review-keyboard';
+    await seedKeyboardBatch(batch, 4);
     const storages = { local: memoryStorage(), session: memoryStorage() };
     const itemPath = (code) => `/admin/review/${batch}?item=${code}&verifyBearerToken=${MOD_AUTH}`;
 
@@ -2498,7 +2741,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.equal(page.navigatedTo, itemPath('C1'));
     ({ page } = await openKeyboardPage(page.navigatedTo, storages));
     page.key('o');
-    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener' }]);
+    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener,noreferrer' }]);
 
     // C1: no reviewer yet → refused, focus jumps to Reviewer; type, Esc, Enter.
     page.key('1');
@@ -2555,5 +2798,88 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
         { item_code: 'C2', verdict: 'self_promotion', comment: 'note 4', reviewer: 'kbd', source: 'page' },
         { item_code: 'C3', verdict: 'not_ad', comment: null, reviewer: 'kbd', source: 'page' },
         { item_code: 'C4', verdict: 'unclear', comment: null, reviewer: 'kbd', source: 'page' },
+    ]);
+});
+
+test('review page: keyboard edge cases (Russian layout, focused link, Enter in Reviewer, errors, no-change guard, broken storage)', async () => {
+    const batch = 'e2e-review-keyboard-edge';
+    await seedKeyboardBatch(batch, 2);
+    // Storage that throws everywhere: the page still works, nothing is remembered.
+    const storages = { local: brokenStorage(), session: brokenStorage() };
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&verifyBearerToken=${MOD_AUTH}`;
+
+    let { page } = await openKeyboardPage(itemPath('C1'), storages);
+    assert.equal(page.els.reviewer.value, '');
+    assert.equal(page.els.status.textContent, '');
+
+    // Russian layout: letters arrive as Cyrillic, the physical key decides.
+    page.key('о', { code: 'KeyJ' });
+    assert.equal(page.navigatedTo, itemPath('C2'));
+    page.navigatedTo = null;
+
+    // After clicking "Open in player" the link has focus: hotkeys still work,
+    // only Enter keeps its link meaning (no save).
+    page.els['player-link'].focus();
+    page.key('щ', { code: 'KeyO' });
+    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener,noreferrer' }]);
+    page.key('1');
+    assert.deepEqual(page.selected(), ['sponsor']);
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.equal(page.els.status.textContent, '', 'Enter on the link did not try to save');
+
+    // Enter in the Reviewer box saves. A server error is shown and the button
+    // comes back; a double Enter posts once.
+    page.els['save-btn'].focus();
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.active(), 'reviewer', 'first save asks for the name');
+    page.type('kb2');
+    const realId = page.state().item_id;
+    vm.runInContext('STATE.item_id = 2147483647', page.ctx);
+    page.key('Enter');
+    for (let i = 0; i < 200 && !/^Error/.test(page.els.status.textContent); i++) await sleep(10);
+    assert.match(page.els.status.textContent, /^Error 400: unknown review item 2147483647/);
+    assert.equal(page.els.status.className, 'status error');
+    assert.equal(page.els['save-btn'].disabled, false, 'button re-enabled after an error');
+    assert.equal(page.navigatedTo, null);
+    vm.runInContext(`STATE.item_id = ${realId}`, page.ctx);
+    page.key('Enter');
+    assert.equal(page.els['save-btn'].disabled, true, 'saving');
+    // saveAndFollow presses Enter a second time while the first save is in flight.
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+    await sleep(50);
+    assert.equal((await reviewState(batch)).verdicts.length, 1, 'double Enter posted once');
+
+    // Back on the decided C1: a stray Enter does not append a copy of the
+    // verdict; a changed comment does.
+    ({ page } = await openKeyboardPage(itemPath('C1'), storages));
+    assert.deepEqual(page.selected(), ['sponsor']);
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.equal(page.els.status.textContent, 'No change: C1 is already sponsor.');
+    page.key('с', { code: 'KeyC' });
+    assert.equal(page.active(), 'comment');
+    page.type('why');
+    page.els.reviewer.value = 'kb2';
+    assert.equal(await saveAndFollow(page, { ctrl: true }), itemPath('C2'));
+
+    // Same verdict + comment: a no-op for the reviewer who saved it, a new
+    // verdict row for a second reviewer agreeing with it.
+    ({ page } = await openKeyboardPage(itemPath('C1'), storages));
+    page.els.reviewer.value = ' kb2 ';
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.equal(page.els.status.textContent, 'No change: C1 is already sponsor.');
+    page.els.reviewer.value = 'second';
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+
+    assert.deepEqual((await reviewState(batch)).verdicts, [
+        { item_code: 'C1', verdict: 'sponsor', comment: null, reviewer: 'kb2', source: 'page' },
+        { item_code: 'C1', verdict: 'sponsor', comment: 'why', reviewer: 'kb2', source: 'page' },
+        { item_code: 'C1', verdict: 'sponsor', comment: 'why', reviewer: 'second', source: 'page' },
     ]);
 });

@@ -3,7 +3,9 @@
 // Imports a blind review sheet (`adskip sheet` output) into prv_review_items and
 // prv_review_verdicts. The md file is read-only input: it is backed up first and
 // never written to. Safe to re-run: items already present are kept, and md
-// verdicts are imported only for items that have no verdict yet.
+// verdicts are imported only for items that have no verdict yet. A re-import
+// whose items differ from the ones already in the batch (same code, other
+// stretch) fails and writes nothing.
 //
 // Usage: DB_NAME=skipper DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=… \
 //        node scripts/import-review-sheet.js <sheet.md> [--batch NAME]
@@ -12,8 +14,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { Sequelize, QueryTypes } = require('sequelize');
 const { parseSheet } = require('../lib/review-sheet');
+const { scriptSequelize } = require('../lib/script-db');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
 
@@ -69,40 +71,24 @@ function backupMd(mdPath) {
 async function importItems(sequelize, review, batch, items) {
     const summary = { inserted: [], present: [], imported: [], skipped: [] };
     await sequelize.transaction(async (transaction) => {
-        for (const it of items) {
-            const rows = await sequelize.query(
-                `INSERT INTO prv_review_items
-                    (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
-                 VALUES (:batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, NOW())
-                 ON CONFLICT (batch, item_code) DO NOTHING
-                 RETURNING id`,
-                {
-                    replacements: {
-                        batch,
-                        item_code: it.item_code,
-                        position: it.position,
-                        native_id: it.native_id,
-                        start: it.start,
-                        end: it.end,
-                        proposed: it.proposed,
-                        cues: it.cues,
-                        link: it.link,
-                        flagged_by: JSON.stringify(it.flagged_by),
-                    },
-                    type: QueryTypes.SELECT,
-                    transaction,
-                }
-            );
-            (rows.length ? summary.inserted : summary.present).push(it.item_code);
-        }
+        const { inserted, present } = await review.insertItems(batch, items, { transaction });
+        summary.inserted = inserted;
+        summary.present = present;
 
-        const ids = await sequelize.query(
-            `SELECT i.id, i.item_code, EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id) AS has_verdict
-               FROM prv_review_items i
-              WHERE i.batch = :batch`,
-            { replacements: { batch }, type: QueryTypes.SELECT, transaction }
-        );
+        const ids = await review.itemsInBatch(batch, { transaction });
         const byCode = new Map(ids.map((r) => [r.item_code, r]));
+
+        // An item already in the batch must be the same stretch as the md block;
+        // otherwise (sheet regenerated under the same name, --batch pointing at
+        // another sheet's batch) md verdicts would land on the wrong item.
+        for (const it of items) {
+            const row = byCode.get(it.item_code);
+            const diff = ['native_id', 'start', 'end', 'proposed'].filter((f) => row[f] !== it[f]);
+            if (diff.length) {
+                throw new Error(`${it.item_code}: batch ${batch} already has a different item under this code `
+                    + `(${diff.map((f) => `${f} ${row[f]} ≠ ${it[f]}`).join(', ')}); nothing imported`);
+            }
+        }
 
         for (const it of items) {
             if (!it.verdict) continue;
@@ -150,20 +136,10 @@ async function main() {
     const { items } = parseSheet(md, key);
     if (items.length === 0) throw new Error(`${mdPath}: no items found`);
 
-    const sequelize = new Sequelize(
-        process.env.DB_NAME,
-        process.env.DB_USER,
-        process.env.DB_PASSWORD,
-        {
-            host: process.env.DB_HOST || 'localhost',
-            port: parseInt(process.env.DB_PORT || '5432', 10),
-            dialect: 'postgres',
-            logging: false,
-            dialectOptions: { connectTimeout: 10000 },
-        }
-    );
+    const sequelize = scriptSequelize();
     try {
-        // Verdicts go through the same write entrypoint as the review page.
+        // All review-table SQL lives in the repository; verdicts go through the
+        // same write entrypoint as the review page.
         const review = createReviewRepository(definePrvModels(sequelize), sequelize);
         const summary = await importItems(sequelize, review, batch, items);
         printSummary(batch, summary);

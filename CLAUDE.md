@@ -44,9 +44,10 @@ make test-calculator                            # Go integration tests against a
                                                 # (requires DB_USER/DB_PASSWORD in env)
 make test-e2e                                   # Full Docker e2e: spins up Postgres + Node app
                                                 # and exercises HTTP endpoints + Go calc binary
+make test-unit                                  # DB-free Node unit tests (no Docker)
 ```
 
-`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL, in its own DB). DB-free unit tests run directly: `node --test test/review-sheet.test.js test/db-config.test.js`.
+`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL in its own DB, plus `scripts/export-review-verdicts.sh` through psql: the e2e compose file builds the image with `EXTRA_PACKAGES=postgresql-client`, the prod image has no psql). `make test-unit` runs the DB-free unit tests: `test/review-sheet.test.js`, `test/find-video-for-read.test.js`, `test/prometheus-wrapper.test.js`.
 
 ### Ops
 
@@ -55,7 +56,7 @@ make pull-dump                                  # gzipped prod pg_dump over SSH 
 
 # Assessor review (local restored dump on localhost:5433/skipper, user postgres / password local)
 DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
-  node scripts/sync-db.js                       # once per fresh dump: creates prv_review_* tables
+  node scripts/sync-db.js                       # once per fresh dump: creates prv_review_* tables (same schema steps as app boot)
 DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
   node scripts/import-review-sheet.js ~/Web/data/review/<sheet>.md [--batch NAME]
 DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
@@ -64,8 +65,8 @@ scripts/export-review-verdicts.sh <batch>       # psql (PG* env, defaults localh
                                                 # → ${ADSKIP_DATA:-~/Web/data}/review/<batch>.verdicts.tsv
 ```
 
-- **Importer** reads `<sheet>.md` + `<sheet>.key.tsv` (written by `adskip sheet` in `ad-skip-segment-eval`; blind `C<n>` sheets only, `K<n>` conflict sheets are rejected). It first copies the md to `<sheet>.md.bak-YYYYMMDDHHMMSS` (suffix `-1`, `-2` instead of overwriting) and never writes the md. One transaction: items `ON CONFLICT (batch, item_code) DO NOTHING`; md verdicts (`source='import'`, `reviewer='owner'`) go through `recordVerdict` and only for items with no verdict yet, so re-running after more md marks adds only the new ones. An unknown verdict text fails the whole import (nothing written). Batch defaults to the md file name.
-- **Export** writes the latest verdict per decided item as `provider native_id category start end verdict item note` for `adskip review -file`: `sponsor`/`self_promotion` → `gold_missing` (category = the verdict), `not_ad` → `model_wrong`, `unclear` → `definition_unclear` (category = first proposed). Times with one decimal, note = comment with tabs/newlines collapsed. Exits 1 (nothing written) on an unknown batch.
+- **Importer** reads `<sheet>.md` + `<sheet>.key.tsv` (written by `adskip sheet` in `ad-skip-segment-eval`; blind `C<n>` sheets only, `K<n>` conflict sheets are rejected). Every item needs `Proposed as:`, an http(s) `Link:` and a `Verdict:` line. The verdict is the text on the `Verdict:` line; when that line is empty (as `adskip sheet` writes it), the first non-empty line after it must be the verdict (`Verdict: ` / `not an ad` / reason, the style of the 2026-10-12 sheets) and any other text there fails the import. The remaining lines are the comment, up to a markdown heading (`#`…`######` + space) or a `---` rule line, which ends the item. It first copies the md to `<sheet>.md.bak-YYYYMMDDHHMMSS` (suffix `-1`, `-2` instead of overwriting) and never writes the md. One transaction: items `ON CONFLICT (batch, item_code) DO NOTHING`, and an item already in the batch must be the same stretch (`native_id`, `start`, `end`, `proposed`) or the import fails, so a regenerated sheet or a wrong `--batch` never attaches verdicts to the wrong item; md verdicts (`source='import'`, `reviewer='owner'`) go through `recordVerdict` and only for items with no verdict yet, so re-running after more md marks adds only the new ones. An unknown verdict text fails the whole import (nothing written). Batch defaults to the md file name.
+- **Export** writes the latest verdict per decided item as `provider native_id category start end verdict item note` for `adskip review -file`: `sponsor`/`self_promotion` → `gold_missing` (category = the verdict), `not_ad` → `model_wrong`, `unclear` → `definition_unclear` (category = first proposed). Times with one decimal, note = comment with tabs/newlines collapsed. Exits 1 (nothing written) on an unknown batch; creates `review/` if missing and writes through `<file>.tmp` + `mv`, so a failed query never leaves a truncated TSV.
 
 ## Architecture
 
@@ -115,7 +116,7 @@ Each provider directory has the same internal layout:
 | `prv/`, `rt/`, `yt/` | Per-provider Express routes, repositories, and Go CLI entry points |
 | `calculator/` | Shared Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
-| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`, `playerLink`) |
+| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category seeding, used by `db.js` boot and `scripts/sync-db.js`) |
 | `scripts/` | Local/ops scripts: `sync-db.js`, `pull-prod-dump.sh`, review import/export, gold export (`export-gold.sh`) |
 | `db.js` | Sequelize models and associations for all providers |
 | `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
@@ -137,7 +138,7 @@ The segment rows in `{provider}_calculated_segments` are the source of truth for
 
 ### Routes
 
-All three providers share the same route shape; `prv/` has two extras.
+All three providers share the same route shape; `prv/` also mounts the shared `events.js` / `users.js` and the prv-only admin pages (`admin.js`, `admin-moderation.js`, `admin-review.js`).
 
 - **`markups.js`** — Core markup CRUD. `POST /markup` rejects users with rating ≤ −2. It also silently returns 201 (no row created) when the user is hard-banned (banned_at IS NOT NULL); see Authentication. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
 - **`votes.js`** — Vote submission. On each new vote:
@@ -159,15 +160,15 @@ All three providers share the same route shape; `prv/` has two extras.
   - `GET /admin/user/:internal_id?verifyBearerToken=…` — video-less per-user view showing all markups across all videos. Param is the internal `users.id` PK, NOT `prv_user_id` (which is not unique — multiple `User` rows can share the same `prv_user_id` because the unique index is composite `(generated_user_id, prv_user_id)`).
 - **`prv/routes/admin-review.js`** — prv-only assessor review page (sibling of moderation, same `?verifyBearerToken=…` auth, but an unset `AUTH_TOKEN` refuses every request). One verdict per AI-flagged segment from an imported review sheet (see Ops). Reads/writes only through `prv/repository/review.js`.
   - `GET /admin/review?verifyBearerToken=…[&format=json]` — batch list: total / decided / open per batch.
-  - `GET /admin/review/:batch?verifyBearerToken=…&item=C7&format=json` — item page; without `item` the first open item by `position`, or the last item when the batch is done; 404 on unknown batch/item. Shows times in player format (`m:ss` / `h:mm:ss`), the stored `link` from the sheet (already at start − 2 s; `playerLink()` is only the fallback when it is not http(s)), cues, and a signals panel (±30 s, across all `videos` rows of the native_id: live markups with author rating, calculated segments with rating + vote counts, undo/click counts). JSON shape `{batch, item, nav: {prev, next, first_open}, signals}`. Hotkeys: `1`–`4` verdict, `c` comment, `Enter` / Ctrl+Enter save, `j`/`k` next/prev, `o` open player, `Esc` leave a field. Reviewer field is required, starts empty, remembered in `localStorage`.
-  - `POST /admin/review/decide?verifyBearerToken=…` — body `{item_id, verdict: 'sponsor'|'self_promotion'|'not_ad'|'unclear', comment?, reviewer}`. Appends a `prv_review_verdicts` row (`source='page'`); returns `201 {item_id, item_code, verdict, flagged_by, next_item}` (`next_item` = next open item after this one, wrapping round, `null` when done); `400` on invalid input or unknown item.
+  - `GET /admin/review/:batch?verifyBearerToken=…&item=C7&format=json` — item page; without `item` the first open item by `position`, or the last item when the batch is done; 404 on unknown batch/item. Shows times in player format (`m:ss` / `h:mm:ss`), the stored `link` from the sheet (already at start − 2 s, used as is; `player_link` is `null` and no link is shown when it is not http(s)), cues, and a signals panel (±30 s, across all `videos` rows of the native_id: live markups with author rating, calculated segments with rating + vote counts, undo/click counts). JSON shape `{batch, item, nav: {prev, next, first_open}, signals}`; nav entries are `{item_code, decided}`. Hotkeys: `1`–`4` verdict, `c` comment, `Enter` / Ctrl+Enter save (Enter also saves from the Reviewer box; on a focused link it follows the link), `j`/`k` next/prev, `o` open player, `Esc` leave a field; letters also work by physical key on a non-Latin (e.g. Russian) layout. Saving a decided item with the same verdict and comment does nothing ("No change") when the Reviewer box is empty or holds the latest verdict's reviewer, so a stray Enter never appends a copy; a different reviewer saving the same verdict adds a row. Reviewer field is required, starts empty, remembered in `localStorage`.
+  - `POST /admin/review/decide?verifyBearerToken=…` — body `{item_id (JSON integer), verdict: 'sponsor'|'self_promotion'|'not_ad'|'unclear', comment? (string or null; trimmed, blank → null), reviewer (trimmed, 1–64 chars)}`. Appends a `prv_review_verdicts` row (`source='page'`); returns `201 {item_id, item_code, verdict, flagged_by, next_item}` (`next_item` = next open item after this one, wrapping round, `null` when done); `400` on invalid input or unknown item.
   - **Blind rule**: `flagged_by` (which detector runs flagged the segment) is stripped in the repository from every item without a verdict, so neither HTML nor JSON shows it until the item is decided.
 - **`prv/routes/routes.js`** — Health check (`GET /`) and Prometheus metrics (`GET /metrics`).
 
 ### Authentication
 
 - **Admin routes**: `Authorization: Bearer <AUTH_TOKEN>` header (middleware `verify-bearer-token.js`)
-- **Admin dashboard**: `AUTH_TOKEN` as query param (checked directly in `routes/admin.js`)
+- **Admin pages** (`/admin/video`, `/admin/moderation`, `/admin/user`, `/admin/review`): `AUTH_TOKEN` as `?verifyBearerToken=` query param, checked directly in `prv/routes/admin.js`, `admin-moderation.js` and `admin-review.js`. `admin-review.js` also refuses every request when `AUTH_TOKEN` is unset, and its pages send no `Referer` (the token is in the URL).
 - **API docs** (`/api/doc`): HTTP Basic Auth — username `admin`, password `AUTH_TOKEN` env var
 - Public write endpoints (markup creation, votes) are unauthenticated
 - `POST /markup` silently returns 201 (no markup row created) when the user's `banned_at IS NOT NULL`, parallel to the existing `rating ≤ -2` soft gate.
@@ -191,14 +192,14 @@ All three providers share the same route shape; `prv/` has two extras.
 | `IntervalClick` | Records interval click events with `click_time` — table `{provider}_events_interval_click` |
 | `TimeSavedEvent` | Records time_saved events — table `{provider}_events_time_saved` |
 | `ClientFailed` | Records client-side failures with free-form `reason` and `data` JSON — table `{provider}_events_client_failed` |
-| `ReviewItem` | One AI-flagged segment from an imported review sheet — table `prv_review_items` (prv only). Fields `batch` (sheet name), `item_code` (`C7`), `position`, `native_id`, `start`/`end` (seconds, from key.tsv), `proposed` (`sponsor` or `sponsor+self_promotion`), `cues`, `link`, `flagged_by` (JSONB run ids, blind until decided). Unique `(batch, item_code)` |
-| `ReviewVerdict` | Append-only assessor verdicts — table `prv_review_verdicts`, FK `item_id` (cascade). `verdict` (`sponsor`\|`self_promotion`\|`not_ad`\|`unclear`), `comment`, `reviewer` (free text from the page; `owner` for md imports), `source` (`page`\|`import`), `decided_at`. Latest row per item is the verdict, older rows are history. All writes go through `reviewRepository.recordVerdict()` (page and importer), which throws `ReviewInputError` with a `code` on bad input |
+| `ReviewItem` | One AI-flagged segment from an imported review sheet — table `prv_review_items` (prv only). Fields `batch` (sheet name), `item_code` (`C7`), `position`, `native_id`, `start`/`end` (seconds, from key.tsv), `proposed` (`sponsor` or `sponsor+self_promotion`), `cues`, `link` (player link from the sheet, required by the importer), `flagged_by` (JSONB run ids, blind until decided), `created_at` (DB-side default). Unique `(batch, item_code)`. The importer writes items via `reviewRepository.insertItems()` / `itemsInBatch()` (no review-table SQL in `scripts/`) |
+| `ReviewVerdict` | Append-only assessor verdicts — table `prv_review_verdicts`, FK `item_id` (cascade). `verdict` (`sponsor`\|`self_promotion`\|`not_ad`\|`unclear`), `comment`, `reviewer` (free text from the page; `owner` for md imports), `source` (`page`\|`import`), `decided_at` (DB-side default `CURRENT_TIMESTAMP`, also set on existing tables by `bootstrap()`). Latest row per item (`decided_at DESC, id DESC`) is the verdict, older rows are history. All writes go through `reviewRepository.recordVerdict()` (page and importer), which throws `ReviewInputError` (→ 400) on bad input |
 
 **Soft Deletes:** All queries must filter `deleted_at IS NULL`. This is handled in `repository/` — always check there when writing new queries.
 
 **Dual User ID System:** Users have both a `generated_user_id` (UUID) and an optional `prv_user_id`. The codebase is transitioning to internal DB `id` references.
 
-**Schema bootstrap:** project has no migrations folder. New tables come from `sequelize.sync()` (run on every boot in `db.js`); new columns on existing tables are added with idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements queued inside the `sync().then(...)` callback. Example: `banned_at` on `users`.
+**Schema bootstrap:** project has no migrations folder. New tables come from `sequelize.sync()` (run on every boot in `db.js`); new columns on existing tables are added with idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements run right after `sync()`. Example: `banned_at` on `users`. Column defaults go the same way (`ALTER TABLE … ALTER COLUMN … SET DEFAULT …`, e.g. the review tables' `created_at` / `decided_at`). The sync, the ALTERs and category seeding live in `lib/schema.js` `syncSchema()`, shared by `bootstrap()` and `scripts/sync-db.js`, so both leave the DB in the same shape — add new ALTERs there.
 
 ### Prometheus Metrics (`prometheus-wrapper.js`, `server.js`)
 
@@ -229,7 +230,7 @@ The first five outcomes are emitted by `lib/find-video-for-read.js`; `not_calcul
 
 ```
 DB_NAME, DB_USER, DB_PASSWORD, DB_HOST   # PostgreSQL connection (prod: DB_HOST=host.docker.internal, set in docker-compose.yml)
-DB_PORT=5432                              # Optional; honoured by db.js, sync-db.js and the review importer (e.g. 5433 for the local dump). The Go calculator ignores it (hardcodes 5432)
+DB_PORT=5432                              # Optional; honoured by db.js and lib/script-db.js (sync-db.js, the review importer) (e.g. 5433 for the local dump). The Go calculator ignores it (hardcodes 5432)
 NODE_APP_PORT=3022                        # HTTP server port
 AUTH_TOKEN                                # Admin bearer token
 ENV=dev|production                        # Controls yarn dev vs yarn start

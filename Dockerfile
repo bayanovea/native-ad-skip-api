@@ -6,8 +6,10 @@ WORKDIR /app
 ENV GOPATH /go
 ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
 
-# Dependencies
-RUN apt-get update && apt-get install -y git golang cron supervisor && \
+# Dependencies. EXTRA_PACKAGES is empty for the prod image; docker-compose.e2e.yml
+# sets it to postgresql-client so the e2e suite can run scripts/*.sh through psql.
+ARG EXTRA_PACKAGES=""
+RUN apt-get update && apt-get install -y git golang cron supervisor $EXTRA_PACKAGES && \
     mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
 
 # JS install

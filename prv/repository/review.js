@@ -5,15 +5,20 @@ const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
 const REVIEWER_MAX = 64;
 const SIGNALS_WINDOW = 30;
+// item_id is a Postgres INTEGER; anything larger fails in the DB (500), not as input.
+const MAX_ITEM_ID = 2147483647;
 
-// Errors a route can map to 400 (`code` tells them apart). Anything else
-// thrown here is a bug or a DB failure and should stay a 500.
+// Bad input from a caller: the decide route maps it to 400 and sends the
+// message. Anything else thrown here is a bug or a DB failure (500).
 class ReviewInputError extends Error {
-    constructor(code, message) {
+    constructor(message) {
         super(message);
         this.name = 'ReviewInputError';
-        this.code = code;
     }
+}
+
+function validItemId(id) {
+    return Number.isInteger(id) && id > 0 && id <= MAX_ITEM_ID;
 }
 
 const ITEM_COLUMNS = `
@@ -41,14 +46,14 @@ const IS_DECIDED = 'EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id 
 module.exports = function createReviewRepository(models, sequelize) {
     // Attach `verdict` (latest or null) and `history` (newest first) to item
     // rows, and apply the blind rule. One query for all rows.
-    async function hydrate(rows, { transaction } = {}) {
+    async function hydrate(rows) {
         if (rows.length === 0) return [];
         const verdicts = await sequelize.query(
             `SELECT id, item_id, verdict, comment, reviewer, source, decided_at
                FROM prv_review_verdicts
               WHERE item_id IN (:ids)
               ORDER BY item_id, decided_at DESC, id DESC`,
-            { replacements: { ids: rows.map((r) => r.id) }, type: QueryTypes.SELECT, transaction }
+            { replacements: { ids: rows.map((r) => r.id) }, type: QueryTypes.SELECT }
         );
         const byItem = new Map();
         for (const v of verdicts) {
@@ -64,89 +69,81 @@ module.exports = function createReviewRepository(models, sequelize) {
         }
         return rows.map((r) => {
             const history = byItem.get(r.id) || [];
-            const item = {
-                id: r.id,
-                batch: r.batch,
-                item_code: r.item_code,
-                position: r.position,
-                native_id: r.native_id,
-                start: r.start,
-                end: r.end,
-                proposed: r.proposed,
-                cues: r.cues,
-                link: r.link,
-                created_at: r.created_at,
-                verdict: history[0] || null,
-                history,
-            };
-            if (item.verdict) item.flagged_by = r.flagged_by || [];
+            const { flagged_by, ...columns } = r;
+            const item = { ...columns, verdict: history[0] || null, history };
+            if (item.verdict) item.flagged_by = flagged_by || [];
             return item;
         });
     }
 
-    async function selectOne(whereSql, orderSql, replacements, opts = {}) {
+    // One full item (hydrated, blind rule applied) or null.
+    async function selectOne(whereSql, orderSql, replacements) {
         const rows = await sequelize.query(
             `SELECT ${ITEM_COLUMNS}
                FROM prv_review_items i
               WHERE ${whereSql}
               ORDER BY ${orderSql}
               LIMIT 1`,
-            { replacements, type: QueryTypes.SELECT, transaction: opts.transaction }
+            { replacements, type: QueryTypes.SELECT }
         );
-        const [item] = await hydrate(rows, opts);
+        const [item] = await hydrate(rows);
         return item || null;
     }
 
-    async function firstOpenItem(batch, opts = {}) {
-        return selectOne(`i.batch = :batch AND NOT ${IS_DECIDED}`, 'i.position ASC, i.id ASC', { batch }, opts);
+    // Navigation reference `{ item_code, decided }` or null — one light query,
+    // no verdict history.
+    async function selectNav(whereSql, orderSql, replacements) {
+        const [row] = await sequelize.query(
+            `SELECT i.item_code, ${IS_DECIDED} AS decided
+               FROM prv_review_items i
+              WHERE ${whereSql}
+              ORDER BY ${orderSql}
+              LIMIT 1`,
+            { replacements, type: QueryTypes.SELECT }
+        );
+        return row || null;
     }
 
-    return {
-        ReviewInputError,
+    // Progress rows `{ batch, total, decided, open }`, optionally for one batch.
+    function batchProgress(batch) {
+        return sequelize.query(
+            `SELECT i.batch,
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE ${IS_DECIDED})::int AS decided,
+                    COUNT(*) FILTER (WHERE NOT ${IS_DECIDED})::int AS open
+               FROM prv_review_items i
+              ${batch == null ? '' : 'WHERE i.batch = :batch'}
+              GROUP BY i.batch
+              ORDER BY MAX(i.created_at) DESC, i.batch ASC`,
+            { replacements: { batch }, type: QueryTypes.SELECT }
+        );
+    }
 
+    const OPEN_IN_BATCH = `i.batch = :batch AND NOT ${IS_DECIDED}`;
+
+    return {
         /**
          * All batches with progress: `[{ batch, total, decided, open }]`,
          * most recently imported first.
          */
-        async listBatches() {
-            return sequelize.query(
-                `SELECT i.batch,
-                        COUNT(*)::int AS total,
-                        COUNT(*) FILTER (WHERE ${IS_DECIDED})::int AS decided,
-                        COUNT(*) FILTER (WHERE NOT ${IS_DECIDED})::int AS open
-                   FROM prv_review_items i
-                  GROUP BY i.batch
-                  ORDER BY MAX(i.created_at) DESC, i.batch ASC`,
-                { type: QueryTypes.SELECT }
-            );
+        listBatches() {
+            return batchProgress(null);
         },
 
         /** Progress of one batch: `{ batch, total, decided, open }` or null. */
         async getBatchProgress(batch) {
-            const [row] = await sequelize.query(
-                `SELECT i.batch,
-                        COUNT(*)::int AS total,
-                        COUNT(*) FILTER (WHERE ${IS_DECIDED})::int AS decided,
-                        COUNT(*) FILTER (WHERE NOT ${IS_DECIDED})::int AS open
-                   FROM prv_review_items i
-                  WHERE i.batch = :batch
-                  GROUP BY i.batch`,
-                { replacements: { batch }, type: QueryTypes.SELECT }
-            );
+            const [row] = await batchProgress(batch);
             return row || null;
         },
 
-        async getItem(batch, itemCode, opts = {}) {
-            return selectOne('i.batch = :batch AND i.item_code = :item_code', 'i.id', { batch, item_code: itemCode }, opts);
+        getItem(batch, itemCode) {
+            return selectOne('i.batch = :batch AND i.item_code = :item_code', 'i.id', { batch, item_code: itemCode });
         },
 
-        async getItemById(itemId, opts = {}) {
-            if (!Number.isInteger(itemId) || itemId <= 0) return null;
-            return selectOne('i.id = :id', 'i.id', { id: itemId }, opts);
+        getItemById(itemId) {
+            if (!validItemId(itemId)) return Promise.resolve(null);
+            return selectOne('i.id = :id', 'i.id', { id: itemId });
         },
-
-        /** First undecided item by position, or null when all are decided. */
-        firstOpenItem,
 
         /**
          * Item shown when the page has no `?item=`: the first open one, or the
@@ -154,58 +151,116 @@ module.exports = function createReviewRepository(models, sequelize) {
          * an unknown/empty batch.
          */
         async defaultItem(batch) {
-            return (await firstOpenItem(batch))
+            return (await selectOne(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch }))
                 || selectOne('i.batch = :batch', 'i.position DESC, i.id DESC', { batch });
+        },
+
+        /** First undecided item by position as `{ item_code, decided }`, or null. */
+        firstOpenItem(batch) {
+            return selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
         },
 
         /**
          * Next open item after `position` (wrapping round to the first open
-         * one), or null when nothing is open. Used for "save → next open".
+         * one) as `{ item_code, decided }`, or null when nothing is open.
+         * Used for "save → next open".
          */
-        async nextOpenItem(batch, position, opts = {}) {
-            return (await selectOne(
-                `i.batch = :batch AND i.position > :position AND NOT ${IS_DECIDED}`,
-                'i.position ASC, i.id ASC', { batch, position }, opts
-            )) || firstOpenItem(batch, opts);
+        async nextOpenItem(batch, position) {
+            return (await selectNav(`${OPEN_IN_BATCH} AND i.position > :position`, 'i.position ASC, i.id ASC', { batch, position }))
+                || selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
         },
 
-        /** `{ prev, next }` items by position (null at either end). */
+        /** `{ prev, next }` by position as `{ item_code, decided }` (null at either end). */
         async neighbours(batch, position) {
             const [prev, next] = await Promise.all([
-                selectOne('i.batch = :batch AND i.position < :position', 'i.position DESC, i.id DESC', { batch, position }),
-                selectOne('i.batch = :batch AND i.position > :position', 'i.position ASC, i.id ASC', { batch, position }),
+                selectNav('i.batch = :batch AND i.position < :position', 'i.position DESC, i.id DESC', { batch, position }),
+                selectNav('i.batch = :batch AND i.position > :position', 'i.position ASC, i.id ASC', { batch, position }),
             ]);
             return { prev, next };
         },
 
         /**
+         * Insert sheet items into `batch`, keeping any item code already there
+         * (ON CONFLICT DO NOTHING). Returns the codes split into
+         * `{ inserted, present }`. Used by scripts/import-review-sheet.js.
+         */
+        async insertItems(batch, items, { transaction } = {}) {
+            const inserted = [];
+            const present = [];
+            for (const it of items) {
+                const rows = await sequelize.query(
+                    // created_at is explicit: a prv_review_items created before
+                    // the column default existed has none (NOT NULL fails
+                    // before ON CONFLICT is considered).
+                    `INSERT INTO prv_review_items
+                        (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
+                     VALUES (:batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, CURRENT_TIMESTAMP)
+                     ON CONFLICT (batch, item_code) DO NOTHING
+                     RETURNING id`,
+                    {
+                        replacements: {
+                            batch,
+                            item_code: it.item_code,
+                            position: it.position,
+                            native_id: it.native_id,
+                            start: it.start,
+                            end: it.end,
+                            proposed: it.proposed,
+                            cues: it.cues,
+                            link: it.link,
+                            flagged_by: JSON.stringify(it.flagged_by),
+                        },
+                        type: QueryTypes.SELECT,
+                        transaction,
+                    }
+                );
+                (rows.length ? inserted : present).push(it.item_code);
+            }
+            return { inserted, present };
+        },
+
+        /**
+         * Every item of `batch` as `{ id, item_code, native_id, start, end,
+         * proposed, has_verdict }` — raw rows for the importer's identity
+         * check, no blind rule (flagged_by is not selected).
+         */
+        itemsInBatch(batch, { transaction } = {}) {
+            return sequelize.query(
+                `SELECT i.id, i.item_code, i.native_id, i.start, i."end", i.proposed,
+                        ${IS_DECIDED} AS has_verdict
+                   FROM prv_review_items i
+                  WHERE i.batch = :batch`,
+                { replacements: { batch }, type: QueryTypes.SELECT, transaction }
+            );
+        },
+
+        /**
          * Append a verdict row — the single write entrypoint for verdicts
-         * (page and importer). Validates everything; throws ReviewInputError
-         * (`code`: invalid_verdict | invalid_source | invalid_reviewer |
-         * invalid_item | unknown_item) on bad input. Empty comment → null.
+         * (page and importer). Validates everything and throws
+         * ReviewInputError on bad input; reviewer and comment are trimmed,
+         * empty comment → null. Returns the created row.
          */
         async recordVerdict({ item_id, verdict, comment, reviewer, source, transaction } = {}) {
+            // source is set by the callers themselves, never by user input.
+            if (!VALID_SOURCES.has(source)) throw new Error(`recordVerdict: bad source ${source}`);
             if (!VALID_VERDICTS.has(verdict)) {
-                throw new ReviewInputError('invalid_verdict', `verdict must be one of ${VERDICTS.join(', ')}`);
-            }
-            if (!VALID_SOURCES.has(source)) {
-                throw new ReviewInputError('invalid_source', `source must be 'page' or 'import', got ${source}`);
+                throw new ReviewInputError(`verdict must be one of ${VERDICTS.join(', ')}`);
             }
             const who = typeof reviewer === 'string' ? reviewer.trim() : '';
             if (who === '' || who.length > REVIEWER_MAX) {
-                throw new ReviewInputError('invalid_reviewer', `reviewer must be 1-${REVIEWER_MAX} characters`);
+                throw new ReviewInputError(`reviewer must be 1-${REVIEWER_MAX} characters`);
             }
-            if (!Number.isInteger(item_id) || item_id <= 0) {
-                throw new ReviewInputError('invalid_item', 'item_id must be a positive integer');
+            if (!validItemId(item_id)) {
+                throw new ReviewInputError('item_id must be a positive integer');
             }
             if (comment != null && typeof comment !== 'string') {
-                throw new ReviewInputError('invalid_comment', 'comment must be a string');
+                throw new ReviewInputError('comment must be a string');
             }
             const item = await models.ReviewItem.findByPk(item_id, { attributes: ['id'], transaction });
-            if (!item) throw new ReviewInputError('unknown_item', `unknown review item ${item_id}`);
+            if (!item) throw new ReviewInputError(`unknown review item ${item_id}`);
 
             const text = comment == null ? '' : comment.trim();
-            // decided_at defaults to NOW (see prv/db/index.js).
+            // decided_at comes from the DB clock (column default, see prv/db/index.js).
             return models.ReviewVerdict.create({
                 item_id,
                 verdict,
@@ -216,7 +271,8 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * User signals around a review stretch: [start − window, end + window].
+         * User signals around a review stretch: [start − SIGNALS_WINDOW,
+         * end + SIGNALS_WINDOW], clamped at 0.
          * One native_id can map to several `videos` rows (duration split), so
          * markups and segments are collected across all of them; undo/click
          * events are keyed by native_id directly. Overlap is inclusive.
@@ -228,27 +284,33 @@ module.exports = function createReviewRepository(models, sequelize) {
          *               likes, dislikes}],
          *   undos, clicks }`.
          */
-        async getSignals(native_id, start, end, window = SIGNALS_WINDOW) {
-            const lo = Math.max(0, Number(start) - window);
-            const hi = Number(end) + window;
+        async getSignals(native_id, start, end) {
+            const lo = Math.max(0, Number(start) - SIGNALS_WINDOW);
+            const hi = Number(end) + SIGNALS_WINDOW;
             const replacements = { native_id, lo, hi };
 
-            const videos = await sequelize.query(
-                'SELECT id, duration FROM videos WHERE native_id = :native_id ORDER BY id',
-                { replacements, type: QueryTypes.SELECT }
-            );
-            const result = { window: { start: lo, end: hi }, videos, markups: [], segments: [], undos: 0, clicks: 0 };
-
-            const counts = await sequelize.query(
-                `SELECT
-                    (SELECT COUNT(*)::int FROM prv_events_interval_undo
-                      WHERE video_native_id = :native_id AND start <= :hi AND "end" >= :lo) AS undos,
-                    (SELECT COUNT(*)::int FROM prv_events_interval_click
-                      WHERE video_native_id = :native_id AND start <= :hi AND "end" >= :lo) AS clicks`,
-                { replacements, type: QueryTypes.SELECT }
-            );
-            result.undos = counts[0].undos;
-            result.clicks = counts[0].clicks;
+            const [videos, [counts]] = await Promise.all([
+                sequelize.query(
+                    'SELECT id, duration FROM videos WHERE native_id = :native_id ORDER BY id',
+                    { replacements, type: QueryTypes.SELECT }
+                ),
+                sequelize.query(
+                    `SELECT
+                        (SELECT COUNT(*)::int FROM prv_events_interval_undo
+                          WHERE video_native_id = :native_id AND start <= :hi AND "end" >= :lo) AS undos,
+                        (SELECT COUNT(*)::int FROM prv_events_interval_click
+                          WHERE video_native_id = :native_id AND start <= :hi AND "end" >= :lo) AS clicks`,
+                    { replacements, type: QueryTypes.SELECT }
+                ),
+            ]);
+            const result = {
+                window: { start: lo, end: hi },
+                videos,
+                markups: [],
+                segments: [],
+                undos: counts.undos,
+                clicks: counts.clicks,
+            };
 
             if (videos.length === 0) return result;
             const video_ids = videos.map((v) => v.id);
@@ -301,3 +363,4 @@ module.exports = function createReviewRepository(models, sequelize) {
 
 module.exports.ReviewInputError = ReviewInputError;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
+module.exports.REVIEWER_MAX = REVIEWER_MAX;

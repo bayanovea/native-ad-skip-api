@@ -133,6 +133,8 @@ module.exports = function(sequelize) {
     // Assessor review (prv only, like AdminDecision). Items come from imported
     // review sheets; verdicts are append-only and the latest row per item wins.
     // `flagged_by` is blind: it must not be shown until the item has a verdict.
+    // Timestamps default on the DB side (DB clock, also for raw-SQL inserts);
+    // db.js bootstrap() sets the same default on tables created before that.
     const ReviewItem = sequelize.define('review_item', {
         batch: { type: DataTypes.STRING(64), allowNull: false },
         item_code: { type: DataTypes.STRING(16), allowNull: false },
@@ -144,7 +146,7 @@ module.exports = function(sequelize) {
         cues: { type: DataTypes.TEXT, allowNull: true },
         link: { type: DataTypes.TEXT, allowNull: true },
         flagged_by: { type: DataTypes.JSONB, allowNull: true },
-        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, {
         tableName: 'prv_review_items',
         timestamps: false,
@@ -157,7 +159,7 @@ module.exports = function(sequelize) {
         comment: { type: DataTypes.TEXT, allowNull: true },
         reviewer: { type: DataTypes.STRING(64), allowNull: false },
         source: { type: DataTypes.STRING(16), allowNull: false },
-        decided_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+        decided_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, {
         tableName: 'prv_review_verdicts',
         timestamps: false,

@@ -532,7 +532,7 @@ paths:
     get:
       tags: [Admin]
       summary: Assessor review — item page
-      description: "Without `item`: the first open item by position, or the last item when the batch is done. `flagged_by` is present only once the item has a verdict."
+      description: "Refuses every request when AUTH_TOKEN is unset. Without `item`: the first open item by position, or the last item when the batch is done. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); nav entries are `{item_code, decided}`."
       security:
         - tokenQuery: []
       parameters:
@@ -554,7 +554,7 @@ paths:
     post:
       tags: [Admin]
       summary: Assessor review — append a verdict
-      description: "Append-only; the latest verdict per item wins."
+      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins."
       security:
         - tokenQuery: []
       requestBody:
@@ -565,10 +565,10 @@ paths:
               type: object
               required: [item_id, verdict, reviewer]
               properties:
-                item_id:  { type: integer }
+                item_id:  { type: integer, minimum: 1, maximum: 2147483647, description: "JSON integer; strings are rejected" }
                 verdict:  { type: string, enum: [sponsor, self_promotion, not_ad, unclear] }
-                comment:  { type: string }
-                reviewer: { type: string, maxLength: 64 }
+                comment:  { type: string, nullable: true, description: "Trimmed; blank or null → no comment" }
+                reviewer: { type: string, description: "Trimmed; 1–64 characters after trimming" }
       responses:
         '201':
           description: Verdict recorded
@@ -579,7 +579,7 @@ paths:
                 properties:
                   item_id:    { type: integer }
                   item_code:  { type: string }
-                  verdict:    { type: string }
+                  verdict:    { type: string, description: "The verdict just recorded" }
                   flagged_by: { type: array, items: { type: string } }
                   next_item:  { type: string, nullable: true, description: "Next open item after this one, wrapping round; null when the batch is done" }
         '400': { description: Invalid verdict, reviewer, comment or unknown item }

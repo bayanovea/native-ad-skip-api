@@ -1,8 +1,9 @@
 const { Sequelize } = require('sequelize');
+const { syncSchema } = require('./lib/schema');
 
 // DB_PORT is optional (default 5432, what prod uses); set it to reach a local
 // Postgres on another port, e.g. the restored prod dump on 5433. Same rule as
-// scripts/sync-db.js and scripts/import-review-sheet.js.
+// lib/script-db.js (the connection for scripts/).
 const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASSWORD, {
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT || '5432', 10),
@@ -29,23 +30,14 @@ const rt = require('./rt/db')(sequelize);
 const yt = require('./yt/db')(sequelize);
 
 // bootstrap() performs schema sync, idempotent ALTERs (for columns not yet
-// represented by a Sequelize migration), and category seeding. server.js MUST
-// await this before calling app.listen() so the app does not accept traffic
-// against a half-migrated schema (e.g. requests touching users.banned_at would
-// otherwise fail with `column does not exist` until the ALTER finishes).
+// represented by a Sequelize migration), and category seeding — see
+// lib/schema.js, shared with scripts/sync-db.js. server.js MUST await this
+// before calling app.listen() so the app does not accept traffic against a
+// half-migrated schema (e.g. requests touching users.banned_at would otherwise
+// fail with `column does not exist` until the ALTER finishes).
 async function bootstrap() {
-    await sequelize.sync();
+    await syncSchema(sequelize, [prv, rt, yt]);
     console.log('Tables schemas synced');
-    await sequelize.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMP NULL');
-    for (const { MarkupCategory } of [prv, rt, yt]) {
-        const categories = await MarkupCategory.findAll();
-        if (!categories.length) {
-            await MarkupCategory.create({ category: 'intro' });
-            await MarkupCategory.create({ category: 'sponsor' });
-            await MarkupCategory.create({ category: 'self_promotion' });
-            await MarkupCategory.create({ category: 'credits' });
-        }
-    }
 }
 
 module.exports = { sequelize, prv, rt, yt, bootstrap };

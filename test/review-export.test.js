@@ -3,11 +3,12 @@
 /*
  * Tests scripts/export-review-verdicts.sql (assessor verdicts → `adskip review -file` TSV).
  *
- * The export is plain SQL run by psql (scripts/export-review-verdicts.sh). psql is not in
- * the e2e container, so the test runs the same file through the Sequelize connection:
- * the psql meta-command lines (`\…`) are dropped and :'batch' is bound as $1. The output
- * lines are joined with "\n" plus a trailing newline, exactly as psql writes them in
- * unaligned tuples-only mode.
+ * The export is plain SQL run by psql (scripts/export-review-verdicts.sh). The mapping
+ * tests run the same file through the Sequelize connection: the psql meta-command lines
+ * (`\…`) are dropped and :'batch' is bound as $1, and the output lines are joined with
+ * "\n" plus a trailing newline, as psql writes them in unaligned tuples-only mode. The
+ * last test runs the real .sh through psql (installed in the e2e image only, see
+ * docker-compose.e2e.yml) and checks it writes exactly that text.
  *
  * Harness as in test/moderation-resolver.test.js: a dedicated DB
  * (`${DB_NAME}_unit_review_export`), schema from Sequelize.sync(), raw SQL seeds,
@@ -18,7 +19,9 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { Client } = require('pg');
 
 const DB_HOST = process.env.DB_HOST || 'localhost';
@@ -29,6 +32,7 @@ const BASE_DB = process.env.DB_NAME;
 const TEST_DB = `${BASE_DB}_unit_review_export`;
 
 const SQL_FILE = path.join(__dirname, '..', 'scripts', 'export-review-verdicts.sql');
+const SH_FILE = path.join(__dirname, '..', 'scripts', 'export-review-verdicts.sh');
 
 let sequelize;
 
@@ -61,8 +65,8 @@ async function q(sql, bind = []) {
 
 async function addItem(batch, code, position, nativeId, start, end, proposed) {
     const [row] = await q(
-        `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'cues', 'https://example.invalid/video', '["run-a"]', NOW()) RETURNING id`,
+        `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'cues', 'https://example.invalid/video', '["run-a"]') RETURNING id`,
         [batch, code, position, nativeId, start, end, proposed]);
     return row.id;
 }
@@ -139,4 +143,49 @@ test('review export: batch without verdicts yields the header only', async () =>
     await addItem('export-open', 'C1', 1, '-7_7', 10, 20, 'sponsor');
     assert.equal(await exportTsv('export-open'), 'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n');
     assert.equal(await exportTsv('export-no-such-batch'), 'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n');
+});
+
+test('review export: same decided_at → the higher id wins', async () => {
+    const b = 'export-tie';
+    const c1 = await addItem(b, 'C1', 1, '-8_8', 10, 20, 'sponsor');
+    await addVerdict(c1, 'sponsor', 'first', '2026-10-15T10:00:00Z');
+    await addVerdict(c1, 'not_ad', 'second', '2026-10-15T10:00:00Z');
+    assert.equal(await exportTsv(b),
+        'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n'
+        + 'prv\t-8_8\tsponsor\t10.0\t20.0\tmodel_wrong\tC1\tsecond\n');
+});
+
+test('review export: the .sh wrapper writes the same TSV through psql, refuses an unknown batch', async () => {
+    const b = 'export-sh';
+    const c1 = await addItem(b, 'C1', 1, '-9_9', 30, 45.5, 'self_promotion');
+    await addItem(b, 'C2', 2, '-9_9', 60, 70, 'sponsor');                    // open
+    await addVerdict(c1, 'unclear', 'line one\nline two', '2026-10-15T10:00:00Z');
+
+    // Data root without a review/ dir: the script creates it. A space in the
+    // path checks that psql's `\o :out` keeps the value as one argument.
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'review export '));
+    try {
+        const run = (batch) => spawnSync('sh', [SH_FILE, batch], {
+            encoding: 'utf8',
+            env: {
+                ...process.env, ADSKIP_DATA: data,
+                PGHOST: DB_HOST, PGPORT: String(DB_PORT), PGUSER: DB_USER, PGPASSWORD: DB_PASSWORD, PGDATABASE: TEST_DB,
+            },
+        });
+        const out = path.join(data, 'review', `${b}.verdicts.tsv`);
+
+        const r = run(b);
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.stdout.trim(), `wrote ${out}: 1 verdicts of 2 items`);
+        assert.equal(fs.readFileSync(out, 'utf8'), await exportTsv(b));
+        assert.match(fs.readFileSync(out, 'utf8'), /\tC1\tline one line two\n$/);
+        assert.deepEqual(fs.readdirSync(path.join(data, 'review')), [`${b}.verdicts.tsv`], 'no temp file left');
+
+        const bad = run('export-no-such-batch');
+        assert.equal(bad.status, 1);
+        assert.match(bad.stderr, /unknown batch export-no-such-batch/);
+        assert.deepEqual(fs.readdirSync(path.join(data, 'review')), [`${b}.verdicts.tsv`], 'nothing written');
+    } finally {
+        fs.rmSync(data, { recursive: true, force: true });
+    }
 });

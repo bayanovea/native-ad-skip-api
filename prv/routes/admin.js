@@ -1,5 +1,6 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
+const { CATEGORY_COLORS } = require('../../lib/admin-html');
 
 module.exports = function createAdminRoutes(models, { markupRepository }) {
     const router = express.Router();
@@ -48,8 +49,6 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             intervalsByMarkup[interval.markup_id].push(interval);
         }
 
-        const categoryColors = { intro: '#6366f1', sponsor: '#f59e0b', self_promotion: '#ec4899', credits: '#10b981' };
-
         const segmentRows = calculatedSegments.map(seg => {
             const segMarkups = seg.segment_markups
                 .map(sm => markupById[sm.markup_id])
@@ -57,7 +56,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             if (segMarkups.length === 0) return '';
 
             const categoryName = seg.category?.category || seg.category_id;
-            const color = categoryColors[categoryName] || '#64748b';
+            const color = CATEGORY_COLORS[categoryName] || '#64748b';
 
             const intervalGroups = {};
             for (const markup of segMarkups) {
@@ -277,11 +276,9 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             intervalsByMarkup[interval.markup_id].push(interval);
         }
 
-        const categoryColors = { intro: '#6366f1', sponsor: '#f59e0b', self_promotion: '#ec4899', credits: '#10b981' };
-
         const rows = markups.map(markup => {
             const catName = markup.category?.category || '?';
-            const color = categoryColors[catName] || '#64748b';
+            const color = CATEGORY_COLORS[catName] || '#64748b';
             const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
             const deletedAt = markup.deleted_at ? new Date(markup.deleted_at).toLocaleString('ru-RU') : null;
             const markupIntervals = intervalsByMarkup[markup.id] || [];

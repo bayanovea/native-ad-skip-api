@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime, playerLink } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime } = require('../lib/review-sheet');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -100,6 +100,8 @@ test('normalizeVerdict: table from the plan', () => {
     assert.equal(normalizeVerdict('   ', 'C1'), null);
     assert.equal(normalizeVerdict(null, 'C1'), null);
     assert.throws(() => normalizeVerdict('ad', 'C9'), /C9: unknown verdict "ad"/);
+    // Object.prototype keys are not verdicts.
+    assert.throws(() => normalizeVerdict('constructor', 'C9'), /C9: unknown verdict "constructor"/);
 });
 
 test('formatPlayerTime: rounded like adskip sheet', () => {
@@ -123,16 +125,101 @@ test('formatPlayerTime: matches every header of the fixture sheet', () => {
     });
 });
 
-test('playerLink: same as adskip sheet (int(start) - 2 s, clamped at 0)', () => {
-    const base = 'https://example.invalid/video-1_456000001?t=';
-    assert.equal(playerLink('-1_456000001', 1994), base + '33m12s');
-    assert.equal(playerLink('-1_456000001', 3845.9), base + '1h4m3s');
-    assert.equal(playerLink('-1_456000001', 9), base + '7s');
-    assert.equal(playerLink('-1_456000001', 1), base + '0s');
-    assert.equal(playerLink('-1_456000001', 62.2), base + '1m0s');
+test('formatPlayerTime: negative seconds keep the sign', () => {
+    assert.equal(formatPlayerTime(-121.5), '-2:01');   // Go's int() truncates toward zero
 });
 
-test('playerLink: reproduces every stored link of the fixture sheet', () => {
-    const { items } = parseSheet(md, key);
-    for (const it of items) assert.equal(playerLink(it.native_id, it.start), it.link, it.item_code);
+// One minimal valid block; tests below break one part at a time.
+function block(code = 'C1', { proposed = 'Proposed as: sponsor', link = 'Link: https://example.invalid/video-1_2?t=8s', verdict = 'Verdict: sponsor' } = {}) {
+    return [`### ${code}. -1_2 · 0:10 – 0:20 (10 s)`, '', proposed, '', link, '', '> cue', '', verdict, ''].join('\n');
+}
+const KEY_C1 = KEY_HEADER + 'C1\t-1_2\t10.0\t20.0\tsponsor\trun-a\n';
+
+test('parseSheet: guards on the md side throw and name the problem', () => {
+    assert.throws(() => parseSheet(block('C1', { proposed: '' }), KEY_C1), /C1: missing "Proposed as:" line/);
+    assert.throws(() => parseSheet(block('C1', { verdict: '' }), KEY_C1), /C1: missing "Verdict:" line/);
+    assert.throws(() => parseSheet(block('C1', { link: '' }), KEY_C1), /C1: missing or non-http "Link:" line/);
+    assert.throws(() => parseSheet(block('C1', { link: 'Link: javascript:alert(1)' }), KEY_C1), /C1: missing or non-http "Link:" line/);
+    assert.throws(() => parseSheet(block('C1') + block('C1'), KEY_C1), /C1: duplicate item in md/);
+    assert.throws(() => parseSheet('### Notes\n\nsomething\n', KEY_C1), /cannot parse item header "### Notes"/);
+});
+
+test('parseSheet: guards on the key.tsv side throw', () => {
+    assert.throws(() => parseSheet(block(), ''), /key\.tsv is empty/);
+    assert.throws(() => parseSheet(block(), 'item\tnative_id\tstart\tend\tcategories\nC1\t-1_2\t10\t20\tsponsor\n'),
+        /key\.tsv: missing column "runs_flagging"/);
+    assert.throws(() => parseSheet(block(), KEY_HEADER + 'C1\t-1_2\tten\t20.0\tsponsor\trun-a\n'), /key\.tsv: bad row/);
+});
+
+test('parseSheet: blank, whitespace-only or malformed key.tsv cells throw instead of becoming 0 / empty', () => {
+    const row = (r) => () => parseSheet(block(), KEY_HEADER + r + '\n');
+    assert.throws(row('C1\t-1_2\t\t20.0\tsponsor\trun-a'), /key\.tsv: bad row ".*": empty "start"/);
+    assert.throws(row('C1\t-1_2\t10.0\t\tsponsor\trun-a'), /key\.tsv: bad row ".*": empty "end"/);
+    assert.throws(row('C1\t-1_2\t  \t20.0\tsponsor\trun-a'), /empty "start"/);
+    assert.throws(row('C1\t-1_2\t10.0\t \tsponsor\trun-a'), /empty "end"/);
+    assert.throws(row('C1\t\t10.0\t20.0\tsponsor\trun-a'), /empty "native_id"/);
+    assert.throws(row(' \t-1_2\t10.0\t20.0\tsponsor\trun-a'), /empty "item"/);
+    assert.throws(row('C1\t-1_2\t10.0\t20.0\tsponsor\t'), /empty "runs_flagging"/);
+    assert.throws(row('C1\t-1_2\t10.0\t20.0\tsponsor\t , '), /empty "runs_flagging"/);
+    // A truncated row (missing trailing cells) is the same as empty cells.
+    assert.throws(row('C1\t-1_2\t10.0'), /empty "end"/);
+    assert.throws(row('C1\t-1_2\t0x10\t20.0\tsponsor\trun-a'), /"start" is not a number/);
+    assert.throws(row('C1\t-1_2\t10.0\t2e1\tsponsor\trun-a'), /"end" is not a number/);
+    // Decimal strings too long for a double convert to +/-Infinity.
+    const huge = '1' + '0'.repeat(400);
+    assert.throws(row(`C1\t-1_2\t10.0\t${huge}\tsponsor\trun-a`), /"end" is not a finite number/);
+    assert.throws(row(`C1\t-1_2\t-${huge}\t20.0\tsponsor\trun-a`), /"start" is not a finite number/);
+    assert.throws(row('C1\t-1_2\t20.0\t10.0\tsponsor\trun-a'), /"end" is not after "start"/);
+    assert.throws(row('C1\t-1_2\t10.0\t10.0\tsponsor\trun-a'), /"end" is not after "start"/);
+    assert.throws(row('C-1\t-1_2\t10.0\t20.0\tsponsor\trun-a'), /"item" is not an item code/);
+    assert.throws(row('C1\t-1_2\t10.0\t20.0\tsponsor\trun-a\nC1\t-1_2\t30.0\t40.0\tsponsor\trun-a'),
+        /key\.tsv: duplicate item "C1"/);
+});
+
+test('parseSheet: negative key.tsv times (a stretch before 0:00) still parse', () => {
+    const { items } = parseSheet(block(), KEY_HEADER + 'C1\t-1_2\t-11.0\t-1.4\tsponsor\trun-a\n');
+    assert.equal(items[0].start, -11);
+    assert.equal(items[0].end, -1.4);
+});
+
+test('parseSheet: CRLF files parse the same as LF', () => {
+    const crlf = (t) => t.replace(/\n/g, '\r\n');
+    assert.deepEqual(parseSheet(crlf(md), crlf(key)), parseSheet(md, key));
+});
+
+test('parseSheet: content after the last item (heading, rule) is not part of its comment', () => {
+    const tail = '\n---\n\nfooter text\n\n## Notes\n\nsee you\n';
+    assert.equal(parseSheet(block('C1', { verdict: 'Verdict: sponsor\nreal comment' }) + tail, KEY_C1).items[0].comment, 'real comment');
+    const { items } = parseSheet(md + tail, key);
+    assert.equal(items[2].comment, null, 'C7 has no comment');
+});
+
+test('parseSheet: verdict on the line after an empty "Verdict:" (style of earlier sheets)', () => {
+    // `adskip sheet` writes `Verdict: ` with nothing after it; the assessor types
+    // the verdict on the next line, then the reason.
+    const nextLine = parseSheet(block('C1', { verdict: 'Verdict: \n\nNot an ad\nУпоминание вскользь.\nВторая строка.' }), KEY_C1).items[0];
+    assert.equal(nextLine.verdict, 'not_ad');
+    assert.equal(nextLine.comment, 'Упоминание вскользь.\nВторая строка.');
+
+    const onlyVerdict = parseSheet(block('C1', { verdict: 'Verdict:\nself_promotion' }), KEY_C1).items[0];
+    assert.equal(onlyVerdict.verdict, 'self_promotion');
+    assert.equal(onlyVerdict.comment, null);
+
+    // A verdict on the Verdict: line keeps the next lines as comment, even one
+    // that looks like a verdict.
+    const sameLine = parseSheet(block('C1', { verdict: 'Verdict: sponsor\nnot an ad' }), KEY_C1).items[0];
+    assert.equal(sameLine.verdict, 'sponsor');
+    assert.equal(sameLine.comment, 'not an ad');
+
+    // Text after an empty Verdict: that is not a verdict fails loudly, never dropped.
+    assert.throws(() => parseSheet(block('C1', { verdict: 'Verdict: \nне реклама, просто шутка' }), KEY_C1),
+        /C1: empty "Verdict:" line and "не реклама, просто шутка" after it is not a verdict/);
+});
+
+test('parseSheet: only markdown headings and rule lines end an item', () => {
+    const comment = '#хештег в комментарии\n#no-space heading-like line\n-- two dashes\n--- not a rule';
+    const { items } = parseSheet(block('C1', { verdict: `Verdict: sponsor\n${comment}` }) + '\n# Footer\n\ntext\n', KEY_C1);
+    assert.equal(items[0].comment, comment);
+    // `####` is a heading, not an item header: it ends the item.
+    assert.equal(parseSheet(block('C1', { verdict: 'Verdict: sponsor\nkept' }) + '#### Sub\nnot kept\n', KEY_C1).items[0].comment, 'kept');
 });

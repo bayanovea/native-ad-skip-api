@@ -1,6 +1,7 @@
 const express = require('express');
 const { QueryTypes } = require('sequelize');
 const handler = require('../../middleware/handler');
+const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 
 // Tunable constants. Scoring weights (WEIGHT_DISLIKE/WEIGHT_UNDO/WEIGHT_SEGMENT_RATING)
 // and UNDO_MATCH_TOLERANCE live in `prv/repository/moderation.js` since they
@@ -17,36 +18,6 @@ const SCOREBOARD_LIMIT = 50;
 const HISTORY_LIMIT = 50;
 const RECENT_DAYS = 7;
 const UNDO_MATCH_TOLERANCE = 2;
-
-function escapeHtml(value) {
-    if (value == null) return '';
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-// URL-encode a token before embedding it into an href query string. AUTH_TOKEN
-// is admin-controlled but can contain URL-reserved chars (&, =, #, ?, +, %)
-// that would otherwise break query-string parsing. encodeURIComponent always
-// yields URL-safe ASCII (no <>&"'), so the subsequent escapeHtml pass over the
-// result is a no-op — but we keep both for defense-in-depth and to match the
-// HTML-escape pattern used everywhere else in this file. Inline <script>
-// blocks use encodeURIComponent directly at runtime; this helper covers the
-// server-rendered <a href> case.
-function urlToken(value) {
-    if (value == null) return '';
-    return encodeURIComponent(String(value));
-}
-
-function formatDate(value) {
-    if (value == null) return '—';
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toISOString().replace('T', ' ').replace(/\..*$/, '');
-}
 
 module.exports = function createAdminModerationRoutes(models, { markupRepository, moderationRepository }) {
     const router = express.Router();
@@ -759,12 +730,11 @@ module.exports = function createAdminModerationRoutes(models, { markupRepository
         const activeCount = markups.filter(m => m.deleted_at == null).length;
         const deletedCount = markups.length - activeCount;
 
-        const categoryColors = { intro: '#6366f1', sponsor: '#f59e0b', self_promotion: '#ec4899', credits: '#10b981' };
         const token = req.query.verifyBearerToken;
 
         const rows = markups.map(markup => {
             const catName = markup.category?.category || '?';
-            const color = categoryColors[catName] || '#64748b';
+            const color = CATEGORY_COLORS[catName] || '#64748b';
             const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
             const deletedAt = markup.deleted_at ? new Date(markup.deleted_at).toLocaleString('ru-RU') : null;
             const markupIntervals = intervalsByMarkup[markup.id] || [];

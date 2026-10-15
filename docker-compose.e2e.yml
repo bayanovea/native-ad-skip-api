@@ -16,7 +16,10 @@ services:
       - e2e-network
 
   e2e-app:
-    build: .
+    build:
+      context: .
+      args:
+        EXTRA_PACKAGES: postgresql-client   # psql for test/review-export.test.js (prod image stays without it)
     depends_on:
       e2e-db:
         condition: service_healthy
