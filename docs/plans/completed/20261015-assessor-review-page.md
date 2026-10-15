@@ -1,5 +1,7 @@
 # Assessor review page
 
+> **Status 2026-10-16: COMPLETED.** Tasks 1–8 done, merged to `main` and deployed. Sheet `2026-10-14-clean` imported into prod over an SSH tunnel (39 items, 6 md verdicts C1–C6); the page works on prod, and marking happens there from now on (the md and the local dump copy are no longer updated). Still open from Post-Completion: loading the export in the eval repo, `K<n>` conflict sheets, per-assessor accounts.
+
 ## Overview
 
 New admin page `/admin/review` where an assessor gives one verdict per AI-flagged segment (sponsor / self_promotion / not_ad / unclear + comment). It replaces the hand-edited markdown review sheets in `~/Web/data/review/`.
@@ -297,14 +299,14 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 
 *Items requiring manual intervention or external systems, no checkboxes*
 
-**Manual verification**
-- Review 5 open items of `2026-10-14-clean` in the page next to the prv player; check times, link offset and signals by eye.
-- Stop marking in the md once the page works; run the importer once more right before switching so the last md marks are kept.
+**Manual verification** (done 2026-10-16)
+- Review 5 open items of `2026-10-14-clean` in the page next to the prv player; check times, link offset and signals by eye. Done on prod: owner confirmed the page works.
+- Stop marking in the md once the page works; run the importer once more right before switching so the last md marks are kept. Done: imported straight into prod with all 6 md verdicts, md marking stopped.
 
 **Eval repo (`ad-skip-segment-eval`)**
 - Load the export: `adskip review -file <data>/review/2026-10-14-clean.verdicts.tsv -run <run> -date <date>`. The blind sheet comes from several runs, while `-run` takes one; decide there how to record the source run (the key file has the list).
 - Category-conflict sheets (`K<n>`) need their own mapping (verdicts about the human label, so `gold_wrong` / `gold_valid` come into play).
 
-**Prod (later, when assessors start)**
-- Deploy (tables come from `sequelize.sync()` on boot); import sheets into prod over an SSH tunnel; give assessors the page link with the token.
+**Prod**
+- Deploy (tables come from `sequelize.sync()` on boot); import sheets into prod over an SSH tunnel; give assessors the page link with the token. Deploy and import done 2026-10-16 (commands in CLAUDE.md, Ops); handing the link to assessors is up to the owner. The first deploy rebuilt the image's `apt-get` layer once, because the `Dockerfile` gained the `EXTRA_PACKAGES` arg.
 - Real per-assessor accounts and agreement metrics between assessors are a separate plan.

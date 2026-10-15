@@ -54,7 +54,19 @@ make test-unit                                  # DB-free Node unit tests (no Do
 ```bash
 make pull-dump                                  # gzipped prod pg_dump over SSH → ~/Web/dumps/adskip-prod/ (weekly)
 
-# Assessor review (local restored dump on localhost:5433/skipper, user postgres / password local)
+# Assessor review on prod (source of truth for verdicts since 2026-10-16; page:
+# https://${API_HOST}/admin/review?verifyBearerToken=<AUTH_TOKEN>).
+# Import/export from the Mac over an SSH tunnel to the host Postgres, app role:
+ssh -N -L 5434:localhost:5432 root@${HOST_IP}  # terminal 1
+read -s "DB_PASSWORD?DB password: "; echo        # zsh; keeps the password out of history
+DB_PASSWORD=$DB_PASSWORD DB_HOST=localhost DB_PORT=5434 DB_NAME=adskip DB_USER=adskip \
+  node scripts/import-review-sheet.js ~/Web/data/review/<sheet>.md
+PGPASSWORD=$DB_PASSWORD PGPORT=5434 PGUSER=adskip PGDATABASE=adskip \
+  scripts/export-review-verdicts.sh <batch>
+unset DB_PASSWORD
+
+# Same scripts against the local restored dump (localhost:5433/skipper, user postgres / password local);
+# its prv_review_* copy of 2026-10-14-clean is stale, prod has the live verdicts
 DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \
   node scripts/sync-db.js                       # once per fresh dump: creates prv_review_* tables (same schema steps as app boot)
 DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=local DB_NAME=skipper \

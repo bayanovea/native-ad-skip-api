@@ -1,6 +1,7 @@
 #!/bin/sh
 # Export the assessor verdicts of one review batch (prv_review_items / prv_review_verdicts)
-# from the local restored dump into the private data root, as input for `adskip review -file`.
+# into the private data root, as input for `adskip review -file`. Defaults to the local
+# restored dump; for prod set PG* to the SSH tunnel (see CLAUDE.md, Ops).
 # Usage: scripts/export-review-verdicts.sh <batch>   (e.g. 2026-10-14-clean)
 set -eu
 [ $# -eq 1 ] || { echo "usage: $0 <batch>" >&2; exit 2; }
