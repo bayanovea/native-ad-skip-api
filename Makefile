@@ -7,4 +7,7 @@ test-calculator:
 test-e2e:
 	docker-compose -f docker-compose.e2e.yml up --build --abort-on-container-exit
 
-.PHONY: test-calculator test-e2e
+pull-dump:
+	bash scripts/pull-prod-dump.sh
+
+.PHONY: test-calculator test-e2e pull-dump

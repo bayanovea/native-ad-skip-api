@@ -163,6 +163,8 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 ### Task 9: Off-host backups
 
+> **Deferred 2026-10-15** → `docs/backlog/offhost-pg-backup-s3.md` (S3 bucket not created yet). Interim: weekly `make pull-dump` to `~/Web/dumps/adskip-prod/` on the owner's Mac, nagged by a local SessionStart hook. First pull 2026-10-15: 1.3 MB, restored cleanly into `postgres:16` (12533 markups / 2629 votes / 1705 users, max markup id 12903).
+
 **Files:**
 - Create: `infrastructure/backup/pg-backup.sh`
 - Create: `infrastructure/backup/README.md`
@@ -190,7 +192,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [ ] markup → calculate → video-calculated → vote round-trip on prod
 - [ ] `git push` to `main` redeploys without manual steps (push a trivial commit and watch Actions)
 - [ ] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` intentionally open (Grafana login), see Task 2
-- [ ] yesterday's backup object exists in S3; restore drill passed
+- [ ] yesterday's backup object exists in S3; restore drill passed (deferred with Task 9 → backlog; interim local dump restore-tested 2026-10-15)
 - [ ] `make test-e2e` green on the committed compose/workflow changes
 
 ### Task 12: [Final] Update documentation
