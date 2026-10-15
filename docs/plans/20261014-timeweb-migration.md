@@ -144,11 +144,11 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 **Files:** none (GitHub settings)
 
-- [ ] repo Settings → Secrets: add `HOST_IP=NEW_IP`, `SSH_PRIVATE_KEY=<contents of ~/.ssh/adskip-deploy>`; set `DB_NAME`, `DB_USER`, `DB_PASSWORD` to the Task 3 values; `NODE_APP_PORT=3022`; `AUTH_TOKEN`, `GF_ADMIN_PASSWORD` (new or reused — see Development Approach); delete `*_YC` secrets (`DB_HOST` is no longer read from secrets — compose hardcodes `host.docker.internal`)
-- [ ] push `main` (Task 5 + Task 6 commits) → Actions run; or trigger `workflow_dispatch`
-- [ ] on the VM: `docker ps` → `native-ad-skip-api-app-1`, `-prometheus-1`, `-grafana-1` up; `docker logs native-ad-skip-api-app-1` shows `Tables schemas synced` and the listen line, no `Unable to connect to the database`
-- [ ] verify Go cron: after 2 minutes `docker exec native-ad-skip-api-app-1 tail -5 /tmp/mycron.log` → clean runs for prv/rt/yt, no connection errors
-- [ ] verify: `curl -s https://${API_HOST}/` → `{"status":"ok"}`; `curl -s "https://${API_HOST}/video-calculated?v=1&native_id=<known id from dump>"` returns segments
+- [x] repo Settings → Secrets: add `HOST_IP=NEW_IP`, `SSH_PRIVATE_KEY=<contents of ~/.ssh/adskip-deploy>`; set `DB_NAME`, `DB_USER`, `DB_PASSWORD` to the Task 3 values; `NODE_APP_PORT=3022`; `AUTH_TOKEN`, `GF_ADMIN_PASSWORD` (new or reused — see Development Approach); delete `*_YC` secrets (`DB_HOST` is no longer read from secrets — compose hardcodes `host.docker.internal`) → set by hand 2026-10-15
+- [x] push `main` (Task 5 + Task 6 commits) → Actions run; or trigger `workflow_dispatch` → pushed `fa9e574..dfa5370` 2026-10-15; containers up ~3 min later
+- [x] on the VM: `docker ps` → `native-ad-skip-api-app-1`, `-prometheus-1`, `-grafana-1` up; `docker logs native-ad-skip-api-app-1` shows `Tables schemas synced` and the listen line, no `Unable to connect to the database` → all three up; app on `127.0.0.1:3022`, prometheus on `127.0.0.1:9090`, `Tables schemas synced`, no DB errors
+- [x] verify Go cron: after 2 minutes `docker exec native-ad-skip-api-app-1 tail -5 /tmp/mycron.log` → clean runs for prv/rt/yt, no connection errors → prv/rt/yt ticks ran, log empty: 0 `is_new` markups to process and `ConnectDb()` panics on a failed `Ping`, so silence = connected. First real calculation is exercised in Task 8
+- [x] verify: `curl -s https://${API_HOST}/` → `{"status":"ok"}`; `curl -s "https://${API_HOST}/video-calculated?v=1&native_id=<known id from dump>"` returns segments → `{"status":"ok"}`; ➕ the param is `video_id`, not `native_id`: `/video-calculated?v=1&video_id=-1_456000907&duration=2615` → 3 segments, `video_calculated_lookup_total{outcome="match",provider="prv"} 1`. From outside 3022/3024/5432/9090 all closed
 - [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP (➕ 3024 is not opened in the panel firewall — use `ssh -L 3024:localhost:3024 root@NEW_IP` and `http://localhost:3024`), both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2)
 
 ### Task 8: Day-one reachability test from Russia
