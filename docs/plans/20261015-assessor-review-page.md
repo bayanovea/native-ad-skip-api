@@ -217,13 +217,18 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 - Modify: `prv/routes/index.js`
 - Modify: `server.js` (normalizePath: `/admin/review/#batch`)
 - Modify: `test/e2e.js`
+- ➕ Modify: `lib/review-sheet.js`, `test/review-sheet.test.js` (`playerLink` fallback)
 
-- [ ] `GET /admin/review` batch list, `GET /admin/review/:batch` item page, `POST /admin/review/decide`; token check as in `admin-moderation.js`; reuse its `escapeHtml` / `urlToken` approach
-- [ ] page per the layout above: progress counter, item card in player times, signals panel, verdict buttons, comment, reviewer field (`localStorage`, wrapped in try/catch), save → next open item, history and `flagged_by` only for decided items
-- [ ] hotkeys per the table above
-- [ ] `?format=json` returns the same data as the page (no `flagged_by` for undecided items)
-- [ ] write e2e tests: 401 without token; JSON for an undecided item has no `flagged_by`; after decide it has; decide with a bad verdict → 400; progress counts change; default item = first open
-- [ ] run `make test-e2e`, must pass
+- [x] `GET /admin/review` batch list, `GET /admin/review/:batch` item page, `POST /admin/review/decide`; token check as in `admin-moderation.js`; reuse its `escapeHtml` / `urlToken` approach
+- [x] page per the layout above: progress counter, item card in player times, signals panel, verdict buttons, comment, reviewer field (`localStorage`, wrapped in try/catch), save → next open item, history and `flagged_by` only for decided items
+- [x] hotkeys per the table above
+- [x] `?format=json` returns the same data as the page (no `flagged_by` for undecided items)
+- [x] write e2e tests: 401 without token; JSON for an undecided item has no `flagged_by`; after decide it has; decide with a bad verdict → 400; progress counts change; default item = first open
+- [x] run `make test-e2e`, must pass
+- ➕ player link: the stored `link` from `adskip sheet` already sits at `int(start) − 2 s` (provider prv `LinkAt`), so the page uses it as is and never offsets again. `playerLink(native_id, start)` in `lib/review-sheet.js` mirrors `LinkAt` and is only the fallback for items without an http(s) link (a non-http link is never rendered as an href). Recomputing from the one-decimal key differs by 1 s for 1 of 39 items (C37), another reason to keep the stored link.
+- ➕ decide returns `201 {item_id, item_code, verdict, flagged_by, next_item}`; `next_item` is the next open item code after the current position, wrapping round, or null when the batch is done (then the page reloads the current item, now showing its verdict). The page shows "Saved Cn: … Flagged by: …" on the next item via `sessionStorage`.
+- ➕ JSON shape: `{batch: {batch,total,decided,open}, item: {…, start_player, end_player, duration_s, player_link, verdict, history[, flagged_by]}, nav: {prev, next, first_open}, signals}`; nav entries are `{item_code, decided}` only. Unknown batch / item → 404. The reviewer field starts empty and is required (no `owner` default, so later assessors are not mislabelled); it is remembered in `localStorage`. An unset `AUTH_TOKEN` never authorizes (stricter than moderation).
+- ➕ `make test-e2e`: 93/96, the 3 failures are the known baseline 39, 56, 57. Read-only smoke against the local dump (routes mounted in a scratch GET-only server, no `sync()`, no writes): batch list 39/6/33, default item C7, C5 shows verdict + flagged_by, open-item HTML has no run id, inline script passes `node --check`, hotkeys exercised in a stubbed DOM.
 
 ### Task 6: Verdict export for the eval repo
 

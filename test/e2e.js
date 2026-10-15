@@ -2131,3 +2131,215 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.equal(await repo.defaultItem('e2e-review-no-such-batch'), null);
     });
 });
+
+// ── Review page (prv/routes/admin-review.js) ──────────────────────────────────
+
+const REVIEW_RUN = '2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think';
+
+function reviewPath(path, query = {}) {
+    const qs = new URLSearchParams({ ...query, verifyBearerToken: MOD_AUTH });
+    return `${path}?${qs}`;
+}
+
+function getReview(batch, query = {}) {
+    return request('GET', reviewPath(`/admin/review/${encodeURIComponent(batch)}`, query), null);
+}
+
+function decideReview(payload, token = MOD_AUTH) {
+    const qs = token == null ? '' : `?verifyBearerToken=${encodeURIComponent(token)}`;
+    return request('POST', `/admin/review/decide${qs}`, payload);
+}
+
+async function countReviewVerdicts(batch) {
+    return (await reviewState(batch)).verdicts.length;
+}
+
+test('review page: 401 without or with a wrong token', async () => {
+    assert.equal((await request('GET', '/admin/review', null)).status, 401);
+    assert.equal((await request('GET', '/admin/review/any-batch', null)).status, 401);
+    assert.equal((await request('GET', '/admin/review/any-batch?verifyBearerToken=wrong', null)).status, 401);
+    assert.equal((await decideReview({ item_id: 1, verdict: 'sponsor', reviewer: 'x' }, null)).status, 401);
+    assert.equal((await decideReview({ item_id: 1, verdict: 'sponsor', reviewer: 'x' }, 'wrong')).status, 401);
+});
+
+test('review page: default item is the first open one, blind until decided, decide → flagged_by + progress', async () => {
+    const batch = 'e2e-review-page';
+    assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C2 sponsor, C5 not_ad, C7 open
+
+    // Batch list carries the progress.
+    const list = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.body.batches.find(b => b.batch === batch), { batch, total: 3, decided: 2, open: 1 });
+
+    // No ?item → first open (C7).
+    let r = await getReview(batch, { format: 'json' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.batch, { batch, total: 3, decided: 2, open: 1 });
+    const item = r.body.item;
+    assert.equal(item.item_code, 'C7');
+    assert.equal(item.verdict, null);
+    assert.deepEqual(item.history, []);
+    assert.ok(!('flagged_by' in item), 'flagged_by must not be in JSON before a verdict');
+    assert.ok(!JSON.stringify(r.body).includes(REVIEW_RUN), 'run id must not leak anywhere in the JSON');
+    assert.equal(item.start_player, '1:02');
+    assert.equal(item.end_player, '1:18');
+    assert.equal(item.duration_s, 16);
+    assert.equal(item.player_link, 'https://example.invalid/video-1_456000903?t=1m0s',
+        'stored link already sits at start − 2 s and is used as is');
+    assert.deepEqual(r.body.nav, {
+        prev: { item_code: 'C5', decided: true },
+        next: null,
+        first_open: { item_code: 'C7', decided: false },
+    });
+    assert.deepEqual(r.body.signals.markups, []);
+    assert.equal(r.body.signals.undos, 0);
+
+    // HTML of the open item: no run id, but the player link and hotkeys script.
+    const html = await getReview(batch);
+    assert.equal(html.status, 200);
+    assert.equal(typeof html.body, 'string');
+    assert.ok(!html.body.includes(REVIEW_RUN), 'flagged_by must not be in HTML before a verdict');
+    assert.ok(!html.body.includes('class="current flagged-by"'), 'no Flagged by block before a verdict');
+    assert.ok(html.body.includes('href="https://example.invalid/video-1_456000903?t=1m0s"'));
+    assert.ok(html.body.includes('1:02 – 1:18 (16 s)'));
+    assert.ok(html.body.includes("addEventListener('keydown'"));
+
+    // A decided item shows its verdict, history and flagged_by.
+    const c5 = await getReview(batch, { item: 'C5', format: 'json' });
+    assert.equal(c5.body.item.verdict.verdict, 'not_ad');
+    assert.deepEqual(c5.body.item.flagged_by, [REVIEW_RUN]);
+    assert.deepEqual(c5.body.nav.prev, { item_code: 'C2', decided: true });
+    assert.deepEqual(c5.body.nav.next, { item_code: 'C7', decided: false });
+    const c5html = await getReview(batch, { item: 'C5' });
+    assert.ok(c5html.body.includes('class="current flagged-by"'));
+    assert.ok(c5html.body.includes(REVIEW_RUN));
+    assert.ok(c5html.body.includes('Просьба покомментить есть'));
+
+    // Decide C7 → 201 with flagged_by; nothing open any more.
+    const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: 'assessor' });
+    assert.equal(d.status, 201, JSON.stringify(d.body));
+    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', flagged_by: [REVIEW_RUN], next_item: null });
+
+    r = await getReview(batch, { item: 'C7', format: 'json' });
+    assert.equal(r.body.item.verdict.verdict, 'self_promotion');
+    assert.equal(r.body.item.verdict.comment, 'plug');
+    assert.equal(r.body.item.verdict.reviewer, 'assessor');
+    assert.equal(r.body.item.verdict.source, 'page');
+    assert.deepEqual(r.body.item.flagged_by, [REVIEW_RUN]);
+    assert.deepEqual(r.body.batch, { batch, total: 3, decided: 3, open: 0 });
+    assert.equal(r.body.nav.first_open, null);
+    // All decided → default is the last item.
+    assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C7');
+
+    // Change of mind appends; latest wins, history kept.
+    assert.equal((await decideReview({ item_id: String(item.id), verdict: 'not_ad', reviewer: 'owner' })).status, 201);
+    r = await getReview(batch, { item: 'C7', format: 'json' });
+    assert.equal(r.body.item.verdict.verdict, 'not_ad');
+    assert.equal(r.body.item.verdict.comment, null);
+    assert.deepEqual(r.body.item.history.map(h => h.verdict), ['not_ad', 'self_promotion']);
+    const listAfter = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
+    assert.deepEqual(listAfter.body.batches.find(b => b.batch === batch), { batch, total: 3, decided: 3, open: 0 });
+});
+
+test('review page: decide validation → 400 and no row written', async () => {
+    const batch = 'e2e-review-page-bad';
+    assert.equal(runImport(copyReviewFixture(batch)).status, 0);
+    const c7 = (await getReview(batch, { item: 'C7', format: 'json' })).body.item;
+    const before = await countReviewVerdicts(batch);
+
+    for (const [payload, msg] of [
+        [{ item_id: c7.id, verdict: 'maybe', reviewer: 'owner' }, /verdict must be one of/],
+        [{ item_id: c7.id, verdict: 'not an ad', reviewer: 'owner' }, /verdict must be one of/],
+        [{ item_id: c7.id, verdict: 'sponsor' }, /reviewer/],
+        [{ item_id: c7.id, verdict: 'sponsor', reviewer: '   ' }, /reviewer/],
+        [{ item_id: c7.id, verdict: 'sponsor', reviewer: 'owner', comment: 42 }, /comment/],
+        [{ item_id: 99999999, verdict: 'sponsor', reviewer: 'owner' }, /unknown review item/],
+        [{ item_id: 'abc', verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+        [{ verdict: 'sponsor', reviewer: 'owner' }, /item_id/],
+    ]) {
+        const res = await decideReview(payload);
+        assert.equal(res.status, 400, `${JSON.stringify(payload)} → ${res.status}`);
+        assert.match(String(res.body), msg);
+    }
+    assert.equal((await decideReview([1, 2])).status, 400);
+    assert.equal(await countReviewVerdicts(batch), before, 'no verdict row written by bad requests');
+    assert.equal((await getReview(batch, { item: 'C7', format: 'json' })).body.item.verdict, null);
+
+    assert.equal((await getReview('e2e-review-no-such-batch', { format: 'json' })).status, 404);
+    assert.equal((await getReview(batch, { item: 'C99', format: 'json' })).status, 404);
+});
+
+test('review page: save → next open item after the current one, wrapping round', async () => {
+    const batch = 'e2e-review-page-next';
+    assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C7 open
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        // Extra open items before and after C7.
+        for (const [code, pos] of [['C1', 1], ['C9', 9]]) {
+            await c.query(
+                `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, created_at)
+                 VALUES ($1, $2, $3, '-1_1', 10, 20, 'sponsor', NOW())`, [batch, code, pos]);
+        }
+    } finally {
+        await c.end();
+    }
+    assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C1', 'first open by position');
+    const id = async (code) => (await getReview(batch, { item: code, format: 'json' })).body.item.id;
+
+    let d = await decideReview({ item_id: await id('C7'), verdict: 'sponsor', reviewer: 'owner' });
+    assert.equal(d.body.next_item, 'C9');
+    d = await decideReview({ item_id: await id('C9'), verdict: 'unclear', reviewer: 'owner' });
+    assert.equal(d.body.next_item, 'C1', 'wraps round to the first open item');
+    d = await decideReview({ item_id: await id('C1'), verdict: 'not_ad', reviewer: 'owner' });
+    assert.equal(d.body.next_item, null);
+    // C1 had no stored link → computed one at start − 2 s.
+    assert.equal((await getReview(batch, { item: 'C1', format: 'json' })).body.item.player_link,
+        'https://example.invalid/video-1_1?t=8s');
+});
+
+test('review page: user-controlled text is escaped in HTML and inline JSON', async () => {
+    const batch = 'e2e-review-xss<b>"\'';
+    const evil = '</script><script>alert(1)</script><img src=x onerror=alert(2)>';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    let itemId;
+    try {
+        itemId = (await c.query(
+            `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
+             VALUES ($1, 'C1', 1, '-1_2', 30, 40, 'sponsor', $2, 'javascript:alert(3)', $3, NOW()) RETURNING id`,
+            [batch, evil, JSON.stringify([evil])])).rows[0].id;
+    } finally {
+        await c.end();
+    }
+    const d = await decideReview({ item_id: itemId, verdict: 'sponsor', comment: evil, reviewer: '<b>rev</b>' });
+    assert.equal(d.status, 201);
+
+    const r = await getReview(batch);
+    assert.equal(r.status, 200);
+    const html = r.body;
+    assert.ok(!html.includes('<script>alert(1)'), 'cues/comment must be escaped');
+    assert.ok(!html.includes('<img src=x'), 'no raw tags from data');
+    assert.ok(!html.includes('<b>rev</b>'), 'reviewer escaped');
+    assert.ok(!html.includes('e2e-review-xss<b>'), 'batch name escaped');
+    assert.ok(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)'));
+    assert.ok(!html.includes('href="javascript:'), 'non-http link never rendered as href');
+    assert.ok(html.includes('href="https://example.invalid/video-1_2?t=28s"'));
+    // Exactly one <script> element: the page's own, nothing injected.
+    assert.equal(html.split('<script>').length - 1, 1);
+    assert.equal(html.split('</script>').length - 1, 1);
+
+    const list = await request('GET', reviewPath('/admin/review'), null);
+    assert.ok(!list.body.includes('e2e-review-xss<b>'));
+    assert.ok(list.body.includes(`/admin/review/${encodeURIComponent(batch).replace(/'/g, '&#39;')}?`));
+});
+
+test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
+    await request('GET', '/admin/review/e2e-metrics-batch-1', null);
+    await request('GET', '/admin/review/e2e-metrics-batch-2', null);
+    await request('POST', '/admin/review/decide', {});
+    const text = await fetchMetrics();
+    assert.ok(httpDurationHasPath(text, '/admin/review/#batch'));
+    assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-1'));
+    assert.ok(httpDurationHasPath(text, '/admin/review/decide'), 'decide keeps its own label');
+});

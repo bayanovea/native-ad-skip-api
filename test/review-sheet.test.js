@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime, playerLink } = require('../lib/review-sheet');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -121,4 +121,18 @@ test('formatPlayerTime: matches every header of the fixture sheet', () => {
         const span = `${formatPlayerTime(it.start)} – ${formatPlayerTime(it.end)}`;
         assert.ok(headers[i].includes(span), `${headers[i]} vs ${span}`);
     });
+});
+
+test('playerLink: same as adskip sheet (int(start) - 2 s, clamped at 0)', () => {
+    const base = 'https://example.invalid/video-1_456000001?t=';
+    assert.equal(playerLink('-1_456000001', 1994), base + '33m12s');
+    assert.equal(playerLink('-1_456000001', 3845.9), base + '1h4m3s');
+    assert.equal(playerLink('-1_456000001', 9), base + '7s');
+    assert.equal(playerLink('-1_456000001', 1), base + '0s');
+    assert.equal(playerLink('-1_456000001', 62.2), base + '1m0s');
+});
+
+test('playerLink: reproduces every stored link of the fixture sheet', () => {
+    const { items } = parseSheet(md, key);
+    for (const it of items) assert.equal(playerLink(it.native_id, it.start), it.link, it.item_code);
 });
