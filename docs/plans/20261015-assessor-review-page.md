@@ -166,14 +166,15 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 - Create: `test/review-sheet.test.js`
 - Create: `test/fixtures/review-sheet.md`, `test/fixtures/review-sheet.key.tsv`
 
-- [ ] `parseSheet(mdText, keyTsvText)` → `{ items: [{item_code, position, native_id, start, end, proposed, cues, link, flagged_by, verdict|null, comment|null}] }`; start/end/flagged_by from key.tsv, the rest from md
-- [ ] `normalizeVerdict(text)` per the table above; throws with the item code on unknown text
-- [ ] fail if an md item has no key row or the native_id differs between md and key
-- [ ] `formatPlayerTime(seconds)` helper (`mm:ss` / `h:mm:ss`), shared with the page
-- [ ] fixture: copy of 3 real blocks (one sponsor, one `not an add` with a multi-line comment, one empty) + matching key rows
-- [ ] write tests: verdicts and comments parsed, empty verdict = null, typo normalised, unknown verdict throws, missing key row throws
-- [ ] write tests: `formatPlayerTime` (59 → `0:59`, 919.8 → `15:20`, rounded like `adskip sheet`, 3843 → `1:04:03`)
-- [ ] run `node --test test/review-sheet.test.js`, must pass before Task 3
+- [x] `parseSheet(mdText, keyTsvText)` → `{ items: [{item_code, position, native_id, start, end, proposed, cues, link, flagged_by, verdict|null, comment|null}] }`; start/end/flagged_by from key.tsv, the rest from md
+- [x] `normalizeVerdict(text)` per the table above; throws with the item code on unknown text
+- [x] fail if an md item has no key row or the native_id differs between md and key
+- [x] `formatPlayerTime(seconds)` helper (`mm:ss` / `h:mm:ss`), shared with the page
+- [x] fixture: copy of 3 real blocks (one sponsor, one `not an add` with a multi-line comment, one empty) + matching key rows
+- [x] write tests: verdicts and comments parsed, empty verdict = null, typo normalised, unknown verdict throws, missing key row throws
+- [x] write tests: `formatPlayerTime` (59 → `0:59`, 919.8 → `15:20`, rounded like `adskip sheet`, 3843 → `1:04:03`)
+- [x] run `node --test test/review-sheet.test.js`, must pass before Task 3
+- ⚠️ the key file keeps one decimal, so a key time ending in `.5` can show 1 s off the md header (`adskip sheet` rounded the unrounded time): 4 of 39 items in `2026-10-14-clean` (e.g. C13 key 541.5 → `9:02`, md `9:01`). Unavoidable from the key alone; seconds in DB/export are unaffected.
 
 ### Task 3: Importer, and import the 2026-10-14 sheet
 
