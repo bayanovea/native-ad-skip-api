@@ -2214,16 +2214,16 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.equal(open.verdict, null);
         assert.deepEqual(open.history, []);
         assert.ok(!('flagged_by' in open), 'flagged_by hidden before a verdict');
-        assert.deepEqual(await repo.firstOpenItem(batch), { item_code: 'C7', decided: false });
+        assert.deepEqual(await repo.firstOpenItem(batch), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
         assert.equal((await repo.defaultItem(batch)).item_code, 'C7');
-        assert.deepEqual(await repo.nextOpenItem(batch, 2), { item_code: 'C7', decided: false });
-        assert.deepEqual(await repo.nextOpenItem(batch, 7), { item_code: 'C7', decided: false }, 'wraps round to the first open item');
+        assert.deepEqual(await repo.nextOpenItem(batch, 2), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
+        assert.deepEqual(await repo.nextOpenItem(batch, 7), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' }, 'wraps round to the first open item');
         assert.deepEqual(await repo.getBatchProgress(batch), { batch, total: 3, decided: 2, open: 1 });
         const listed = (await repo.listBatches()).find(b => b.batch === batch);
         assert.deepEqual(listed, { batch, total: 3, decided: 2, open: 1 });
 
         assert.deepEqual(await repo.neighbours(batch, 5),
-            { prev: { item_code: 'C2', decided: true }, next: { item_code: 'C7', decided: false } });
+            { prev: { item_code: 'C2', decided: true, link: 'https://example.invalid/video-1_456000901?t=4m20s' }, next: { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' } });
         assert.equal((await repo.neighbours(batch, 2)).prev, null);
 
         // Bad input never writes a row.
@@ -2334,9 +2334,9 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal(item.player_link, 'https://example.invalid/video-1_456000903?t=1m0s',
         'stored link already sits at start − 2 s and is used as is');
     assert.deepEqual(r.body.nav, {
-        prev: { item_code: 'C5', decided: true },
+        prev: { item_code: 'C5', decided: true, player_link: 'https://example.invalid/video-1_456000902?t=29m59s' },
         next: null,
-        first_open: { item_code: 'C7', decided: false },
+        first_open: { item_code: 'C7', decided: false, player_link: 'https://example.invalid/video-1_456000903?t=1m0s' },
     });
     assert.deepEqual(r.body.signals.markups, []);
     assert.equal(r.body.signals.undos, 0);
@@ -2355,8 +2355,8 @@ test('review page: default item is the first open one, blind until decided, deci
     const c5 = await getReview(batch, { item: 'C5', format: 'json' });
     assert.equal(c5.body.item.verdict.verdict, 'not_ad');
     assert.deepEqual(c5.body.item.flagged_by, [REVIEW_RUN]);
-    assert.deepEqual(c5.body.nav.prev, { item_code: 'C2', decided: true });
-    assert.deepEqual(c5.body.nav.next, { item_code: 'C7', decided: false });
+    assert.deepEqual(c5.body.nav.prev, { item_code: 'C2', decided: true, player_link: 'https://example.invalid/video-1_456000901?t=4m20s' });
+    assert.deepEqual(c5.body.nav.next, { item_code: 'C7', decided: false, player_link: 'https://example.invalid/video-1_456000903?t=1m0s' });
     const c5html = await getReview(batch, { item: 'C5' });
     assert.ok(c5html.body.includes('class="current flagged-by"'));
     assert.ok(c5html.body.includes(REVIEW_RUN));
@@ -2365,7 +2365,7 @@ test('review page: default item is the first open one, blind until decided, deci
     // Decide C7 → 201 with flagged_by; nothing open any more.
     const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: 'assessor' });
     assert.equal(d.status, 201, JSON.stringify(d.body));
-    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', flagged_by: [REVIEW_RUN], next_item: null });
+    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null });
 
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'self_promotion');
@@ -2454,6 +2454,7 @@ test('review page: save → next open item after the current one, wrapping round
     assert.equal(d.body.next_item, 'C9');
     d = await decideReview({ item_id: await id('C9'), verdict: 'unclear', reviewer: 'owner' });
     assert.equal(d.body.next_item, 'C1', 'wraps round to the first open item');
+    assert.equal(d.body.next_player_link, null, 'C1 has no stored link');
     d = await decideReview({ item_id: await id('C1'), verdict: 'not_ad', reviewer: 'owner' });
     assert.equal(d.body.next_item, null);
     // C1 has no stored link → no player link (never computed).
@@ -2733,12 +2734,16 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.ok(!html.includes('run-kbd'), 'blind before a verdict');
     page.key('k');
     assert.equal(page.navigatedTo, null, 'no previous item on C1');
+    assert.deepEqual(page.opened, [], 'no item switch, no player');
+    // Switching items also opens the new item's player.
     page.key('j');
     assert.equal(page.navigatedTo, itemPath('C2'));
+    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=18s', target: '_blank', features: 'noopener,noreferrer' }]);
     ({ page } = await openKeyboardPage(page.navigatedTo, storages));
     assert.equal(page.state().item_code, 'C2');
     page.key('k');
     assert.equal(page.navigatedTo, itemPath('C1'));
+    assert.deepEqual(page.opened.map(o => o.url), ['https://example.invalid/video-1_3?t=8s']);
     ({ page } = await openKeyboardPage(page.navigatedTo, storages));
     page.key('o');
     assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=8s', target: '_blank', features: 'noopener,noreferrer' }]);
@@ -2755,7 +2760,10 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.deepEqual(page.selected(), ['sponsor'], 'typing in Reviewer does not pick verdicts');
     page.key('Escape');
     assert.equal(page.active(), 'BODY');
+    page.opened.length = 0;
     assert.equal(await saveAndFollow(page), itemPath('C2'));
+    assert.deepEqual(page.opened, [{ url: 'https://example.invalid/video-1_3?t=18s', target: '_blank', features: 'noopener,noreferrer' }],
+        'save → next item opens its player');
     assert.equal(storages.local.getItem('adminReview.reviewer'), 'kbd');
 
     // C2: flash from the previous save; reviewer remembered; c → comment,
@@ -2786,6 +2794,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     ({ page } = await openKeyboardPage(page.navigatedTo, storages));
     page.key('4');
     assert.equal(await saveAndFollow(page), itemPath('C4'));
+    assert.deepEqual(page.opened, [], 'last open item reloads itself, no player');
     ({ page, html } = await openKeyboardPage(page.navigatedTo, storages));
     assert.ok(html.includes('4 / 4 decided · 0 open'));
     assert.ok(html.includes('class="current flagged-by"') && html.includes('run-kbd'));
@@ -2861,6 +2870,7 @@ test('review page: keyboard edge cases (Russian layout, focused link, Enter in R
     page.key('о', { code: 'KeyJ' });
     assert.equal(page.navigatedTo, itemPath('C2'));
     page.navigatedTo = null;
+    page.opened.length = 0;
 
     // After clicking "Open in player" the link has focus: hotkeys still work,
     // only Enter keeps its link meaning (no save).

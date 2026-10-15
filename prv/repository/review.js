@@ -90,11 +90,11 @@ module.exports = function createReviewRepository(models, sequelize) {
         return item || null;
     }
 
-    // Navigation reference `{ item_code, decided }` or null — one light query,
-    // no verdict history.
+    // Navigation reference `{ item_code, decided, link }` or null — one light
+    // query, no verdict history.
     async function selectNav(whereSql, orderSql, replacements) {
         const [row] = await sequelize.query(
-            `SELECT i.item_code, ${IS_DECIDED} AS decided
+            `SELECT i.item_code, ${IS_DECIDED} AS decided, i.link
                FROM prv_review_items i
               WHERE ${whereSql}
               ORDER BY ${orderSql}
@@ -155,14 +155,14 @@ module.exports = function createReviewRepository(models, sequelize) {
                 || selectOne('i.batch = :batch', 'i.position DESC, i.id DESC', { batch });
         },
 
-        /** First undecided item by position as `{ item_code, decided }`, or null. */
+        /** First undecided item by position as `{ item_code, decided, link }`, or null. */
         firstOpenItem(batch) {
             return selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
         },
 
         /**
          * Next open item after `position` (wrapping round to the first open
-         * one) as `{ item_code, decided }`, or null when nothing is open.
+         * one) as `{ item_code, decided, link }`, or null when nothing is open.
          * Used for "save → next open".
          */
         async nextOpenItem(batch, position) {
@@ -170,7 +170,7 @@ module.exports = function createReviewRepository(models, sequelize) {
                 || selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
         },
 
-        /** `{ prev, next }` by position as `{ item_code, decided }` (null at either end). */
+        /** `{ prev, next }` by position as `{ item_code, decided, link }` (null at either end). */
         async neighbours(batch, position) {
             const [prev, next] = await Promise.all([
                 selectNav('i.batch = :batch AND i.position < :position', 'i.position DESC, i.id DESC', { batch, position }),

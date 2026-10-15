@@ -55,6 +55,12 @@ function choiceOf(verdict) {
     return verdict.verdict;
 }
 
+// Nav reference as the page shows it: the raw link becomes `player_link`
+// (null when not http(s)), so switching items can open the player.
+function presentNav(ref) {
+    return ref ? { item_code: ref.item_code, decided: ref.decided, player_link: safeLink(ref.link) } : null;
+}
+
 function badge(category) {
     const color = CATEGORY_COLORS[category] || '#64748b';
     return `<span class="badge" style="background:${color}">${escapeHtml(category || '?')}</span>`;
@@ -223,7 +229,7 @@ function renderItemPage(payload, token) {
     const itemHref = (code) =>
         `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;verifyBearerToken=${t}`;
     const navLink = (ref, label) => ref
-        ? `<a class="nav-btn" href="${itemHref(ref.item_code)}">${label}</a>`
+        ? `<a class="nav-btn" href="${itemHref(ref.item_code)}"${ref.player_link ? ` data-player-link="${escapeHtml(ref.player_link)}"` : ''}>${label}</a>`
         : `<span class="nav-btn disabled">${label}</span>`;
 
     const proposed = String(item.proposed || '').split('+').filter(Boolean).map(badge).join(' ');
@@ -260,6 +266,8 @@ function renderItemPage(payload, token) {
         item_code: item.item_code,
         prev: nav.prev ? nav.prev.item_code : null,
         next: nav.next ? nav.next.item_code : null,
+        prev_player_link: nav.prev ? nav.prev.player_link : null,
+        next_player_link: nav.next ? nav.next.player_link : null,
         player_link: item.player_link,
         verdict: current ? current.verdict : null,
         choice: currentChoice,
@@ -337,6 +345,16 @@ function renderItemPage(payload, token) {
         return '/admin/review/' + encodeURIComponent(STATE.batch) + '?item=' + encodeURIComponent(code)
             + '&verifyBearerToken=' + encodeURIComponent(STATE.token);
     }
+    // Switching items opens the new item's player in a tab, like "Open in
+    // player". It runs inside the key/click/save gesture that switches, since
+    // the next page cannot open a tab on load (popup blocker).
+    function openPlayer(link) {
+        if (link) window.open(link, '_blank', 'noopener,noreferrer');
+    }
+    function goTo(code, link) {
+        openPlayer(link);
+        window.location.href = itemUrl(code);
+    }
     function setStatus(text, kind) {
         const el = document.getElementById('status');
         el.textContent = text;
@@ -396,7 +414,8 @@ function renderItemPage(payload, token) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
                 storageSet('sessionStorage', FLASH_KEY, 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged);
-                window.location.href = itemUrl(data.next_item || STATE.item_code);
+                if (data.next_item) goTo(data.next_item, data.next_player_link);
+                else window.location.href = itemUrl(STATE.item_code);
                 return;
             }
             setStatus('Error ' + res.status + ': ' + (await res.text()), 'error');
@@ -432,10 +451,17 @@ function renderItemPage(payload, token) {
         const letter = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : LETTER_CODES[e.code];
         switch (letter) {
             case 'c': e.preventDefault(); document.getElementById('comment').focus(); break;
-            case 'j': if (STATE.next) window.location.href = itemUrl(STATE.next); break;
-            case 'k': if (STATE.prev) window.location.href = itemUrl(STATE.prev); break;
-            case 'o': if (STATE.player_link) window.open(STATE.player_link, '_blank', 'noopener,noreferrer'); break;
+            case 'j': if (STATE.next) goTo(STATE.next, STATE.next_player_link); break;
+            case 'k': if (STATE.prev) goTo(STATE.prev, STATE.prev_player_link); break;
+            case 'o': openPlayer(STATE.player_link); break;
         }
+    });
+    // Plain clicks on ◀ / ▶ / first open also open the player (a modified
+    // click opens the review page in a new tab instead, so no player).
+    document.addEventListener('click', function (e) {
+        const a = e.target && e.target.closest ? e.target.closest('a.nav-btn[data-player-link]') : null;
+        if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        openPlayer(a.dataset.playerLink);
     });
     (function init() {
         document.getElementById('reviewer').value = storageGet('localStorage', REVIEWER_KEY) || '';
@@ -497,6 +523,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             verdict: row.verdict,
             flagged_by: item.flagged_by || [],
             next_item: next ? next.item_code : null,
+            next_player_link: next ? safeLink(next.link) : null,
         });
     }));
 
@@ -523,7 +550,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         const payload = {
             batch: progress,
             item,
-            nav: { prev, next, first_open: firstOpen },
+            nav: { prev: presentNav(prev), next: presentNav(next), first_open: presentNav(firstOpen) },
             signals,
         };
 
