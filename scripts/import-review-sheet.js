@@ -14,6 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Sequelize, QueryTypes } = require('sequelize');
 const { parseSheet } = require('../lib/review-sheet');
+const definePrvModels = require('../prv/db');
+const createReviewRepository = require('../prv/repository/review');
 
 function usage(msg) {
     if (msg) console.error(msg);
@@ -64,7 +66,7 @@ function backupMd(mdPath) {
     }
 }
 
-async function importItems(sequelize, batch, items) {
+async function importItems(sequelize, review, batch, items) {
     const summary = { inserted: [], present: [], imported: [], skipped: [] };
     await sequelize.transaction(async (transaction) => {
         for (const it of items) {
@@ -109,14 +111,14 @@ async function importItems(sequelize, batch, items) {
                 summary.skipped.push(it.item_code);
                 continue;
             }
-            await sequelize.query(
-                `INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, decided_at)
-                 VALUES (:item_id, :verdict, :comment, 'owner', 'import', NOW())`,
-                {
-                    replacements: { item_id: row.id, verdict: it.verdict, comment: it.comment },
-                    transaction,
-                }
-            );
+            await review.recordVerdict({
+                item_id: row.id,
+                verdict: it.verdict,
+                comment: it.comment,
+                reviewer: 'owner',
+                source: 'import',
+                transaction,
+            });
             summary.imported.push(it);
         }
     });
@@ -161,7 +163,9 @@ async function main() {
         }
     );
     try {
-        const summary = await importItems(sequelize, batch, items);
+        // Verdicts go through the same write entrypoint as the review page.
+        const review = createReviewRepository(definePrvModels(sequelize), sequelize);
+        const summary = await importItems(sequelize, review, batch, items);
         printSummary(batch, summary);
     } finally {
         await sequelize.close();

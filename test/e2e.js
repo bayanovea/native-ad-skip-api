@@ -1976,3 +1976,158 @@ test('review import: --batch overrides the name; unknown verdict fails and write
     assert.equal(st.items.length, 0);
     assert.equal(st.verdicts.length, 0);
 });
+
+// ── Review repository (prv/repository/review.js) ──────────────────────────────
+
+// The repository is exercised in-process against the e2e DB (no route yet).
+async function withReviewRepo(fn) {
+    const { Sequelize } = require('sequelize');
+    const sequelize = new Sequelize(TEST_DB, DB_USER, DB_PASSWORD, {
+        host: DB_HOST, port: DB_PORT, dialect: 'postgres', logging: false,
+    });
+    try {
+        const models = require('../prv/db')(sequelize);
+        return await fn(require('../prv/repository/review')(models, sequelize), sequelize);
+    } finally {
+        await sequelize.close();
+    }
+}
+
+test('review repository: getSignals collects live markups, segments + votes, undos and clicks around the stretch', async () => {
+    const nid = '__e2e__review_signals';
+    const other = '__e2e__review_signals_other';
+    const sponsor = cats.prv.sponsor;
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    const ids = {};
+    try {
+        const one = async (sql, params) => (await c.query(sql, params)).rows[0];
+        // Two videos rows for one native_id (duration split) + an unrelated video.
+        const v1 = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 600, NOW(), NOW()) RETURNING id`, [nid])).id;
+        const v2 = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 603, NOW(), NOW()) RETURNING id`, [nid])).id;
+        const v3 = (await one(`INSERT INTO videos (native_id, "createdAt", "updatedAt") VALUES ($1, NOW(), NOW()) RETURNING id`, [other])).id;
+        const author = (await one(
+            `INSERT INTO users (generated_user_id, rating, "createdAt", "updatedAt") VALUES ($1, 7, NOW(), NOW()) RETURNING id`,
+            ['e2e-review-signals-author'])).id;
+        const markup = async (key, video, start, end, { markupDeleted = false, intervalDeleted = false } = {}) => {
+            const m = await one(
+                `INSERT INTO markups (video_id, user_id, internal_user_id, category_id, is_new, deleted_at, "createdAt", "updatedAt")
+                 VALUES ($1, 'e2e-review-signals-author', $2, $3, false, $4, NOW(), NOW()) RETURNING id`,
+                [video, author, sponsor, markupDeleted ? new Date() : null]);
+            await c.query(
+                `INSERT INTO markup_time_intervals (markup_id, start, "end", deleted_at, "createdAt", "updatedAt")
+                 VALUES ($1, $2, $3, $4, NOW(), NOW())`,
+                [m.id, start, end, intervalDeleted ? new Date() : null]);
+            ids[key] = m.id;
+        };
+        // Stretch 100–120 s, window 30 → 70–150.
+        await markup('inA', v1, 140, 160);                       // overlaps the window end
+        await markup('inB', v2, 60, 75);                         // other videos row, overlaps the start
+        await markup('deletedMarkup', v1, 100, 110, { markupDeleted: true });
+        await markup('deletedInterval', v1, 100, 110, { intervalDeleted: true });
+        await markup('outside', v1, 200, 220);
+        await markup('otherVideo', v3, 100, 110);
+
+        const seg = async (video, start, end, rating) => (await one(
+            `INSERT INTO prv_calculated_segments (video_id, category_id, start, "end", rating, "createdAt", "updatedAt")
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING id`, [video, sponsor, start, end, rating])).id;
+        ids.segIn = await seg(v1, 101, 119, 1);
+        ids.segOut = await seg(v1, 300, 310, 0);
+        for (const [i, vote] of [1, 1, -1].entries()) {
+            await c.query(
+                `INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
+                 VALUES ($1, $2, $3, 101, 119, $4, NOW(), NOW())`, [`e2e-review-voter-${i}`, v1, sponsor, vote]);
+        }
+
+        for (const table of ['prv_events_interval_undo', 'prv_events_interval_click']) {
+            const extraCol = table.endsWith('click') ? ', click_time' : '';
+            const extraVal = table.endsWith('click') ? ', 105' : '';
+            for (const [native, start, end] of [[nid, 95, 118], [nid, 400, 410], [other, 95, 118]]) {
+                await c.query(
+                    `INSERT INTO ${table} (user_id, video_native_id, category_id, start, "end"${extraCol}, "createdAt", "updatedAt")
+                     VALUES ('e2e-review-signals', $1, $2, $3, $4${extraVal}, NOW(), NOW())`,
+                    [native, sponsor, start, end]);
+            }
+        }
+    } finally {
+        await c.end();
+    }
+
+    const s = await withReviewRepo(repo => repo.getSignals(nid, 100, 120));
+    assert.deepEqual(s.window, { start: 70, end: 150 });
+    assert.equal(s.videos.length, 2, 'both videos rows for the native_id');
+    assert.deepEqual(s.markups.map(m => m.markup_id), [ids.inB, ids.inA],
+        'only live, in-window markups of this native_id, ordered by start');
+    const a = s.markups.find(m => m.markup_id === ids.inA);
+    assert.equal(a.category, 'sponsor');
+    assert.equal(a.start, 140);
+    assert.equal(a.end, 160);
+    assert.equal(a.author_rating, 7);
+    assert.equal(a.author_banned, false);
+    assert.ok(Number.isInteger(a.user_id));
+
+    assert.deepEqual(s.segments.map(x => x.segment_id), [ids.segIn]);
+    assert.deepEqual(
+        { rating: s.segments[0].rating, likes: s.segments[0].likes, dislikes: s.segments[0].dislikes, category: s.segments[0].category },
+        { rating: 1, likes: 2, dislikes: 1, category: 'sponsor' });
+    assert.equal(s.undos, 1);
+    assert.equal(s.clicks, 1);
+
+    const none = await withReviewRepo(repo => repo.getSignals('__e2e__review_no_video', 100, 120));
+    assert.deepEqual(none, { window: { start: 70, end: 150 }, videos: [], markups: [], segments: [], undos: 0, clicks: 0 });
+});
+
+test('review repository: latest verdict wins, history kept, blind until decided, navigation helpers', async () => {
+    const batch = 'e2e-review-repo';
+    assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C2 sponsor, C5 not_ad, C7 open
+
+    await withReviewRepo(async (repo) => {
+        const open = await repo.getItem(batch, 'C7');
+        assert.equal(open.verdict, null);
+        assert.deepEqual(open.history, []);
+        assert.ok(!('flagged_by' in open), 'flagged_by hidden before a verdict');
+        assert.equal((await repo.firstOpenItem(batch)).item_code, 'C7');
+        assert.equal((await repo.defaultItem(batch)).item_code, 'C7');
+        assert.equal((await repo.nextOpenItem(batch, 2)).item_code, 'C7');
+        assert.equal((await repo.nextOpenItem(batch, 7)).item_code, 'C7', 'wraps round to the first open item');
+        assert.deepEqual(await repo.getBatchProgress(batch), { batch, total: 3, decided: 2, open: 1 });
+        const listed = (await repo.listBatches()).find(b => b.batch === batch);
+        assert.deepEqual(listed, { batch, total: 3, decided: 2, open: 1 });
+
+        const nb = await repo.neighbours(batch, 5);
+        assert.equal(nb.prev.item_code, 'C2');
+        assert.equal(nb.next.item_code, 'C7');
+        assert.equal(nb.prev.verdict.verdict, 'sponsor');
+        assert.equal((await repo.neighbours(batch, 2)).prev, null);
+
+        // Bad input never writes a row.
+        await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'maybe', reviewer: 'owner', source: 'page' }),
+            e => e.code === 'invalid_verdict');
+        await assert.rejects(repo.recordVerdict({ item_id: 99999999, verdict: 'sponsor', reviewer: 'owner', source: 'page' }),
+            e => e.code === 'unknown_item');
+        await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', reviewer: '  ', source: 'page' }),
+            e => e.code === 'invalid_reviewer');
+        await assert.rejects(repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', reviewer: 'owner', source: 'api' }),
+            e => e.code === 'invalid_source');
+        assert.equal((await repo.getItem(batch, 'C7')).history.length, 0);
+
+        await repo.recordVerdict({ item_id: open.id, verdict: 'sponsor', comment: '   ', reviewer: 'owner', source: 'page' });
+        await repo.recordVerdict({ item_id: open.id, verdict: 'not_ad', comment: ' just a plug\n', reviewer: ' assessor ', source: 'page' });
+
+        const decided = await repo.getItem(batch, 'C7');
+        assert.equal(decided.verdict.verdict, 'not_ad', 'latest verdict wins');
+        assert.equal(decided.verdict.comment, 'just a plug');
+        assert.equal(decided.verdict.reviewer, 'assessor');
+        assert.deepEqual(decided.history.map(h => [h.verdict, h.comment, h.source]),
+            [['not_ad', 'just a plug', 'page'], ['sponsor', null, 'page']]);
+        assert.deepEqual(decided.flagged_by, ['2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think'],
+            'flagged_by shown once decided');
+
+        assert.equal(await repo.firstOpenItem(batch), null);
+        assert.equal(await repo.nextOpenItem(batch, 2), null);
+        assert.equal((await repo.defaultItem(batch)).item_code, 'C7', 'all decided → last item');
+        assert.deepEqual(await repo.getBatchProgress(batch), { batch, total: 3, decided: 3, open: 0 });
+        assert.equal(await repo.getItem(batch, 'C99'), null);
+        assert.equal(await repo.defaultItem('e2e-review-no-such-batch'), null);
+    });
+});

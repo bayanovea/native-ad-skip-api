@@ -8,6 +8,8 @@ const videoRepository = require('../repository/video')(models);
 // moderationRepository MUST be instantiated BEFORE userService — userService's
 // auto-ban hook depends on it to record the auto-decision row at rating threshold.
 const moderationRepository = require('../repository/moderation')(models, sequelize);
+// Assessor review (/admin/review); handed to the admin-review routes once they are mounted.
+const reviewRepository = require('../repository/review')(models, sequelize);
 const userService = require('../service/user')(models, {
     markupRepository,
     markupTimeIntervalRepository,

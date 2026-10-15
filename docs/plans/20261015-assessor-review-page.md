@@ -198,13 +198,17 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 **Files:**
 - Create: `prv/repository/review.js`
 - Modify: `prv/routes/index.js` (construct and pass the repository)
+- ➕ Modify: `scripts/import-review-sheet.js` (md verdicts go through `recordVerdict`)
 
-- [ ] `listBatches()` → batch, total, decided
-- [ ] `getItem(batch, itemCode)` / `firstOpenItem(batch)` / neighbours (prev/next by `position`), each with latest verdict + history
-- [ ] `recordVerdict({item_id, verdict, comment, reviewer, source})` (single write entrypoint, validates verdict)
-- [ ] `getSignals(native_id, start, end, window=30)`: through all `videos` rows for the native_id: live markups whose intervals overlap the window (`deleted_at IS NULL` on markup and interval), calculated segments overlapping with rating + vote counts, undo and click counts overlapping
-- [ ] write e2e tests (seeded DB): signals return an overlapping markup and skip a soft-deleted one and one outside the window; latest verdict wins after two writes
-- [ ] run `make test-e2e`, must pass
+- [x] `listBatches()` → batch, total, decided
+- [x] `getItem(batch, itemCode)` / `firstOpenItem(batch)` / neighbours (prev/next by `position`), each with latest verdict + history
+- [x] `recordVerdict({item_id, verdict, comment, reviewer, source})` (single write entrypoint, validates verdict)
+- [x] `getSignals(native_id, start, end, window=30)`: through all `videos` rows for the native_id: live markups whose intervals overlap the window (`deleted_at IS NULL` on markup and interval), calculated segments overlapping with rating + vote counts, undo and click counts overlapping
+- [x] write e2e tests (seeded DB): signals return an overlapping markup and skip a soft-deleted one and one outside the window; latest verdict wins after two writes
+- [x] run `make test-e2e`, must pass (87/90; the 3 failures are the known baseline 39, 56, 57)
+- ➕ extra read helpers the page needs: `getItemById`, `getBatchProgress`, `defaultItem` (first open, else last item), `nextOpenItem(batch, position)` (next open after the current one, wrapping round). The blind rule lives in the repository: `flagged_by` is omitted from every returned item without a verdict.
+- ➕ `recordVerdict` throws `ReviewInputError` with a `code` (`invalid_verdict`, `invalid_source`, `invalid_reviewer`, `invalid_item`, `invalid_comment`, `unknown_item`) so the decide route can map it to 400; reviewer and comment are trimmed, empty comment → null. The importer now writes md verdicts through it (same transaction).
+- ➕ `index.js` only constructs `reviewRepository`; Task 5 passes it to `admin-review.js`. Sanity-checked on the local dump: a split native_id returns markups/segments from both `videos` rows (~25 ms); none of the 39 `2026-10-14-clean` items has user data in the dump (no `videos` rows for their native_ids), so their signals panel will be empty locally.
 
 ### Task 5: Review routes and page
 
