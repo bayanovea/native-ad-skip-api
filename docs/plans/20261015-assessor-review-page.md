@@ -236,11 +236,16 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 - Create: `scripts/export-review-verdicts.sh`
 - Create: `scripts/export-review-verdicts.sql`
 - Create: `test/review-export.test.js`
+- ➕ Modify: `docker-compose.e2e.yml` (run `test/review-export.test.js` under `make test-e2e`)
 
-- [ ] `scripts/export-review-verdicts.sh <batch>` (psql, same env defaults as `export-gold.sh`) → `<data>/review/<batch>.verdicts.tsv` with the header `provider native_id category start end verdict item note`
-- [ ] mapping per the export table, latest verdict per item, open items skipped, note sanitised
-- [ ] write test: seed items + verdicts (including a changed verdict and a comment with a newline and a tab), run the SQL, compare to expected TSV
-- [ ] run the export for `2026-10-14-clean` on the local DB; check the 6 rows by eye
+- [x] `scripts/export-review-verdicts.sh <batch>` (psql, same env defaults as `export-gold.sh`) → `<data>/review/<batch>.verdicts.tsv` with the header `provider native_id category start end verdict item note`
+- [x] mapping per the export table, latest verdict per item, open items skipped, note sanitised
+- [x] write test: seed items + verdicts (including a changed verdict and a comment with a newline and a tab), run the SQL, compare to expected TSV
+- [x] run the export for `2026-10-14-clean` on the local DB; check the 6 rows by eye
+- ➕ start/end are written with one decimal (`round(x::numeric, 1)`, e.g. `269.2`, `1830.0`), matching the key file and the `2026-10-12-blind-v21.tsv` example; a decided item always gets a note column (empty when no comment), as in the example. Note sanitising collapses each run of tabs/CR/LF (with surrounding spaces) to one space and trims.
+- ➕ the script refuses an unknown batch (exit 1, nothing written) so a typo does not leave an empty TSV in the data root.
+- ➕ psql is not in the e2e container, so the test runs the same `.sql` text through the Sequelize connection (psql `\…` lines dropped, `:'batch'` bound as `$1`), in its own DB `${DB_NAME}_unit_review_export`. `make test-e2e`: 95/98, failures only the known baseline 39, 56, 57.
+- ➕ real export (local `localhost:5433/skipper`): `~/Web/data/review/2026-10-14-clean.verdicts.tsv`, header + 6 rows: C1 self_promotion/gold_missing, C2 sponsor/gold_missing, C3 self_promotion/gold_missing, C4 sponsor/gold_missing, C5 self_promotion/model_wrong with the Russian comment on one line, C6 self_promotion/gold_missing; times match the key file.
 
 ### Task 7: Verify acceptance criteria
 

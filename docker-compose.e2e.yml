@@ -29,7 +29,7 @@ services:
       AUTH_TOKEN: test_token
       GOPATH: /go
       APP_DIR: /app
-    command: node --test test/e2e.js test/moderation-resolver.test.js
+    command: node --test test/e2e.js test/moderation-resolver.test.js test/review-export.test.js
     networks:
       - e2e-network
 
