@@ -2641,7 +2641,7 @@ function loadKeyboardPage(html, storages) {
             },
         };
     });
-    assert.equal(buttons.length, 4, 'four verdict buttons');
+    assert.equal(buttons.length, 5, 'five verdict buttons (four verdicts + Wrong text)');
 
     Object.assign(doc, {
         getElementById: (id) => els[id] || null,
@@ -2798,6 +2798,51 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
         { item_code: 'C2', verdict: 'self_promotion', comment: 'note 4', reviewer: 'kbd', source: 'page' },
         { item_code: 'C3', verdict: 'not_ad', comment: null, reviewer: 'kbd', source: 'page' },
         { item_code: 'C4', verdict: 'unclear', comment: null, reviewer: 'kbd', source: 'page' },
+    ]);
+});
+
+test('review page: Wrong text (5) saves unclear with the canned comment and lights up again', async () => {
+    const batch = 'e2e-review-wrong-text';
+    await seedKeyboardBatch(batch, 2);
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    storages.local.setItem('adminReview.reviewer', 'wt');
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&verifyBearerToken=${MOD_AUTH}`;
+    const CANNED = 'Текст в видео не совпадает с текстом из субтитров.';
+
+    // 5 fills the comment; another button takes the canned text back out.
+    let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
+    assert.ok(html.includes('Wrong text'));
+    page.key('5');
+    assert.deepEqual(page.selected(), ['wrong_text']);
+    assert.equal(page.els.comment.value, CANNED);
+    page.key('4');
+    assert.deepEqual(page.selected(), ['unclear']);
+    assert.equal(page.els.comment.value, '');
+
+    // An existing comment stays after the canned text.
+    page.key('c');
+    page.type('extra');
+    page.key('Escape');
+    page.key('5');
+    assert.equal(page.els.comment.value, `${CANNED}\nextra`);
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+
+    // C2: plain Wrong text; the decided item shows Wrong text, and a stray
+    // Enter is a no-op.
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    page.key('5');
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    assert.deepEqual(page.selected(), ['wrong_text']);
+    assert.equal(page.els.status.textContent, 'Saved C2: unclear. Flagged by: run-kbd');
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.equal(page.els.status.textContent, 'No change: C2 is already unclear.');
+
+    assert.deepEqual((await reviewState(batch)).verdicts, [
+        { item_code: 'C1', verdict: 'unclear', comment: `${CANNED}\nextra`, reviewer: 'wt', source: 'page' },
+        { item_code: 'C2', verdict: 'unclear', comment: CANNED, reviewer: 'wt', source: 'page' },
     ]);
 });
 

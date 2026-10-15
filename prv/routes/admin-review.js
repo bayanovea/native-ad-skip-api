@@ -26,6 +26,35 @@ function safeLink(link) {
     return typeof link === 'string' && /^https?:\/\//i.test(link.trim()) ? link.trim() : null;
 }
 
+// "Wrong text" is a page-only shortcut, not a stored verdict: it saves
+// `unclear` with this comment (the cue text does not match what the video says).
+const WRONG_TEXT = 'wrong_text';
+const WRONG_TEXT_COMMENT = 'Текст в видео не совпадает с текстом из субтитров.';
+// Verdict buttons in hotkey order (1–5).
+const CHOICES = [...VERDICTS, WRONG_TEXT];
+const CHOICE_LABELS = { [WRONG_TEXT]: 'Wrong text' };
+
+// Inline SVG icons (stroke = currentColor, Lucide-style 24×24 paths).
+function icon(paths, cls = 'icon') {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+const CHOICE_ICONS = {
+    sponsor: '<path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    self_promotion: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+    not_ad: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+    unclear: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+    [WRONG_TEXT]: '<path d="M3 6h14"/><path d="M3 12h9"/><path d="M3 18h7"/><path d="m15 14 6 6"/><path d="m21 14-6 6"/>',
+};
+const QUOTE_ICON = '<path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/>';
+
+// The button a stored verdict lights up: `unclear` saved through "Wrong text"
+// keeps showing as Wrong text.
+function choiceOf(verdict) {
+    if (!verdict) return null;
+    if (verdict.verdict === 'unclear' && (verdict.comment || '').startsWith(WRONG_TEXT_COMMENT)) return WRONG_TEXT;
+    return verdict.verdict;
+}
+
 function badge(category) {
     const color = CATEGORY_COLORS[category] || '#64748b';
     return `<span class="badge" style="background:${color}">${escapeHtml(category || '?')}</span>`;
@@ -69,7 +98,11 @@ const STYLE = `
         .nav-btn.disabled { opacity: 0.4; pointer-events: none; }
         .card { background: #1e293b; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
         .item-head { font-size: 1.05rem; font-weight: 600; margin-bottom: 6px; }
-        .item-head code { font-size: 0.95rem; }
+        .item-id { margin-top: 12px; font-size: 0.7rem; }
+        .cues { display: flex; gap: 12px; align-items: flex-start; margin-top: 14px; padding: 12px 14px; background: #0f172a; border-radius: 8px; }
+        .cues .quote-icon { flex: none; width: 22px; height: 22px; color: #475569; margin-top: 3px; }
+        .cues-text { white-space: pre-wrap; font-size: 1.2rem; line-height: 1.5; color: #f1f5f9; }
+        .proposed { font-size: 0.9rem; margin-bottom: 12px; }
         blockquote { border-left: 3px solid #334155; padding: 6px 12px; margin: 10px 0 0; color: #cbd5e1; white-space: pre-wrap; font-size: 0.9rem; }
         code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #93c5fd; }
         table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; margin-bottom: 8px; }
@@ -80,9 +113,12 @@ const STYLE = `
         .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: #fff; }
         .badge-banned { background: #7f1d1d; color: #fecaca; margin-left: 6px; }
         .verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
-        .verdict-btn { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 6px 14px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
-        .verdict-btn kbd { color: #64748b; margin-right: 6px; font-family: inherit; }
+        .verdict-btn { display: inline-flex; align-items: center; gap: 8px; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 6px 12px 6px 8px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
+        .verdict-btn .icon { width: 16px; height: 16px; color: #94a3b8; }
         .verdict-btn.selected { background: #1d4ed8; border-color: #3b82f6; }
+        .verdict-btn.selected .icon { color: #fff; }
+        kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px solid #475569; border-bottom-width: 3px; border-radius: 4px; background: #1e293b; color: #cbd5e1; font: 600 0.75rem/1.3 'JetBrains Mono', 'Fira Code', monospace; text-align: center; }
+        .verdict-btn.selected kbd { background: #1e40af; border-color: #93c5fd; color: #fff; }
         .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
         textarea, input[type=text] { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 0.9rem; }
         textarea { flex: 1; min-width: 260px; min-height: 56px; resize: vertical; }
@@ -212,8 +248,9 @@ function renderItemPage(payload, token) {
         </table>
     </div>` : '';
 
-    const verdictButtons = VERDICTS.map((v, i) => `
-            <button type="button" class="verdict-btn${current && current.verdict === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${v}</button>`).join('');
+    const currentChoice = choiceOf(current);
+    const verdictButtons = CHOICES.map((v, i) => `
+            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${CHOICE_LABELS[v] || v}</button>`).join('');
 
     // Client state: only what the script needs. Never includes flagged_by.
     const state = {
@@ -225,9 +262,11 @@ function renderItemPage(payload, token) {
         next: nav.next ? nav.next.item_code : null,
         player_link: item.player_link,
         verdict: current ? current.verdict : null,
+        choice: currentChoice,
         comment: current && current.comment ? current.comment : '',
         reviewer: current ? current.reviewer : null,
-        verdicts: VERDICTS,
+        choices: CHOICES,
+        wrong_text_comment: WRONG_TEXT_COMMENT,
     };
 
     return page(`${item.item_code} · ${batch.batch}`, `
@@ -244,18 +283,19 @@ function renderItemPage(payload, token) {
     </div>
 
     <div class="card">
-        <div class="item-head">${escapeHtml(item.item_code)} · <code>${escapeHtml(item.native_id)}</code> · ${item.start_player} – ${item.end_player} (${item.duration_s} s)
-            <span class="muted" style="margin-left:10px">Proposed as:</span> ${proposed}</div>
+        <div class="item-head">${item.start_player} – ${item.end_player} (${item.duration_s} s)</div>
         ${item.player_link
         ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">Open in player ↗</a>
         <span class="muted">(starts 2 s before the stretch)</span>`
         : '<span class="muted">No player link for this item.</span>'}
-        ${item.cues ? `<blockquote>${escapeHtml(item.cues)}</blockquote>` : ''}
+        ${item.cues ? `<div class="cues">${icon(QUOTE_ICON, 'quote-icon')}<div class="cues-text">${escapeHtml(item.cues)}</div></div>` : ''}
+        <div class="muted item-id">${escapeHtml(item.item_code)} · ${escapeHtml(item.native_id)}</div>
     </div>
 
     ${decidedBlock}
 
     <div class="card">
+        <div class="proposed"><span class="muted">Proposed as:</span> ${proposed}</div>
         <label>Verdict</label>
         <div class="verdicts">${verdictButtons}
         </div>
@@ -275,13 +315,14 @@ function renderItemPage(payload, token) {
 
     ${renderSignals(signals, token)}
 
-    <div class="muted hotkeys">Hotkeys: 1–4 verdict · c comment · Enter save (Ctrl/Cmd+Enter in the comment box) · Esc leave a text box · j / k next / previous · o open player</div>
+    <div class="muted hotkeys">Hotkeys: <kbd>1</kbd>–<kbd>${CHOICES.length}</kbd> verdict · <kbd>c</kbd> comment · <kbd>Enter</kbd> save (<kbd>Ctrl/Cmd+Enter</kbd> in the comment box) · <kbd>Esc</kbd> leave a text box · <kbd>j</kbd> / <kbd>k</kbd> next / previous · <kbd>o</kbd> open player</div>
 
 <script>
     const STATE = ${scriptJson(state)};
     const REVIEWER_KEY = 'adminReview.reviewer';
     const FLASH_KEY = 'adminReview.flash';
-    let picked = STATE.verdict;
+    const WRONG_TEXT = 'wrong_text';
+    let picked = STATE.choice;
     let saving = false;
 
     function storageGet(store, key) {
@@ -301,7 +342,20 @@ function renderItemPage(payload, token) {
         el.textContent = text;
         el.className = 'status' + (kind ? ' ' + kind : '');
     }
+    // Button → stored verdict: Wrong text saves as unclear.
+    function verdictOf(choice) {
+        return choice === WRONG_TEXT ? 'unclear' : choice;
+    }
+    // Wrong text puts its canned comment in front of the comment box; leaving
+    // it for another button takes the canned text back out.
     function pick(v) {
+        const box = document.getElementById('comment');
+        const canned = STATE.wrong_text_comment;
+        if (v === WRONG_TEXT && !box.value.startsWith(canned)) {
+            box.value = box.value.trim() ? canned + '\\n' + box.value : canned;
+        } else if (v !== WRONG_TEXT && picked === WRONG_TEXT && box.value.startsWith(canned)) {
+            box.value = box.value.slice(canned.length).replace(/^\\n/, '');
+        }
         picked = v;
         document.querySelectorAll('.verdict-btn').forEach(function (b) {
             b.classList.toggle('selected', b.dataset.verdict === v);
@@ -310,15 +364,16 @@ function renderItemPage(payload, token) {
     }
     async function save() {
         if (saving) return;
-        if (!picked) { setStatus('Pick a verdict first (1–4).', 'error'); return; }
+        if (!picked) { setStatus('Pick a verdict first (1–' + STATE.choices.length + ').', 'error'); return; }
+        const verdict = verdictOf(picked);
         const comment = document.getElementById('comment').value;
         const reviewerEl = document.getElementById('reviewer');
         const reviewer = reviewerEl.value.trim();
         // A stray Enter on a decided item must not append a copy of its
         // verdict; another reviewer saving the same verdict is a new opinion.
-        if (picked === STATE.verdict && comment.trim() === STATE.comment
+        if (verdict === STATE.verdict && comment.trim() === STATE.comment
             && (reviewer === '' || reviewer === STATE.reviewer)) {
-            setStatus('No change: ' + STATE.item_code + ' is already ' + picked + '.');
+            setStatus('No change: ' + STATE.item_code + ' is already ' + verdict + '.');
             return;
         }
         if (!reviewer) { setStatus('Enter your name in Reviewer.', 'error'); reviewerEl.focus(); return; }
@@ -332,7 +387,7 @@ function renderItemPage(payload, token) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     item_id: STATE.item_id,
-                    verdict: picked,
+                    verdict: verdict,
                     comment: comment,
                     reviewer: reviewer,
                 }),
@@ -340,7 +395,7 @@ function renderItemPage(payload, token) {
             if (res.status === 201) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
-                storageSet('sessionStorage', FLASH_KEY, 'Saved ' + STATE.item_code + ': ' + picked + '. Flagged by: ' + flagged);
+                storageSet('sessionStorage', FLASH_KEY, 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged);
                 window.location.href = itemUrl(data.next_item || STATE.item_code);
                 return;
             }
@@ -368,7 +423,7 @@ function renderItemPage(payload, token) {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const digit = /^Digit([0-9])$/.exec(e.code || '');
         const n = digit ? Number(digit[1]) : Number(e.key);
-        if (Number.isInteger(n) && n >= 1 && n <= STATE.verdicts.length) { e.preventDefault(); pick(STATE.verdicts[n - 1]); return; }
+        if (Number.isInteger(n) && n >= 1 && n <= STATE.choices.length) { e.preventDefault(); pick(STATE.choices[n - 1]); return; }
         if (e.key === 'Enter') {
             // Enter on a focused link (e.g. after clicking "Open in player") keeps following it.
             if (tag === 'A') return;
