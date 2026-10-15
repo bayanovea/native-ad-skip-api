@@ -153,10 +153,11 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 **Files:**
 - Modify: `prv/db/index.js`
 
-- [ ] add `ReviewItem` model (`prv_review_items`, fields above, unique index on `(batch, item_code)`)
-- [ ] add `ReviewVerdict` model (`prv_review_verdicts`, fields above, index on `(item_id, decided_at DESC)`), association `ReviewItem.hasMany(ReviewVerdict)`
-- [ ] export both models
-- [ ] no dedicated tests (pure schema); covered by Task 3 and Task 5 tests
+- [x] add `ReviewItem` model (`prv_review_items`, fields above, unique index on `(batch, item_code)`)
+- [x] add `ReviewVerdict` model (`prv_review_verdicts`, fields above, index on `(item_id, decided_at DESC)`), association `ReviewItem.hasMany(ReviewVerdict)`
+- [x] export both models
+- [x] no dedicated tests (pure schema); covered by Task 3 and Task 5 tests
+- ⚠️ `make test-e2e` has 3 pre-existing failures on this branch, unrelated to the review tables (same result with Task 1 reverted): moderation tests 39, 56 and 57 get `POST /vote` → 404 "Not found". The other 82 tests pass.
 
 ### Task 2: Sheet parser
 

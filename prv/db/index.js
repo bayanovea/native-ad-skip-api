@@ -130,6 +130,43 @@ module.exports = function(sequelize) {
         indexes: [{ fields: [{ name: 'target_type' }, { name: 'target_id' }, { name: 'decided_at', order: 'DESC' }] }],
     });
 
+    // Assessor review (prv only, like AdminDecision). Items come from imported
+    // review sheets; verdicts are append-only and the latest row per item wins.
+    // `flagged_by` is blind: it must not be shown until the item has a verdict.
+    const ReviewItem = sequelize.define('review_item', {
+        batch: { type: DataTypes.STRING(64), allowNull: false },
+        item_code: { type: DataTypes.STRING(16), allowNull: false },
+        position: { type: DataTypes.INTEGER, allowNull: false },
+        native_id: { type: DataTypes.STRING(64), allowNull: false },
+        start: { type: DataTypes.FLOAT, allowNull: false },
+        end: { type: DataTypes.FLOAT, allowNull: false },
+        proposed: { type: DataTypes.STRING(64), allowNull: false },
+        cues: { type: DataTypes.TEXT, allowNull: true },
+        link: { type: DataTypes.TEXT, allowNull: true },
+        flagged_by: { type: DataTypes.JSONB, allowNull: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+    }, {
+        tableName: 'prv_review_items',
+        timestamps: false,
+        indexes: [{ unique: true, fields: ['batch', 'item_code'] }],
+    });
+
+    const ReviewVerdict = sequelize.define('review_verdict', {
+        item_id: { type: DataTypes.INTEGER, allowNull: false },
+        verdict: { type: DataTypes.STRING(16), allowNull: false },
+        comment: { type: DataTypes.TEXT, allowNull: true },
+        reviewer: { type: DataTypes.STRING(64), allowNull: false },
+        source: { type: DataTypes.STRING(16), allowNull: false },
+        decided_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+    }, {
+        tableName: 'prv_review_verdicts',
+        timestamps: false,
+        indexes: [{ fields: [{ name: 'item_id' }, { name: 'decided_at', order: 'DESC' }] }],
+    });
+
+    ReviewItem.hasMany(ReviewVerdict, { foreignKey: 'item_id', as: 'verdicts' });
+    ReviewVerdict.belongsTo(ReviewItem, { foreignKey: 'item_id', as: 'item' });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -144,5 +181,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict };
 };
