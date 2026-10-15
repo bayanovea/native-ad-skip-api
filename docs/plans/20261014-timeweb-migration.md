@@ -79,7 +79,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [x] install Docker Engine + compose plugin from Docker's apt repo (Ubuntu's `docker.io` package is fine too but older): follow https://docs.docker.com/engine/install/ubuntu/ ; `docker compose version` → v2.x. ➕ Used Ubuntu packages instead: `apt install -y docker.io docker-compose-v2 docker-buildx` (Docker 29.1, Compose 2.40.3, buildx 0.30.1). `docker-buildx` is required — recent Compose refuses `build` without it
 - [x] `docker network create main-network` (external network the compose file requires)
 - [x] `ufw default deny incoming; ufw default allow outgoing; ufw allow 22; ufw allow 80; ufw allow 443; ufw enable`. ➕ Also `ufw allow 10050/tcp` for the Timeweb Zabbix agent (panel CPU/RAM graphs); the agent's `Server=` only admits `92.53.116.12,.111,.119`
-- [x] ⚠️ Timeweb panel → Firewall: inbound allow 22, 80, 443 from anywhere, **3024 only from `<ADMIN_IP>`**, deny the rest; attach to the server. This layer is the one that actually protects Grafana: Docker publishes `3024:3024` through its own iptables DNAT rules, which bypass `ufw` entirely, so a `ufw allow from <ADMIN_IP> to any port 3024` rule would be a no-op. If the panel firewall is unavailable, bind Grafana to `127.0.0.1:3024` and use `ssh -L 3024:localhost:3024` instead. ➕ Done as an allow-list group with inbound TCP 22, 80, 443, 10050 for all addresses; **3024 not opened at all** (admin IP changes with VPN) → Grafana via `ssh -L 3024:localhost:3024 root@NEW_IP`. Outbound list left empty = unrestricted (checked: `apt update` and `curl https://github.com` → 200)
+- [x] ⚠️ Timeweb panel → Firewall: inbound allow 22, 80, 443 from anywhere, **3024 only from `<ADMIN_IP>`**, deny the rest; attach to the server. This layer is the one that actually protects Grafana: Docker publishes `3024:3024` through its own iptables DNAT rules, which bypass `ufw` entirely, so a `ufw allow from <ADMIN_IP> to any port 3024` rule would be a no-op. If the panel firewall is unavailable, bind Grafana to `127.0.0.1:3024` and use `ssh -L 3024:localhost:3024` instead. ➕ Done as an allow-list group with inbound TCP 22, 80, 443, 10050 for all addresses; **3024 not opened at all** (admin IP changes with VPN) → Grafana via `ssh -L 3024:localhost:3024 root@NEW_IP`. Outbound list left empty = unrestricted (checked: `apt update` and `curl https://github.com` → 200) ➕ 2026-10-15 (Task 7): owner chose plain `http://NEW_IP:3024` over the tunnel → inbound TCP 3024 from all addresses added to the panel group; Grafana is protected by its login only
 - [x] verify: `ssh skipper-admin@NEW_IP docker ps` works without sudo; `nmap -Pn -p 22,80,443,3022,3024,5432 NEW_IP` from the Mac shows only 22/80/443 open (re-check 3024 from a non-admin IP after Task 7, when Grafana is actually listening). Checked with `nc -zv -G 3`: only 22 open. 3022/3024 still need the re-check in Task 7 — nothing listens there yet
 
 ### Task 3: PostgreSQL 16 on the host, reachable only from Docker and localhost
@@ -149,7 +149,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [x] on the VM: `docker ps` → `native-ad-skip-api-app-1`, `-prometheus-1`, `-grafana-1` up; `docker logs native-ad-skip-api-app-1` shows `Tables schemas synced` and the listen line, no `Unable to connect to the database` → all three up; app on `127.0.0.1:3022`, prometheus on `127.0.0.1:9090`, `Tables schemas synced`, no DB errors
 - [x] verify Go cron: after 2 minutes `docker exec native-ad-skip-api-app-1 tail -5 /tmp/mycron.log` → clean runs for prv/rt/yt, no connection errors → prv/rt/yt ticks ran, log empty: 0 `is_new` markups to process and `ConnectDb()` panics on a failed `Ping`, so silence = connected. First real calculation is exercised in Task 8
 - [x] verify: `curl -s https://${API_HOST}/` → `{"status":"ok"}`; `curl -s "https://${API_HOST}/video-calculated?v=1&native_id=<known id from dump>"` returns segments → `{"status":"ok"}`; ➕ the param is `video_id`, not `native_id`: `/video-calculated?v=1&video_id=-1_456000907&duration=2615` → 3 segments, `video_calculated_lookup_total{outcome="match",provider="prv"} 1`. From outside 3022/3024/5432/9090 all closed
-- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP (➕ 3024 is not opened in the panel firewall — use `ssh -L 3024:localhost:3024 root@NEW_IP` and `http://localhost:3024`), both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2)
+- [ ] verify Grafana: `http://NEW_IP:3024` from the admin IP (➕ 3024 is not opened in the panel firewall — use `ssh -L 3024:localhost:3024 root@NEW_IP` and `http://localhost:3024`), both datasources "Test" green, dashboards render with live data; from a non-admin IP (phone on mobile data) `:3024` must time out — if it answers, the panel firewall isn't attached (see Task 2) → superseded: 3024 opened to all (see Task 2). `http://${HOST_IP}:3024/login` → 200, `/api/health` → `database: ok`, anonymous `/api/datasources` → 401; datasource "Test" + live dashboards still to be checked by the owner in the browser
 
 ### Task 8: Day-one reachability test from Russia
 
@@ -189,7 +189,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [ ] `https://${API_HOST}/` reachable from RU mobile + RU wired (Task 8 evidence)
 - [ ] markup → calculate → video-calculated → vote round-trip on prod
 - [ ] `git push` to `main` redeploys without manual steps (push a trivial commit and watch Actions)
-- [ ] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` closed from a non-admin IP
+- [ ] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` intentionally open (Grafana login), see Task 2
 - [ ] yesterday's backup object exists in S3; restore drill passed
 - [ ] `make test-e2e` green on the committed compose/workflow changes
 
@@ -207,6 +207,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 
 **Grafana hardening (follow-up, not blocking)**
 - Move `:3024` behind nginx with TLS on `grafana.${DNS_ZONE}` (or a path), bind the container to `127.0.0.1`, drop the ufw admin-IP rule.
+- 2026-10-15: `:3024` is currently open to the internet on plain HTTP (owner's choice). Cheapest upgrade is `/grafana/` on the existing API vhost (no DNS/cert work). Independently: give the Postgres datasource a read-only role instead of the app's read-write `DB_USER`.
 
 **C2 plan**
 - `docs/plans/20260925-close-db-public-exposure.md` is effectively closed by Task 3 (Postgres never exposed on the new host). Mark it completed with a pointer here; its optional Task 7 (TLS to Postgres) stays optional.
