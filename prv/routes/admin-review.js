@@ -160,7 +160,7 @@ function renderBatchList(batches, token) {
     const t = escapeHtml(urlToken(token));
     const rows = batches.map(b => `
             <tr>
-                <td><a href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?verifyBearerToken=${t}">${escapeHtml(b.batch)}</a></td>
+                <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?verifyBearerToken=${t}">${escapeHtml(b.batch)}</a></td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
@@ -172,7 +172,17 @@ function renderBatchList(batches, token) {
     <table>
         <thead><tr><th>Batch</th><th>Items</th><th>Decided</th><th>Open</th></tr></thead>
         <tbody>${rows}</tbody>
-    </table>` : '<div class="card empty">No review batches imported yet (scripts/import-review-sheet.js).</div>'}`);
+    </table>` : '<div class="card empty">No review batches imported yet (scripts/import-review-sheet.js).</div>'}
+<script>
+    // A batch opens in a tab this page opens: the item page later turns that
+    // tab into a player and the browser lets a page close only tabs a script
+    // opened (see closePlayerTab on the item page). Popup blocked: plain link.
+    document.addEventListener('click', function (e) {
+        const a = e.target && e.target.closest ? e.target.closest('a.batch-link') : null;
+        if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        if (window.open(a.href, '_blank')) e.preventDefault();
+    });
+</script>`);
 }
 
 function renderSignals(signals, token) {
@@ -366,12 +376,16 @@ function renderItemPage(payload, token) {
         window.location.href = itemUrl(code);
     }
     // After a save the item's player tab (this tab's opener after a switch) is
-    // done with. The browser closes it only when a script opened it, so the
-    // tab the review started in stays open.
+    // done with. Only a cross-origin opener is a player: a same-origin one is
+    // the batch list or a review page and stays. The browser closes only tabs
+    // a script opened, so a player in a tab the reviewer opened stays.
+    // Returns null (no player tab), true (closed) or false (still open).
     function closePlayerTab() {
-        try {
-            if (window.opener && !window.opener.closed) window.opener.close();
-        } catch (e) { /* not closable: leave it */ }
+        const tab = window.opener;
+        if (!tab || tab.closed) return null;
+        try { void tab.location.href; return null; } catch (e) { /* cross-origin: a player */ }
+        try { tab.close(); } catch (e) { /* refused */ }
+        return tab.closed;
     }
     function setStatus(text, kind) {
         const el = document.getElementById('status');
@@ -431,8 +445,11 @@ function renderItemPage(payload, token) {
             if (res.status === 201) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
-                storageSet('sessionStorage', FLASH_KEY, 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged);
-                closePlayerTab();
+                let flash = 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged;
+                if (closePlayerTab() === false) {
+                    flash += '. Close the previous video tab by hand: the browser lets this page close only tabs it opened (start from the batch list).';
+                }
+                storageSet('sessionStorage', FLASH_KEY, flash);
                 if (data.next_item) goTo(data.next_item, data.next_player_link);
                 else window.location.href = itemUrl(STATE.item_code);
                 return;

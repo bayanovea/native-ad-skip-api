@@ -2607,7 +2607,24 @@ function keyCode(key) {
 }
 
 // One loaded page: parses the served HTML into stub elements and runs its script.
-function loadKeyboardPage(html, storages) {
+// This tab's opener, as `opener` in loadKeyboardPage: 'player' (cross-origin
+// player tab a script opened: close() works), 'user-player' (cross-origin, but
+// the reviewer opened that tab: close() is refused), 'same-origin' (batch list
+// or a review page) or null.
+function stubOpener(kind) {
+    if (kind == null) return null;
+    const crossOrigin = kind !== 'same-origin';
+    return {
+        closed: false,
+        get location() {
+            if (crossOrigin) throw new Error('SecurityError: cross-origin');
+            return { href: '/admin/review' };
+        },
+        close() { if (kind !== 'user-player') this.closed = true; },
+    };
+}
+
+function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}) {
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     assert.equal(scripts.length, 1, 'exactly one inline script');
     for (const id of ['status', 'reviewer', 'comment', 'save-btn']) {
@@ -2654,8 +2671,7 @@ function loadKeyboardPage(html, storages) {
     });
     const location = {};
     Object.defineProperty(location, 'href', { set: (v) => { page.navigatedTo = v; }, get: () => '' });
-    // This tab's opener: the previous item's player tab after a switch.
-    const opener = { closed: false, close() { this.closed = true; } };
+    const opener = stubOpener(openerKind);
     const window = {
         opener,
         localStorage: storages.local,
@@ -2704,11 +2720,11 @@ function loadKeyboardPage(html, storages) {
     return page;
 }
 
-async function openKeyboardPage(path, storages) {
+async function openKeyboardPage(path, storages, opts) {
     const res = await request('GET', path, null);
     assert.equal(res.status, 200, `GET ${path} → ${res.status}`);
     assert.equal(typeof res.body, 'string');
-    return { html: res.body, page: loadKeyboardPage(res.body, storages) };
+    return { html: res.body, page: loadKeyboardPage(res.body, storages, opts) };
 }
 
 // Press Enter (or Ctrl+Enter) and wait for the async save to navigate.
@@ -2869,6 +2885,42 @@ test('review page: Wrong text (5) saves unclear with the canned comment and ligh
         { item_code: 'C1', verdict: 'unclear', comment: `${CANNED}\nextra`, reviewer: 'wt', source: 'page' },
         { item_code: 'C2', verdict: 'unclear', comment: CANNED, reviewer: 'wt', source: 'page' },
     ]);
+});
+
+test('review page: a save closes only the cross-origin player tab it was switched from', async () => {
+    const batch = 'e2e-review-close-player';
+    await seedKeyboardBatch(batch, 4);
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    storages.local.setItem('adminReview.reviewer', 'cp');
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&verifyBearerToken=${MOD_AUTH}`;
+    const HAND = 'Close the previous video tab by hand';
+
+    // The batch list opens a batch in a script-opened tab.
+    const list = await request('GET', reviewPath('/admin/review'), null);
+    assert.ok(list.body.includes(`class="batch-link" href="/admin/review/${batch}?`));
+    assert.ok(list.body.includes("window.open(a.href, '_blank')"));
+
+    // Opened from the batch list: the same-origin opener stays.
+    let { page } = await openKeyboardPage(itemPath('C1'), storages, { opener: 'same-origin' });
+    page.key('1');
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+    assert.equal(page.opener.closed, false, 'batch list tab is not a player');
+
+    // Player in the tab the reviewer opened: the browser refuses, the flash says so.
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages, { opener: 'user-player' }));
+    assert.ok(!page.els.status.textContent.includes(HAND));
+    page.key('1');
+    assert.equal(await saveAndFollow(page), itemPath('C3'));
+    assert.equal(page.opener.closed, false);
+    ({ page } = await openKeyboardPage(itemPath('C3'), storages, { opener: null }));
+    assert.ok(page.els.status.textContent.startsWith('Saved C2: sponsor. Flagged by: run-kbd. ' + HAND),
+        page.els.status.textContent);
+
+    // No opener: nothing to close, plain flash.
+    page.key('1');
+    assert.equal(await saveAndFollow(page), itemPath('C4'));
+    ({ page } = await openKeyboardPage(itemPath('C4'), storages));
+    assert.equal(page.els.status.textContent, 'Saved C3: sponsor. Flagged by: run-kbd');
 });
 
 test('review page: keyboard edge cases (Russian layout, focused link, Enter in Reviewer, errors, no-change guard, broken storage)', async () => {
