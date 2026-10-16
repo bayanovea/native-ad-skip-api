@@ -49,7 +49,10 @@ func TestCalculateIntervals(t *testing.T) {
 		WithArgs("111_222").
 		WillReturnRows(rows)
 
-	intervals := CalculateIntervals(db, "111_222", "")
+	intervals, err := CalculateIntervals(db, "111_222", "")
+	if err != nil {
+		t.Fatalf("CalculateIntervals: %v", err)
+	}
 
 	fmt.Println("Intervals:", intervals)
 

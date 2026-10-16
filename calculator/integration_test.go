@@ -32,6 +32,10 @@ func connectTestDB(t *testing.T) *sql.DB {
 			break
 		}
 	}
+	// Plain `go test ./calculator` runs the unit tests only; make test-calculator sets the DB env.
+	if os.Getenv("DB_USER") == "" {
+		t.Skip("DB_USER not set; run make test-calculator for the integration tests")
+	}
 	dbName := os.Getenv("TEST_DB_NAME")
 	if dbName == "" {
 		dbName = os.Getenv("DB_NAME") + "_test"

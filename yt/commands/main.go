@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 
 	"odedohbest/video-calculate/calculator"
@@ -8,9 +9,13 @@ import (
 
 func main() {
 	args := os.Args[1:]
+	var err error
 	if len(args) > 0 {
-		calculator.Run("yt_", args[0])
+		err = calculator.Run("yt_", args[0])
 	} else {
-		calculator.Run("yt_")
+		err = calculator.Run("yt_")
+	}
+	if err != nil {
+		log.Fatalf("Calculate failed: %v", err)
 	}
 }

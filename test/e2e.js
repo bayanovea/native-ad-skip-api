@@ -457,6 +457,190 @@ test('YT: outlier end and three buckets', async () => {
     assert.ok(findSeg(body, cats.yt.intro, 10, 31), `bucket 9 missing`);
 });
 
+// ── Calculator robustness (one transaction per video, is_new by read ids) ─────
+
+async function dbQuery(sql, params = []) {
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        return (await c.query(sql, params)).rows;
+    } finally {
+        await c.end();
+    }
+}
+
+async function prvVideoId(nativeId) {
+    const rows = await dbQuery(`SELECT id FROM videos WHERE native_id = $1`, [nativeId]);
+    return rows[0].id;
+}
+
+async function prvSegmentRows(videoId) {
+    return dbQuery(
+        `SELECT s.category_id, s.start, s."end", COUNT(sm.id)::int AS markups
+         FROM prv_calculated_segments s
+         LEFT JOIN prv_calculated_segment_markups sm ON sm.segment_id = s.id
+         WHERE s.video_id = $1 GROUP BY s.id ORDER BY s.start`,
+        [videoId]
+    );
+}
+
+async function isNewFlags(nativeId) {
+    return (await getMarkupsByVideoNative(nativeId)).map(m => m.is_new);
+}
+
+// Like runCalc, but returns the exit status and output instead of throwing; the
+// timeout turns a calculator stuck on a lock into a failed assertion, not a hang.
+function runCalcStatus(provider) {
+    return spawnSync(`${APP_DIR}/${provider}/commands/calculate`, [], {
+        env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 15000,
+    });
+}
+
+function runCalcAsync(provider) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn(`${APP_DIR}/${provider}/commands/calculate`, [], {
+            env: { ...process.env, DB_NAME: TEST_DB },
+        });
+        let output = '';
+        proc.stdout.on('data', d => (output += d));
+        proc.stderr.on('data', d => (output += d));
+        proc.on('error', reject);
+        proc.on('close', status => resolve({ status, output }));
+    });
+}
+
+async function waitForQueryBlockedOnLock(fragment) {
+    for (let i = 0; i < 200; i++) {
+        const rows = await dbQuery(
+            `SELECT 1 FROM pg_stat_activity WHERE datname = $1 AND wait_event_type = 'Lock' AND query LIKE $2`,
+            [TEST_DB, `%${fragment}%`]
+        );
+        if (rows.length) return;
+        await sleep(50);
+    }
+    throw new Error(`no query blocked on a lock matching "${fragment}"`);
+}
+
+// A failure after the clear (a trigger rejects A's segment insert) rolls A back
+// to its previous segments; B, in the same run, is still calculated, and the
+// binary exits non-zero.
+test('calculator: a failing video keeps its previous segments, the others are still calculated', async () => {
+    const vidA = '__e2e__prv_calc_fail_a';
+    const vidB = '__e2e__prv_calc_fail_b';
+    const base = { v: '1', user_id: 'test-user', category_id: cats.prv.intro };
+    await postMarkup('', { ...base, video_id: vidA, data: { intervals: [{ start: 0, end: 10 }] } });
+    runCalc('prv');
+    const idA = await prvVideoId(vidA);
+
+    await postMarkup('', { ...base, video_id: vidA, data: { intervals: [{ start: 30, end: 40 }] } });
+    await postMarkup('', { ...base, video_id: vidB, data: { intervals: [{ start: 0, end: 20 }] } });
+
+    await dbQuery(`CREATE FUNCTION e2e_reject_segment() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.video_id = ${idA} THEN RAISE EXCEPTION 'e2e: segment insert rejected'; END IF;
+            RETURN NEW;
+        END $$`);
+    let r;
+    try {
+        await dbQuery(`CREATE TRIGGER e2e_reject_segment BEFORE INSERT ON prv_calculated_segments
+            FOR EACH ROW EXECUTE FUNCTION e2e_reject_segment()`);
+        r = runCalcStatus('prv');
+    } finally {
+        await dbQuery(`DROP TRIGGER IF EXISTS e2e_reject_segment ON prv_calculated_segments`);
+        await dbQuery(`DROP FUNCTION e2e_reject_segment()`);
+    }
+
+    assert.equal(r.status, 1, `calculator should exit 1, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, new RegExp(`Calculate video failed: ${idA}: .*e2e: segment insert rejected`));
+    assert.match(r.stderr, /1 of \d+ videos failed/);
+
+    const a = await getCalculated('', vidA, { v: '1' });
+    assert.equal(a.status, 200);
+    assert.equal(a.body.length, 1, `A must keep its previous data, got ${JSON.stringify(a.body)}`);
+    assert.ok(findSeg(a.body, cats.prv.intro, 0, 10));
+    assert.deepEqual(await prvSegmentRows(idA), [{ category_id: cats.prv.intro, start: 0, end: 10, markups: 1 }]);
+    assert.deepEqual(await isNewFlags(vidA), [false, true], 'A\'s new markup must stay is_new');
+
+    const b = await getCalculated('', vidB, { v: '1' });
+    assert.equal(b.status, 200);
+    assert.ok(findSeg(b.body, cats.prv.intro, 0, 20), `B must be calculated, got ${JSON.stringify(b.body)}`);
+    assert.deepEqual(await isNewFlags(vidB), [false]);
+
+    runCalc('prv');
+    const a2 = await getCalculated('', vidA, { v: '1' });
+    assert.equal(a2.body.length, 2, `next run must pick A up, got ${JSON.stringify(a2.body)}`);
+    assert.deepEqual(await isNewFlags(vidA), [false, false]);
+});
+
+// The run is held at A's video_calculateds DELETE (a row lock), after it has
+// read the markups; a markup posted meanwhile is neither aggregated nor marked
+// processed, so the next run picks it up.
+test('calculator: a markup posted during the recalculation stays is_new for the next run', async () => {
+    const vid = '__e2e__prv_calc_concurrent';
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cats.prv.intro };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    runCalc('prv');
+    await postMarkup('', { ...base, data: { intervals: [{ start: 30, end: 40 }] } });
+    const videoId = await prvVideoId(vid);
+
+    const lock = adminClient(TEST_DB);
+    await lock.connect();
+    let calc;
+    let result;
+    try {
+        await lock.query('BEGIN');
+        await lock.query('SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE', [videoId]);
+        calc = runCalcAsync('prv');
+        await waitForQueryBlockedOnLock('DELETE FROM video_calculateds');
+        await postMarkup('', { ...base, data: { intervals: [{ start: 60, end: 70 }] } });
+    } finally {
+        await lock.query('COMMIT');
+        await lock.end();
+        if (calc) result = await calc;
+    }
+
+    assert.equal(result.status, 0, result.output);
+    const { body } = await getCalculated('', vid, { v: '1' });
+    assert.equal(body.length, 2, `the markup posted mid-run must not be aggregated yet, got ${JSON.stringify(body)}`);
+    assert.ok(findSeg(body, cats.prv.intro, 0, 10));
+    assert.ok(findSeg(body, cats.prv.intro, 30, 40));
+    assert.deepEqual(await isNewFlags(vid), [false, false, true]);
+
+    runCalc('prv');
+    const next = await getCalculated('', vid, { v: '1' });
+    assert.ok(findSeg(next.body, cats.prv.intro, 60, 70), `next run must aggregate it, got ${JSON.stringify(next.body)}`);
+    assert.deepEqual(await isNewFlags(vid), [false, false, false]);
+});
+
+// A markup row another transaction holds (an API write in flight) is not waited
+// for: its intervals are aggregated, but it stays is_new for the next run.
+test('calculator: a markup locked by another transaction is not waited for and stays is_new', async () => {
+    const vid = '__e2e__prv_calc_locked';
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cats.prv.intro };
+    await postMarkup('', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    const [markup] = await getMarkupsByVideoNative(vid);
+
+    const lock = adminClient(TEST_DB);
+    await lock.connect();
+    let r;
+    try {
+        await lock.query('BEGIN');
+        await lock.query('SELECT id FROM markups WHERE id = $1 FOR UPDATE', [markup.id]);
+        r = runCalcStatus('prv');
+    } finally {
+        await lock.query('ROLLBACK');
+        await lock.end();
+    }
+
+    assert.equal(r.status, 0, `calculator must not block on the lock: ${r.error || ''} ${r.stdout}${r.stderr}`);
+    const { body } = await getCalculated('', vid, { v: '1' });
+    assert.ok(findSeg(body, cats.prv.intro, 0, 10), `got ${JSON.stringify(body)}`);
+    assert.deepEqual(await isNewFlags(vid), [true]);
+
+    runCalc('prv');
+    assert.deepEqual(await isNewFlags(vid), [false]);
+});
+
 // ── Video lookup tests (no orphan Video rows) ─────────────────────────────────
 
 // GET must not create a Video row when the video doesn't exist
