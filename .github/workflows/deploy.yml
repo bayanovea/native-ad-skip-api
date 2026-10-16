@@ -79,29 +79,38 @@ jobs:
         GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
+      # The remote script goes over stdin to 'bash -s', so no secret is on any
+      # command line (ps on the host, or here: printf is a bash builtin), and
+      # printf %q quotes each value safely whatever characters it contains.
+      # Commands in the script get < /dev/null so they cannot read the rest of
+      # the script from stdin.
       run: |
-        ssh skipper-admin@$HOST_IP "
+        {
+          # Переменные окружения
+          printf 'export %s=%q\n' \
+            DB_NAME "$DB_NAME" \
+            DB_USER "$DB_USER" \
+            DB_PASSWORD "$DB_PASSWORD" \
+            NODE_APP_PORT "$NODE_APP_PORT" \
+            AUTH_TOKEN "$AUTH_TOKEN" \
+            GF_ADMIN_PASSWORD "$GF_ADMIN_PASSWORD" \
+            HOST_IP "$HOST_IP" \
+            IMAGE_NAME "$IMAGE_NAME"
+          cat <<'EOF'
         set -e
 
         # Перенос и распаковка исходного кода
         cd /home/skipper-admin/tmp
-        tar xzf codebase.tar.gz
-
-        # Переменные окружения
-        export DB_NAME='$DB_NAME'
-        export DB_USER='$DB_USER'
-        export DB_PASSWORD='$DB_PASSWORD'
-        export NODE_APP_PORT='$NODE_APP_PORT'
-        export AUTH_TOKEN='$AUTH_TOKEN'
-        export GF_ADMIN_PASSWORD='$GF_ADMIN_PASSWORD'
-        export HOST_IP='$HOST_IP'
+        tar xzf codebase.tar.gz < /dev/null
 
         # Сборка и запуск с использованием Docker Compose v2. No 'down': 'up --build'
         # builds the image first and touches containers only if the build succeeded,
         # so the old stack keeps serving during the build and after a failed one.
         # --force-recreate restarts prometheus/grafana too, as 'down' did, so they
         # pick up the re-extracted bind-mounted configs.
-        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d --force-recreate --remove-orphans app prometheus grafana
+        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/docker-compose.yml up --build -d --force-recreate --remove-orphans app prometheus grafana < /dev/null
 
         # Очистка
-        rm -rf /home/skipper-admin/tmp/codebase.tar.gz"
+        rm -rf /home/skipper-admin/tmp/codebase.tar.gz
+        EOF
+        } | ssh skipper-admin@"$HOST_IP" 'bash -s'
