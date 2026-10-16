@@ -1,6 +1,15 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
-const { CATEGORY_COLORS } = require('../../lib/admin-html');
+const { CATEGORY_COLORS, escapeHtml, urlToken } = require('../../lib/admin-html');
+
+// `videoId` is matched against native_id, which any client sets through
+// POST /markup, so every value goes through escapeHtml (URL parts through
+// encodeURIComponent first) and the token in <script> through scriptString():
+// a JS string literal with `<` escaped so it can never close the script
+// element (same as admin-moderation.js).
+function scriptString(value) {
+    return JSON.stringify(String(value)).replace(/</g, '\\u003c');
+}
 
 module.exports = function createAdminRoutes(models, { markupRepository }) {
     const router = express.Router();
@@ -11,6 +20,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             return;
         }
         const videoId = req.params.video_id;
+        const token = req.query.verifyBearerToken;
 
         const video = await models.Video.findOne({
             where: isNaN(videoId) ? { native_id: videoId } : { id: videoId },
@@ -74,20 +84,20 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
                     const subRows = group.items.map(markup => {
                         const createdAt = markup.createdAt ? new Date(markup.createdAt).toLocaleString('ru-RU') : '—';
                         const userLink = markup.user?.prv_user_id != null
-                            ? `<a class="user-link" href="/admin/video/${video.id}/user/${markup.user.prv_user_id}?verifyBearerToken=${req.query.verifyBearerToken}" target="_blank">&#128100; ${markup.user.prv_user_id}</a>`
+                            ? `<a class="user-link" href="/admin/video/${video.id}/user/${escapeHtml(encodeURIComponent(markup.user.prv_user_id))}?verifyBearerToken=${escapeHtml(urlToken(token))}" target="_blank">&#128100; ${escapeHtml(markup.user.prv_user_id)}</a>`
                             : '—';
                         return `
                 <tr class="markup-row" data-group="${groupId}" style="display:none">
                     <td colspan="4"></td>
                     <td>${userLink}</td>
-                    <td class="muted">${createdAt}</td>
+                    <td class="muted">${escapeHtml(createdAt)}</td>
                     <td><button class="delete-btn" onclick="deleteMarkup(this, ${markup.id})">Delete</button></td>
                 </tr>`;
                     }).join('');
                     return `
             <tr class="interval-group-row">
                 <td colspan="2"></td>
-                <td class="muted"><span class="interval-val" data-start="${group.start}" data-end="${group.end}" data-seg-end="${seg.end}"></span></td>
+                <td class="muted"><span class="interval-val" data-start="${escapeHtml(group.start)}" data-end="${escapeHtml(group.end)}" data-seg-end="${escapeHtml(seg.end)}"></span></td>
                 <td class="muted">${group.items.length}</td>
                 <td><button class="toggle-group-btn" onclick="toggleGroup(this, '${groupId}')">Show</button></td>
                 <td><button class="toggle-group-btn" onclick="toggleGroup(this, '${groupId}')">Show</button></td>
@@ -99,7 +109,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             return `
         <tbody>
             <tr class="segment-row" style="border-left: 4px solid ${color}">
-                <td colspan="2"><button class="toggle-btn" onclick="toggleSegment(this)">Hide</button> <strong><span class="interval-val" data-start="${seg.start}" data-end="${seg.end}"></span></strong> &nbsp;<span class="badge" style="background:${color}">${categoryName}</span></td>
+                <td colspan="2"><button class="toggle-btn" onclick="toggleSegment(this)">Hide</button> <strong><span class="interval-val" data-start="${escapeHtml(seg.start)}" data-end="${escapeHtml(seg.end)}"></span></strong> &nbsp;<span class="badge" style="background:${color}">${escapeHtml(categoryName)}</span></td>
                 <td colspan="5" class="muted">${segMarkups.length} markup${segMarkups.length !== 1 ? 's' : ''}</td>
             </tr>
             ${markupRows}
@@ -111,7 +121,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video ${videoId}</title>
+    <title>Video ${escapeHtml(videoId)}</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
@@ -150,10 +160,10 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
     </style>
 </head>
 <body>
-    <h1>Video: ${videoId}</h1>
+    <h1>Video: ${escapeHtml(videoId)}</h1>
     <div class="meta">
         <span>ID: ${video.id}</span>
-        ${video.duration ? `<span>Duration: ${video.duration}s</span>` : ''}
+        ${video.duration ? `<span>Duration: ${escapeHtml(video.duration)}s</span>` : ''}
         <span>Calculated segments: ${calculatedSegments.length}</span>
     </div>
 
@@ -174,7 +184,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         ${segmentRows}
     </table>` : '<div class="no-calc">No segments found.</div>'}
 <script>
-    const AUTH_TOKEN = '${req.query.verifyBearerToken}';
+    const AUTH_TOKEN = ${scriptString(token)};
     let useInt = false;
     function fmt(s) {
         if (useInt) return s;
@@ -223,7 +233,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         if (!confirm('Delete markup ' + id + '?')) return;
         btn.disabled = true;
         btn.textContent = '...';
-        const res = await fetch('/admin/markups/' + id + '/delete?verifyBearerToken=' + AUTH_TOKEN);
+        const res = await fetch('/admin/markups/' + id + '/delete?verifyBearerToken=' + encodeURIComponent(AUTH_TOKEN));
         if (res.ok) {
             const row = btn.closest('tr');
             row.style.opacity = '0.4';
@@ -250,6 +260,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
 
         const videoId = req.params.video_id;
         const prvUserId = parseInt(req.params.prv_user_id);
+        const token = req.query.verifyBearerToken;
 
         const [video, user] = await Promise.all([
             models.Video.findOne({ where: isNaN(videoId) ? { native_id: videoId } : { id: videoId } }),
@@ -286,17 +297,17 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             const intervalRows = markupIntervals.map(i => `
             <tr class="interval-row">
                 <td class="indent">&#x21B3;</td>
-                <td class="muted"><span class="interval-val" data-start="${i.start}" data-end="${i.end}"></span></td>
+                <td class="muted"><span class="interval-val" data-start="${escapeHtml(i.start)}" data-end="${escapeHtml(i.end)}"></span></td>
                 <td colspan="3"></td>
             </tr>`).join('');
 
             return `
         <tbody data-markup-id="${markup.id}">
             <tr class="${deletedAt ? 'markup-deleted' : 'markup-active'}">
-                <td><span class="badge" style="background:${color}">${catName}</span></td>
+                <td><span class="badge" style="background:${color}">${escapeHtml(catName)}</span></td>
                 <td class="muted">${markupIntervals.length} interval${markupIntervals.length !== 1 ? 's' : ''}</td>
-                <td class="muted">${createdAt}</td>
-                <td class="muted">${deletedAt ? `<span class="deleted-label">deleted ${deletedAt}</span>` : '—'}</td>
+                <td class="muted">${escapeHtml(createdAt)}</td>
+                <td class="muted">${deletedAt ? `<span class="deleted-label">deleted ${escapeHtml(deletedAt)}</span>` : '—'}</td>
                 <td>${deletedAt ? '' : `<button class="delete-btn" onclick="deleteMarkup(this, ${markup.id})">Delete</button>`}</td>
             </tr>
             ${intervalRows}
@@ -308,7 +319,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User ${prvUserId} — Video ${videoId}</title>
+    <title>User ${escapeHtml(prvUserId)} — Video ${escapeHtml(videoId)}</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
@@ -336,15 +347,15 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
     </style>
 </head>
 <body>
-    <h1>User <code style="font-size:1.1rem">${prvUserId}</code> — <a href="/admin/video/${videoId}?verifyBearerToken=${req.query.verifyBearerToken}">Video ${videoId}</a></h1>
+    <h1>User <code style="font-size:1.1rem">${escapeHtml(prvUserId)}</code> — <a href="/admin/video/${escapeHtml(encodeURIComponent(videoId))}?verifyBearerToken=${escapeHtml(urlToken(token))}">Video ${escapeHtml(videoId)}</a></h1>
     <div class="meta">
         <span>Video DB id: ${video.id}</span>
-        ${video.duration ? `<span>Duration: ${video.duration}s</span>` : ''}
+        ${video.duration ? `<span>Duration: ${escapeHtml(video.duration)}s</span>` : ''}
         <span>Markups: ${markups.length}</span>
-        <span>Rating: ${user.rating}</span>
+        <span>Rating: ${escapeHtml(user.rating)}</span>
     </div>
     <script>
-        const AUTH_TOKEN = '${req.query.verifyBearerToken}';
+        const AUTH_TOKEN = ${scriptString(token)};
         let useInt = false;
         function fmt(s) {
             if (useInt) return s;
@@ -367,7 +378,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
             if (!confirm('Delete markup ' + id + '?')) return;
             btn.disabled = true;
             btn.textContent = '...';
-            const res = await fetch('/admin/markups/' + id + '/delete?verifyBearerToken=' + AUTH_TOKEN);
+            const res = await fetch('/admin/markups/' + id + '/delete?verifyBearerToken=' + encodeURIComponent(AUTH_TOKEN));
             if (res.ok) {
                 const tbody = btn.closest('tbody');
                 tbody.querySelectorAll('tr').forEach(r => r.style.opacity = '0.4');

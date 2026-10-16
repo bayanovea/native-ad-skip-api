@@ -775,6 +775,48 @@ test('metrics: /admin/video/:video_id normalizes to a stable label', async () =>
         'raw path /admin/video/12345 leaked into metrics (normalization failed)');
 });
 
+// ── /admin/video pages escape interpolated values ────────────────────────────
+
+// native_id is whatever a client sends to POST /markup; both admin/video pages
+// print it (and link to each other with it) next to the inline AUTH_TOKEN.
+test('admin/video: an HTML/script payload in native_id is escaped on the video and user pages', async () => {
+    const auth = process.env.AUTH_TOKEN || 'test_token';
+    const vid = '__e2e__xss"><img src=x onerror=alert(1)></script><script>alert(2)</script>';
+    const escaped = '__e2e__xss&quot;&gt;&lt;img src=x onerror=alert(1)&gt;&lt;/script&gt;&lt;script&gt;alert(2)&lt;/script&gt;';
+    const prvUserId = 990417;
+    await postMarkup('', {
+        video_id: vid, v: '1', user_id: 'xss-author', prv_user_id: prvUserId, category_id: cats.prv.intro,
+        data: { intervals: [{ start: 0, end: 10 }] },
+    });
+    runCalc('prv');
+
+    const videoPage = await request('GET', `/admin/video/${encodeURIComponent(vid)}?verifyBearerToken=${auth}`, null);
+    assert.equal(videoPage.status, 200);
+    const videoHtml = videoPage.body;
+    assert.ok(!videoHtml.includes(vid), 'raw payload must not reach the video page');
+    assert.ok(!videoHtml.includes('<img'), 'payload <img> must not be rendered');
+    assert.ok(videoHtml.includes(`<title>Video ${escaped}</title>`), 'escaped payload in <title>');
+    assert.ok(videoHtml.includes(`<h1>Video: ${escaped}</h1>`), 'escaped payload in <h1>');
+    assert.equal(videoHtml.split('<script>').length - 1, 1, 'only the page\'s own <script>');
+    assert.equal(videoHtml.split('</script>').length - 1, 1, 'only the page\'s own </script>');
+    assert.ok(videoHtml.includes(`const AUTH_TOKEN = ${JSON.stringify(auth)};`), 'token as a JSON string literal');
+    const videoDbId = videoHtml.match(/<span>ID: (\d+)<\/span>/)[1];
+    assert.ok(videoHtml.includes(`href="/admin/video/${videoDbId}/user/${prvUserId}?verifyBearerToken=${auth}"`),
+        'user link on the segment row');
+
+    const userPage = await request('GET', `/admin/video/${encodeURIComponent(vid)}/user/${prvUserId}?verifyBearerToken=${auth}`, null);
+    assert.equal(userPage.status, 200);
+    const userHtml = userPage.body;
+    assert.ok(!userHtml.includes(vid), 'raw payload must not reach the user page');
+    assert.ok(!userHtml.includes('<img'), 'payload <img> must not be rendered');
+    assert.ok(userHtml.includes(`<title>User ${prvUserId} — Video ${escaped}</title>`), 'escaped payload in <title>');
+    assert.ok(userHtml.includes(`<a href="/admin/video/${encodeURIComponent(vid)}?verifyBearerToken=${auth}">Video ${escaped}</a>`),
+        'back link with the URL-encoded native_id and escaped text');
+    assert.equal(userHtml.split('<script>').length - 1, 1, 'only the page\'s own <script>');
+    assert.equal(userHtml.split('</script>').length - 1, 1, 'only the page\'s own </script>');
+    assert.ok(userHtml.includes(`const AUTH_TOKEN = ${JSON.stringify(auth)};`), 'token as a JSON string literal');
+});
+
 test('metrics: DELETE /markups/:id normalizes to a stable label', async () => {
     await request('DELETE', '/markups/111', null);
     await request('DELETE', '/markups/222', null);
