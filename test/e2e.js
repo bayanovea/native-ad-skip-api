@@ -794,12 +794,19 @@ async function getModerationJson(query = '') {
     return request('GET', path, null);
 }
 
-async function seedDislikeAgainst(prefix, videoNativeId, catId, start, end, authorUserId, voterId) {
-    // POST a markup authored by `authorUserId`, run calc, then POST a -1 vote by `voterId`.
-    const base = { video_id: videoNativeId, v: '1', user_id: authorUserId, category_id: catId, data: {} };
-    await postMarkup(prefix || '', { ...base, data: { intervals: [{ start, end }] } });
-    runCalc(prefix || 'prv');
-    await postVote(prefix || '', { video_id: videoNativeId, user_id: voterId, category_id: catId, start, end, vote: -1 });
+async function seedDislikeAgainst(videoNativeId, catId, start, end, authorUserId, voterId) {
+    // Seed a prv markup authored by `authorUserId`, run calc, then POST a -1 vote by `voterId`.
+    // Each dislike costs the author 1 rating point, so from the third markup on POST /markup would
+    // hit the rating ≤ -2 gate and silently create nothing. Only the author's first markup goes over
+    // HTTP (it creates the User row); later ones are seeded directly, like the auto-ban tests do.
+    const internalUserId = await getAuthorInternalId(authorUserId);
+    if (internalUserId) {
+        await seedMarkupDirect({ videoNativeId, categoryId: catId, start, end, internalUserId, externalUserId: authorUserId });
+    } else {
+        await postMarkup('', { video_id: videoNativeId, v: '1', user_id: authorUserId, category_id: catId, data: { intervals: [{ start, end }] } });
+    }
+    runCalc('prv');
+    await postVote('', { video_id: videoNativeId, user_id: voterId, category_id: catId, start, end, vote: -1 });
 }
 
 test('moderation: GET without token returns 401', async () => {
@@ -827,11 +834,11 @@ test('moderation: users[] sorted by score desc, fields match contract', async ()
     const vid = '__e2e__mod_users_order';
     const cat = cats.prv.intro;
     // Author A: 3 dislikes across 3 segments
-    await seedDislikeAgainst('', vid, cat, 0, 10, 'mod-author-a', 'mod-voter-1');
-    await seedDislikeAgainst('', vid, cat, 30, 40, 'mod-author-a', 'mod-voter-2');
-    await seedDislikeAgainst('', vid, cat, 60, 70, 'mod-author-a', 'mod-voter-3');
+    await seedDislikeAgainst(vid, cat, 0, 10, 'mod-author-a', 'mod-voter-1');
+    await seedDislikeAgainst(vid, cat, 30, 40, 'mod-author-a', 'mod-voter-2');
+    await seedDislikeAgainst(vid, cat, 60, 70, 'mod-author-a', 'mod-voter-3');
     // Author B: 1 dislike
-    await seedDislikeAgainst('', vid + '_b', cat, 0, 10, 'mod-author-b', 'mod-voter-4');
+    await seedDislikeAgainst(vid + '_b', cat, 0, 10, 'mod-author-b', 'mod-voter-4');
 
     const res = await getModerationJson();
     assert.equal(res.status, 200);
@@ -853,7 +860,7 @@ test('moderation: users[] sorted by score desc, fields match contract', async ()
 test('moderation: markups[] row carries the contract fields', async () => {
     const vid = '__e2e__mod_markup_fields';
     const cat = cats.prv.intro;
-    await seedDislikeAgainst('', vid, cat, 0, 10, 'mod-markup-author', 'mod-markup-voter');
+    await seedDislikeAgainst(vid, cat, 0, 10, 'mod-markup-author', 'mod-markup-voter');
 
     const res = await getModerationJson();
     assert.equal(res.status, 200);
@@ -869,7 +876,7 @@ test('moderation: markups[] row carries the contract fields', async () => {
 test('moderation: default view hides decided row whose snapshot.score == current score', async () => {
     const vid = '__e2e__mod_hide_decided';
     const cat = cats.prv.intro;
-    await seedDislikeAgainst('', vid, cat, 0, 10, 'mod-hide-author', 'mod-hide-voter');
+    await seedDislikeAgainst(vid, cat, 0, 10, 'mod-hide-author', 'mod-hide-voter');
 
     // Find the user via a JSON snapshot first.
     const before = await getModerationJson();
@@ -1030,7 +1037,7 @@ async function getMarkupsByVideoNative(nativeId) {
 test('moderation: POST /decide without verifyBearerToken returns 401', async () => {
     // Seed a user we can target so we can verify NO state change happened.
     const vid = '__e2e__mod_decide_401';
-    await seedDislikeAgainst('', vid, cats.prv.intro, 0, 10, 'mod-decide-401-author', 'mod-decide-401-voter');
+    await seedDislikeAgainst(vid, cats.prv.intro, 0, 10, 'mod-decide-401-author', 'mod-decide-401-voter');
     const authorInternalId = await getAuthorInternalId('mod-decide-401-author');
     assert.ok(authorInternalId, 'pre-condition: author must have internal id');
 
@@ -1126,7 +1133,7 @@ test('moderation: POST /decide markup+reject with no siblings destroys VideoCalc
 
 test('moderation: POST /decide user+reject sets banned_at and inserts decision row', async () => {
     const vid = '__e2e__mod_decide_user_reject';
-    await seedDislikeAgainst('', vid, cats.prv.intro, 0, 10, 'mod-ureject-author', 'mod-ureject-voter');
+    await seedDislikeAgainst(vid, cats.prv.intro, 0, 10, 'mod-ureject-author', 'mod-ureject-voter');
     const authorInternalId = await getAuthorInternalId('mod-ureject-author');
     assert.ok(authorInternalId, 'pre: author has internal id');
 
@@ -1147,7 +1154,7 @@ test('moderation: POST /decide user+reject sets banned_at and inserts decision r
 
 test('moderation: POST /decide user+approve clears banned_at', async () => {
     const vid = '__e2e__mod_decide_user_approve';
-    await seedDislikeAgainst('', vid, cats.prv.intro, 0, 10, 'mod-uapprove-author', 'mod-uapprove-voter');
+    await seedDislikeAgainst(vid, cats.prv.intro, 0, 10, 'mod-uapprove-author', 'mod-uapprove-voter');
     const authorInternalId = await getAuthorInternalId('mod-uapprove-author');
     assert.ok(authorInternalId, 'pre: author has internal id');
 
@@ -1283,9 +1290,9 @@ test('moderation: re-surface after enough new dislikes (3 → approve → +1 hid
     const cat = cats.prv.intro;
     const author = 'mod-resurface-author';
     // Three dislikes on three different (start, end) tuples — each post-vote increments score by 3.
-    await seedDislikeAgainst('', vid, cat, 0,  10, author, 'mod-resurface-v1');
-    await seedDislikeAgainst('', vid, cat, 30, 40, author, 'mod-resurface-v2');
-    await seedDislikeAgainst('', vid, cat, 60, 70, author, 'mod-resurface-v3');
+    await seedDislikeAgainst(vid, cat, 0,  10, author, 'mod-resurface-v1');
+    await seedDislikeAgainst(vid, cat, 30, 40, author, 'mod-resurface-v2');
+    await seedDislikeAgainst(vid, cat, 60, 70, author, 'mod-resurface-v3');
 
     // Sanity: user is on the scoreboard with score 9.
     const authorInternalId = await getAuthorInternalId(author);
@@ -1315,7 +1322,7 @@ test('moderation: re-surface after enough new dislikes (3 → approve → +1 hid
         `user must be hidden after approve (delta=0): ${JSON.stringify(hidden1)}`);
 
     // +1 dislike → current score 12, delta = 3 < 5 → still hidden.
-    await seedDislikeAgainst('', vid + '_b', cat, 0, 10, author, 'mod-resurface-v4');
+    await seedDislikeAgainst(vid + '_b', cat, 0, 10, author, 'mod-resurface-v4');
     const afterOneMore = await getModerationJson();
     assert.equal(afterOneMore.status, 200);
     const hidden2 = afterOneMore.body.users.find(u => u.user_id === authorInternalId);
@@ -1323,7 +1330,7 @@ test('moderation: re-surface after enough new dislikes (3 → approve → +1 hid
         `user must remain hidden after 1 new dislike (delta=3 < 5): ${JSON.stringify(hidden2)}`);
 
     // +1 more dislike → current score 15, delta = 6 ≥ 5 → re-surfaces.
-    await seedDislikeAgainst('', vid + '_c', cat, 0, 10, author, 'mod-resurface-v5');
+    await seedDislikeAgainst(vid + '_c', cat, 0, 10, author, 'mod-resurface-v5');
     const afterTwoMore = await getModerationJson();
     assert.equal(afterTwoMore.status, 200);
     const visible = afterTwoMore.body.users.find(u => u.user_id === authorInternalId);
@@ -1336,9 +1343,9 @@ test('moderation: ?show=all reveals approved user regardless of delta', async ()
     const cat = cats.prv.intro;
     const author = 'mod-resurface-showall-author';
     // 3 dislikes against this author.
-    await seedDislikeAgainst('', vid, cat, 0,  10, author, 'mod-showall-v1');
-    await seedDislikeAgainst('', vid, cat, 30, 40, author, 'mod-showall-v2');
-    await seedDislikeAgainst('', vid, cat, 60, 70, author, 'mod-showall-v3');
+    await seedDislikeAgainst(vid, cat, 0,  10, author, 'mod-showall-v1');
+    await seedDislikeAgainst(vid, cat, 30, 40, author, 'mod-showall-v2');
+    await seedDislikeAgainst(vid, cat, 60, 70, author, 'mod-showall-v3');
 
     const authorInternalId = await getAuthorInternalId(author);
     assert.ok(authorInternalId, 'pre: author has internal id');
@@ -1457,7 +1464,7 @@ test('auto-ban: rating ≤ -100 sets banned_at and writes exactly one auto decis
     const vid = '__e2e__autoban_basic';
     const cat = cats.prv.intro;
     const author = 'autoban-basic-author';
-    await seedDislikeAgainst('', vid, cat, 0, 10, author, 'autoban-basic-voter-seed');
+    await seedDislikeAgainst(vid, cat, 0, 10, author, 'autoban-basic-voter-seed');
 
     const internalId = await getAuthorInternalId(author);
     assert.ok(internalId, 'pre: author has internal id');
@@ -1498,7 +1505,7 @@ test('auto-ban: idempotent under repeated threshold crossings (no duplicate auto
     const vid = '__e2e__autoban_idempotent';
     const cat = cats.prv.intro;
     const author = 'autoban-idem-author';
-    await seedDislikeAgainst('', vid, cat, 0, 10, author, 'autoban-idem-voter-seed');
+    await seedDislikeAgainst(vid, cat, 0, 10, author, 'autoban-idem-voter-seed');
 
     const internalId = await getAuthorInternalId(author);
     assert.ok(internalId, 'pre: author has internal id');
@@ -1545,7 +1552,7 @@ test('auto-ban: manually banned user — no duplicate auto decision row on thres
     const vid = '__e2e__autoban_manual_already_banned';
     const cat = cats.prv.intro;
     const author = 'autoban-manual-author';
-    await seedDislikeAgainst('', vid, cat, 0, 10, author, 'autoban-manual-voter-seed');
+    await seedDislikeAgainst(vid, cat, 0, 10, author, 'autoban-manual-voter-seed');
 
     const internalId = await getAuthorInternalId(author);
     assert.ok(internalId, 'pre: author has internal id');
@@ -1594,8 +1601,8 @@ test('moderation: approved user with 0 new signals stays hidden across repeated 
     const cat = cats.prv.intro;
     const author = 'mod-resurface-zero-author';
     // Seed 2 dislikes (score=6) so the user lands on the scoreboard initially.
-    await seedDislikeAgainst('', vid, cat, 0,  10, author, 'mod-zero-v1');
-    await seedDislikeAgainst('', vid, cat, 30, 40, author, 'mod-zero-v2');
+    await seedDislikeAgainst(vid, cat, 0,  10, author, 'mod-zero-v1');
+    await seedDislikeAgainst(vid, cat, 30, 40, author, 'mod-zero-v2');
 
     const authorInternalId = await getAuthorInternalId(author);
     assert.ok(authorInternalId, 'pre: author has internal id');

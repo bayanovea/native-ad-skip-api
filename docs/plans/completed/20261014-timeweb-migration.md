@@ -193,7 +193,7 @@ Accepted data loss: markups between 2026-10-09 23:22 (dump) and 2026-10-11 04:00
 - [x] `git push` to `main` redeploys without manual steps (push a trivial commit and watch Actions) → three pushes on 2026-10-15 (incl. the history-rewrite force-push) each restarted the app and answered 200
 - [x] `nc -zv -w3 NEW_IP 5432` and `:3022` and `:9090` from outside → closed; `:3024` intentionally open (Grafana login), see Task 2 → checked 2026-10-15
 - [ ] ~~yesterday's backup object exists in S3; restore drill passed~~ → out of scope: deferred with Task 9 to `docs/backlog/offhost-pg-backup-s3.md`; interim local dump restore-tested 2026-10-15
-- [ ] ~~`make test-e2e` green on the committed compose/workflow changes~~ → out of scope: the 3 failures predate the migration, tracked in `docs/backlog/e2e-moderation-vote-404.md`
+- [x] `make test-e2e` green on the committed compose/workflow changes. The 3 failures predated the migration; fixed 2026-10-16 (test seeding hit the `rating ≤ -2` markup gate), 109/109
 
 ### Task 12: [Final] Update documentation
 
