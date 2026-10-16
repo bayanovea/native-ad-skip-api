@@ -611,7 +611,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://${API_HOST}/votes/${__data.fields.id}﻿/delete?verifyBearerToken=Vh9oy4daHKGHjychim6S9f7s"
+                    "url": "https://${API_HOST}/votes/${__data.fields.id}/delete?verifyBearerToken=${verifyBearerToken}"
                   }
                 ]
               },
@@ -768,7 +768,21 @@
   "schemaVersion": 42,
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "description": "",
+        "hide": 0,
+        "label": "Токен авторизации",
+        "name": "verifyBearerToken",
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
   },
   "time": {
     "from": "2023-08-09T10:49:27.617Z",

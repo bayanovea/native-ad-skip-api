@@ -350,7 +350,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://${API_HOST}/votes/${__data.fields.id}﻿/delete?verifyBearerToken=Vh9oy4daHKGHjychim6S9f7s"
+                    "url": "https://${API_HOST}/votes/${__data.fields.id}/delete?verifyBearerToken=${verifyBearerToken}"
                   }
                 ]
               }
@@ -1113,16 +1113,16 @@
     "list": [
       {
         "current": {
-          "text": "Vh9oy4daHKGHjychim6S9f7s",
-          "value": "Vh9oy4daHKGHjychim6S9f7s"
+          "text": "",
+          "value": ""
         },
         "description": "",
-        "hide": 2,
+        "hide": 0,
         "label": "Токен авторизации",
         "name": "verifyBearerToken",
-        "query": "Vh9oy4daHKGHjychim6S9f7s",
-        "skipUrlSync": true,
-        "type": "constant"
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
       }
     ]
   },
