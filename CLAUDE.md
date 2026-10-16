@@ -37,7 +37,9 @@ go build -mod=vendor -o yt/commands/calculate ./yt/commands/
 ### Tests
 
 ```bash
-go test ./calculator                            # Run Go unit tests (no DB required; TestIntegration skips)
+go test ./calculator                            # Go unit tests; TestIntegration skips without DB env (CI), but a
+                                                # local .env with DB_USER makes it run against DB_HOST (fails on
+                                                # host.docker.internal) — locally add -run 'TestFindMedian|TestCalculateIntervals'
 go test ./calculator -run TestFindMedian        # Run a single test
 
 make test-calculator                            # Go integration tests against a real Postgres
