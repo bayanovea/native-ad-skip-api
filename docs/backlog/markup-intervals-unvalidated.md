@@ -9,4 +9,6 @@ Only "`data.intervals` is an array" is checked. Each `start`/`end` goes through 
 
 Fix: validate each interval (finite, `0 <= start < end`, count cap), reject an empty array, create the markup + intervals in one transaction.
 
+The missing transaction also races the calculator: since it marks only the markups it read as processed (2026-10-16), a run landing between the markup insert and its interval inserts marks the markup done with only some intervals aggregated, and the rest wait for an unrelated markup on that video. The transaction fix closes that too.
+
 From the 2026-09-24 code review (artifact "native-ad-skip-api Review"), checked against the code and the 2026-10-15 prod dump on 2026-10-16.

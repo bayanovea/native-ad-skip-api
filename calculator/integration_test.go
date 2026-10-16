@@ -32,11 +32,12 @@ func connectTestDB(t *testing.T) *sql.DB {
 			break
 		}
 	}
-	// Plain `go test ./calculator` runs the unit tests only; make test-calculator sets the DB env.
-	if os.Getenv("DB_USER") == "" {
-		t.Skip("DB_USER not set; run make test-calculator for the integration tests")
-	}
 	dbName := os.Getenv("TEST_DB_NAME")
+	// Plain `go test ./calculator` (CI, no .env) has no DB; `make test-calculator`
+	// always sets TEST_DB_NAME, so a missing DB_USER still fails there.
+	if dbName == "" && os.Getenv("DB_USER") == "" {
+		t.Skip("no DB configured (set TEST_DB_NAME or DB_USER, or run make test-calculator)")
+	}
 	if dbName == "" {
 		dbName = os.Getenv("DB_NAME") + "_test"
 	}

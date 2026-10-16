@@ -7,24 +7,67 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
+
+    - name: Setup Node
+      uses: actions/setup-node@v5
+      with:
+        node-version: 20   # matches node:20-bookworm-slim in the Dockerfile
+        cache: yarn
+
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: false   # deps are vendored
+
+    - name: Install Node dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Node unit tests
+      run: make test-unit
+
+    - name: Go unit tests
+      run: go test -mod=vendor ./calculator
+
+    - name: E2E tests (Docker)
+      run: make test-e2e
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
 
     - name: Setup SSH
       env:
         PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        HOST_IP: ${{ secrets.HOST_IP }}
       run: |
         mkdir -p ~/.ssh/
+        chmod 700 ~/.ssh
         echo "$PRIVATE_KEY" > ~/.ssh/id_ed25519
         chmod 600 ~/.ssh/id_ed25519
+        # Pinned host key of the prod VM (public, not a secret). A rebuilt VM gets a
+        # new key: replace it here (ssh-keygen -F <ip> on a machine that trusts it).
+        echo "$HOST_IP ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE9SvsKQeM8YyA0/Az6Gsa8eI3XpxlMYxz0LmKlcsCs5" > ~/.ssh/known_hosts
+        chmod 644 ~/.ssh/known_hosts
+        printf 'Host *\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
+        chmod 600 ~/.ssh/config
 
     - name: Transfer Codebase to Timeweb
       run: |
-        tar czf - . | ssh -o StrictHostKeyChecking=no skipper-admin@${{ secrets.HOST_IP }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
+        tar czf - --exclude=.git --exclude=node_modules . | ssh skipper-admin@${{ secrets.HOST_IP }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
 
     - name: Deploy to Timeweb
       env:
@@ -37,7 +80,9 @@ jobs:
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
       run: |
-        ssh -o StrictHostKeyChecking=no skipper-admin@$HOST_IP "
+        ssh skipper-admin@$HOST_IP "
+        set -e
+
         # Перенос и распаковка исходного кода
         cd /home/skipper-admin/tmp
         tar xzf codebase.tar.gz
@@ -51,9 +96,12 @@ jobs:
         export GF_ADMIN_PASSWORD='$GF_ADMIN_PASSWORD'
         export HOST_IP='$HOST_IP'
 
-        # Сборка и запуск с использованием Docker Compose v2
-        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml down
-        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d app prometheus grafana
+        # Сборка и запуск с использованием Docker Compose v2. No 'down': 'up --build'
+        # builds the image first and touches containers only if the build succeeded,
+        # so the old stack keeps serving during the build and after a failed one.
+        # --force-recreate restarts prometheus/grafana too, as 'down' did, so they
+        # pick up the re-extracted bind-mounted configs.
+        docker compose -p $IMAGE_NAME -f /home/skipper-admin/tmp/docker-compose.yml up --build -d --force-recreate --remove-orphans app prometheus grafana
 
         # Очистка
         rm -rf /home/skipper-admin/tmp/codebase.tar.gz"

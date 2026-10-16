@@ -1,14 +1,14 @@
 ---
 worth: yes
-where: .github/workflows/deploy.yml:40
+where: .github/workflows/deploy.yml (Deploy to Timeweb step)
 added: 2026-10-16
 ---
-# deploy runs no tests and takes the API down for the whole build
+# deploy puts secrets on the remote command line and has no rollback
 
-Every push to `main` deploys without `make test-unit` / `make test-e2e` / `go test`. The script runs `docker compose down`, then `up --build` on the prod VM, so the API is down for the whole image build, and a failed build leaves it down with no previous image to roll back to. Smaller: `StrictHostKeyChecking=no`; secrets are interpolated into the remote shell command line; `tar czf - .` ships `.git` and local junk.
+The deploy step interpolates `DB_PASSWORD`, `AUTH_TOKEN`, `GF_ADMIN_PASSWORD` etc. into the `ssh "… export X='$X' …"` string, so they sit in the remote shell's command line (visible in `ps` on the host while it runs) and a value with a `'` breaks the script. Pass them another way (`ssh … 'bash -s' <<EOF`, `SendEnv`/`AcceptEnv`, or an env file written with `umask 077`).
 
-Already fixed since the review: `restart: unless-stopped` on app, `actions/checkout@v4`.
+The image is still built on the prod VM from the tarball. A bad build no longer takes the API down (no `down` since 2026-10-16), but a bad image that builds fine has no previous image to go back to. Build in CI, push to GHCR tagged by SHA, and deploy with `pull && up -d`; rollback is `up -d` with the previous tag. That also ends the other tarball quirk: it is extracted over the previous one in `/home/skipper-admin/tmp`, so files deleted from the repo stay there and `COPY . .` puts them in the image.
 
-Fix, in order of value: a test job that deploy `needs:`; drop the `down` (`up --build -d` recreates only after a successful build); pin the host key in a secret; later, build the image in CI → GHCR → `pull && up -d` for rollback.
+Already fixed on 2026-10-16: test job the deploy `needs:`, no `docker compose down`, pinned host key, `tar` excludes `.git` / `node_modules`.
 
 From the 2026-09-24 code review (artifact "native-ad-skip-api Review"), checked against the code and the 2026-10-15 prod dump on 2026-10-16.
