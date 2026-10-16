@@ -1011,6 +1011,23 @@ test('metrics: DELETE /markups/:id normalizes to a stable label', async () => {
         'raw path /markups/111 leaked into metrics (normalization failed)');
 });
 
+// ── CORS headers ──────────────────────────────────────────────────────────────
+
+// No endpoint uses cookies, so the reflected Origin must not come with
+// Allow-Credentials (that pair would let any site make credentialed calls).
+test('cors: the request Origin is reflected without Access-Control-Allow-Credentials', async () => {
+    const headers = await new Promise((resolve, reject) => {
+        const req = http.request(
+            { hostname: 'localhost', port: E2E_PORT, path: '/', method: 'GET', headers: { Origin: 'https://example.test' } },
+            res => { res.resume(); res.on('end', () => resolve(res.headers)); }
+        );
+        req.on('error', reject);
+        req.end();
+    });
+    assert.equal(headers['access-control-allow-origin'], 'https://example.test');
+    assert.equal(headers['access-control-allow-credentials'], undefined);
+});
+
 // ── /admin/moderation page tests ──────────────────────────────────────────────
 
 const MOD_AUTH = process.env.AUTH_TOKEN || 'test_token';
