@@ -1,3 +1,3 @@
-* * * * * flock -n /tmp/calculate-prv.lock /app/prv/commands/calculate >> /tmp/mycron.log 2>&1
-* * * * * sleep 20 && flock -n /tmp/calculate-rt.lock /app/rt/commands/calculate >> /tmp/mycron.log 2>&1
-* * * * * sleep 40 && flock -n /tmp/calculate-yt.lock /app/yt/commands/calculate >> /tmp/mycron.log 2>&1
+* * * * * flock -n /tmp/calculate-prv.lock /app/prv/commands/calculate >> /proc/1/fd/1 2>&1
+* * * * * sleep 20 && flock -n /tmp/calculate-rt.lock /app/rt/commands/calculate >> /proc/1/fd/1 2>&1
+* * * * * sleep 40 && flock -n /tmp/calculate-yt.lock /app/yt/commands/calculate >> /proc/1/fd/1 2>&1

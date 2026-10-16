@@ -150,7 +150,7 @@ Each provider directory has the same internal layout:
    - Set `is_new = false` on `{provider}markups` only for the ids read in the first step, so markups posted during the run are picked up by the next one
 3. Per-video errors are returned, not panicked: the failing video is logged (`Calculate video failed: <video_id>: <err>`) and rolled back, the other videos go on, and the binary exits 1 at the end (`N of M videos failed`). Only startup failures (DB connect, listing the videos) abort the run.
 
-Cron starts each provider's binary every minute (`crontab`, offsets 0/20/40 s) under `flock -n /tmp/calculate-<provider>.lock`, so a run still going when the next minute fires makes the new one exit at once instead of overlapping. The e2e suite covers the rollback, the mid-run markup and the skipped locked row (`calculator:` tests in `test/e2e.js`).
+Cron starts each provider's binary every minute (`crontab`, offsets 0/20/40 s) under `flock -n /tmp/calculate-<provider>.lock`, so a run still going when the next minute fires makes the new one exit at once instead of overlapping. Their output (stdout and stderr) is appended to `/proc/1/fd/1`, supervisord's stdout, so it shows in `docker logs` next to the Node app's. The e2e suite covers the rollback, the mid-run markup and the skipped locked row (`calculator:` tests in `test/e2e.js`).
 
 The segment rows in `{provider}_calculated_segments` are the source of truth for joins (e.g. analytics) and carry the same `rating` that lives in `video_calculateds.data`. Both are kept in sync by the vote handler (see Routes → `votes.js`).
 
