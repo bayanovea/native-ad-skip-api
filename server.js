@@ -6,6 +6,7 @@ const fs = require('fs');
 const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
 const { bootstrap } = require('./db');
+const { redactRequest } = require('./lib/redact-request');
 require('./prometheus-wrapper');
 
 const app = express();
@@ -78,15 +79,9 @@ app.use('/rt', require('./rt'));
 app.use('/yt', require('./yt'));
 
 app.use((error, req, res, next) => {
-    console.error('Error: ', {
-        method: req.method,
-        url: req.url,
-        headers: req.headers,
-        body: req.body,
-        params: req.params,
-        query: req.query,
-        error,
-    });
+    // redactRequest strips AUTH_TOKEN (Authorization header, verifyBearerToken
+    // in query and url) so a failing admin request never logs it.
+    console.error('Error: ', { ...redactRequest(req), error });
     res.status(500).send('Internal Server Error');
 });
 

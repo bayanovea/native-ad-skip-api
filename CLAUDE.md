@@ -47,7 +47,7 @@ make test-e2e                                   # Full Docker e2e: spins up Post
 make test-unit                                  # DB-free Node unit tests (no Docker)
 ```
 
-`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL in its own DB, plus `scripts/export-review-verdicts.sh` through psql: the e2e compose file builds the image with `EXTRA_PACKAGES=postgresql-client`, the prod image has no psql). `make test-unit` runs the DB-free unit tests: `test/review-sheet.test.js`, `test/find-video-for-read.test.js`, `test/prometheus-wrapper.test.js`.
+`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL in its own DB, plus `scripts/export-review-verdicts.sh` through psql: the e2e compose file builds the image with `EXTRA_PACKAGES=postgresql-client`, the prod image has no psql). `make test-unit` runs the DB-free unit tests: `test/review-sheet.test.js`, `test/find-video-for-read.test.js`, `test/prometheus-wrapper.test.js`, `test/redact-request.test.js`.
 
 ### Ops
 
@@ -128,7 +128,7 @@ Each provider directory has the same internal layout:
 | `prv/`, `rt/`, `yt/` | Per-provider Express routes, repositories, and Go CLI entry points |
 | `calculator/` | Shared Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
-| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category seeding, used by `db.js` boot and `scripts/sync-db.js`) |
+| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category seeding, used by `db.js` boot and `scripts/sync-db.js`), `redact-request.js` (`redactRequest()` — request fields for the `server.js` error log with the `Authorization` header and `verifyBearerToken` (query and url) redacted) |
 | `scripts/` | Local/ops scripts: `sync-db.js`, `pull-prod-dump.sh`, review import/export, gold export (`export-gold.sh`) |
 | `db.js` | Sequelize models and associations for all providers |
 | `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
