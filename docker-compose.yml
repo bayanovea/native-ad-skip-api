@@ -1,7 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   app:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:3022:3022"
     extra_hosts:
@@ -19,6 +26,7 @@ services:
       - HOST_IP=${HOST_IP}
   swagger-ui:
     image: swaggerapi/swagger-ui
+    logging: *default-logging
     ports:
       - "127.0.0.1:8080:8080"
     networks:
@@ -30,6 +38,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.45.2
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:9090:9090"
     networks:
@@ -46,6 +55,7 @@ services:
   grafana:
     image: grafana/grafana:12.3.1
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "3024:3024"
     extra_hosts:
