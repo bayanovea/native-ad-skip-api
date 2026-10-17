@@ -38,9 +38,12 @@ components:
     Interval:
       type: object
       required: [start, end]
+      description: |
+        Seconds, stored rounded to whole seconds. A non-blank numeric string is also accepted.
+        After rounding, `0 <= start < end <= 86400`, otherwise 400.
       properties:
-        start: { type: number, example: 5.0 }
-        end:   { type: number, example: 30.0 }
+        start: { type: number, minimum: 0, example: 5.0 }
+        end:   { type: number, maximum: 86400, example: 30.0 }
 
     # ── prv schemas (duration optional) ───────────────────────────────────────
     PrvMarkupBody:
@@ -61,6 +64,8 @@ components:
           properties:
             intervals:
               type: array
+              minItems: 1
+              maxItems: 20
               items: { $ref: '#/components/schemas/Interval' }
         duration: { type: integer, minimum: 1, nullable: true, example: 300 }
 
@@ -107,6 +112,8 @@ components:
           properties:
             intervals:
               type: array
+              minItems: 1
+              maxItems: 20
               items: { $ref: '#/components/schemas/Interval' }
         duration: { type: integer, minimum: 1, example: 300 }
 
@@ -273,7 +280,8 @@ paths:
       tags: [prv]
       summary: Submit a markup
       description: |
-        Users with rating ≤ −2 are silently accepted (201 returned) but the markup is not stored.
+        Users with rating ≤ −2 or a hard ban are silently accepted (201 returned) but the markup is not stored.
+        The markup and all its intervals are stored in one transaction.
       requestBody:
         required: true
         content:
@@ -281,7 +289,7 @@ paths:
             schema: { $ref: '#/components/schemas/PrvMarkupBody' }
       responses:
         '201': { description: Created }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '400': { description: "Validation error, e.g. `data.intervals` empty or over 20 items, a missing or non-numeric `start`/`end`, or an interval outside `0 <= start < end <= 86400` after rounding" }
 
   /markups:
     get:
@@ -609,6 +617,9 @@ paths:
     post:
       tags: [RT]
       summary: Submit a markup
+      description: |
+        Users with rating ≤ −2 are silently accepted (201 returned) but the markup is not stored.
+        The markup and all its intervals are stored in one transaction.
       requestBody:
         required: true
         content:
@@ -616,7 +627,7 @@ paths:
             schema: { $ref: '#/components/schemas/RTMarkupBody' }
       responses:
         '201': { description: Created }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '400': { description: "Validation error, e.g. `data.intervals` empty or over 20 items, a missing or non-numeric `start`/`end`, or an interval outside `0 <= start < end <= 86400` after rounding" }
 
   /rt/markups:
     get:
@@ -778,6 +789,9 @@ paths:
     post:
       tags: [YT]
       summary: Submit a markup
+      description: |
+        Users with rating ≤ −2 are silently accepted (201 returned) but the markup is not stored.
+        The markup and all its intervals are stored in one transaction.
       requestBody:
         required: true
         content:
@@ -785,7 +799,7 @@ paths:
             schema: { $ref: '#/components/schemas/RTMarkupBody' }
       responses:
         '201': { description: Created }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '400': { description: "Validation error, e.g. `data.intervals` empty or over 20 items, a missing or non-numeric `start`/`end`, or an interval outside `0 <= start < end <= 86400` after rounding" }
 
   /yt/markups:
     get:

@@ -2005,6 +2005,92 @@ test('rating-gate: rating ≤ -2 user — POST /markup returns 201 but no Markup
     assert.equal(finalCount, baselineCount, 'rating-gate must NOT create a new Markup row');
 });
 
+// ── POST /markup interval validation (lib/validate-intervals.js) ──────────────
+// Invalid intervals are a 400 before anything is written; a valid markup and all
+// its intervals are created in one transaction.
+
+async function markupRowsByUser(prefix, userId) {
+    const tp = prefix ? `${prefix}_` : '';
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        const { rows: markups } = await c.query(
+            `SELECT id FROM ${tp}markups WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id`, [userId]);
+        const { rows: intervals } = await c.query(
+            `SELECT mti.markup_id, mti.start, mti."end"
+             FROM ${tp}markup_time_intervals mti
+             JOIN ${tp}markups m ON m.id = mti.markup_id
+             WHERE m.user_id = $1 AND mti.deleted_at IS NULL
+             ORDER BY mti.id`, [userId]);
+        return { markups, intervals };
+    } finally {
+        await c.end();
+    }
+}
+
+async function assertMarkupRejected(prefix, body, msgRe) {
+    const path = prefix ? `/${prefix}/markup` : '/markup';
+    const res = await request('POST', path, body);
+    assert.equal(res.status, 400, `expected 400, got ${res.status} ${JSON.stringify(res.body)}`);
+    const msgs = (res.body.errors || []).map(e => e.msg).join('; ');
+    assert.match(msgs, msgRe);
+    const rows = await markupRowsByUser(prefix, body.user_id);
+    assert.equal(rows.markups.length, 0, 'a rejected markup must leave no Markup row');
+    assert.equal(rows.intervals.length, 0, 'a rejected markup must leave no interval row');
+}
+
+test('markup validation: empty intervals → 400, no Markup row', async () => {
+    await assertMarkupRejected('', {
+        video_id: '__e2e__markup_val_empty', v: '1', user_id: 'markup-val-empty', category_id: cats.prv.intro,
+        data: { intervals: [] },
+    }, /data\.intervals must not be empty/);
+});
+
+test('markup validation: end <= start → 400, no Markup row', async () => {
+    await assertMarkupRejected('', {
+        video_id: '__e2e__markup_val_order', v: '1', user_id: 'markup-val-order', category_id: cats.prv.intro,
+        data: { intervals: [{ start: 30, end: 30 }] },
+    }, /data\.intervals\[0\]\.start must be less than end/);
+});
+
+test('markup validation: missing end → 400, no Markup row', async () => {
+    // Before the validator this was a 201 that stored the interval with end = NaN.
+    await assertMarkupRejected('', {
+        video_id: '__e2e__markup_val_noend', v: '1', user_id: 'markup-val-noend', category_id: cats.prv.intro,
+        data: { intervals: [{ start: 10, end: 20 }, { start: 40 }] },
+    }, /data\.intervals\[1\]\.end must be a finite number/);
+});
+
+test('markup validation: valid markup → 201 with its rounded interval', async () => {
+    const userId = 'markup-val-valid';
+    await postMarkup('', {
+        video_id: '__e2e__markup_val_valid', v: '1', user_id: userId, category_id: cats.prv.intro,
+        data: { intervals: [{ start: 5.4, end: '30.6' }] },
+    });
+    const rows = await markupRowsByUser('', userId);
+    assert.equal(rows.markups.length, 1);
+    assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[5, 31]]);
+});
+
+test('markup validation: valid 2-interval markup creates one Markup row and both intervals', async () => {
+    const userId = 'markup-val-two';
+    await postMarkup('', {
+        video_id: '__e2e__markup_val_two', v: '1', user_id: userId, category_id: cats.prv.intro,
+        data: { intervals: [{ start: 0, end: 10 }, { start: 100, end: 130 }] },
+    });
+    const rows = await markupRowsByUser('', userId);
+    assert.equal(rows.markups.length, 1);
+    assert.deepEqual(rows.intervals.map(r => [r.markup_id, r.start, r.end]),
+        [[rows.markups[0].id, 0, 10], [rows.markups[0].id, 100, 130]]);
+});
+
+test('markup validation: rt uses the shared validator (21 intervals → 400, missing end → 400)', async () => {
+    const base = { video_id: '__e2e__markup_val_rt', v: '1', user_id: 'markup-val-rt', category_id: cats.rt.intro, duration: 300 };
+    const tooMany = Array.from({ length: 21 }, (_, i) => ({ start: i * 10, end: i * 10 + 5 }));
+    await assertMarkupRejected('rt', { ...base, data: { intervals: tooMany } }, /at most 20 items/);
+    await assertMarkupRejected('rt', { ...base, data: { intervals: [{ start: 10 }] } }, /data\.intervals\[0\]\.end must be a finite number/);
+});
+
 // ── /admin/user/:internal_id (video-less user view) tests ─────────────────────
 // Route param is INTERNAL users.id (PK), not prv_user_id — prv_user_id is not
 // unique across User rows (unique index is composite (generated_user_id,

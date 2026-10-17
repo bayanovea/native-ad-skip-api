@@ -3,6 +3,7 @@ const { body } = require('express-validator');
 const validateRequest = require('../../middleware/validate-request');
 const verifyBearerToken = require('../../middleware/verify-bearer-token');
 const handler = require('../../middleware/handler');
+const { validateIntervals } = require('../../lib/validate-intervals');
 
 const IGNORE_MARKUPS_USER_RATING_VAL = -2;
 
@@ -19,10 +20,7 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
             if (typeof value !== 'object') throw new Error('data must be an object');
             return true;
         }),
-        body('data.intervals').custom((value) => {
-            if (!Array.isArray(value)) throw new Error('data.intervals must be an array');
-            return true;
-        }),
+        body('data.intervals').custom(validateIntervals),
         body('duration').isInt({ min: 1 }),
         validateRequest,
     ],
@@ -51,21 +49,24 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         // Note: banned-user gate is prv-only by design — rt_users has no banned_at column;
         // moderation tooling and the banned_at column exist only for the prv users table.
 
-        const markup = await models.Markup.create({
-            video_id: video.id,
-            user_id: generatedUserId,
-            prv_user_id: req.body.prv_user_id,
-            category_id: req.body.category_id,
-            internal_user_id: user.id,
-        });
+        // One transaction, so the calculator never sees the markup with only some of its intervals.
+        await sequelize.transaction(async (transaction) => {
+            const markup = await models.Markup.create({
+                video_id: video.id,
+                user_id: generatedUserId,
+                prv_user_id: req.body.prv_user_id,
+                category_id: req.body.category_id,
+                internal_user_id: user.id,
+            }, { transaction });
 
-        for (const interval of req.body.data.intervals) {
-            await models.MarkupTimeInterval.create({
-                markup_id: markup.id,
-                start: Math.round(interval.start),
-                end: Math.round(interval.end),
-            });
-        }
+            for (const interval of req.body.data.intervals) {
+                await models.MarkupTimeInterval.create({
+                    markup_id: markup.id,
+                    start: Math.round(Number(interval.start)),
+                    end: Math.round(Number(interval.end)),
+                }, { transaction });
+            }
+        });
 
         res.status(201).send('Created');
     }));
