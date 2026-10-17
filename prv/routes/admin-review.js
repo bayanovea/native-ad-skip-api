@@ -1,7 +1,7 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
 const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
-const { ReviewInputError, SIGNALS_WINDOW, REVIEWER_MAX } = require('../repository/review');
+const { ReviewInputError, SIGNALS_WINDOW } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 
 // Assessor review page (prv only). Sibling of admin-moderation.js: same
@@ -26,13 +26,15 @@ function safeLink(link) {
     return typeof link === 'string' && /^https?:\/\//i.test(link.trim()) ? link.trim() : null;
 }
 
-// "Wrong text" is a page-only shortcut, not a stored verdict: it saves
-// `unclear` with this comment (the cue text does not match what the video says).
-const WRONG_TEXT = 'wrong_text';
+// Verdict buttons in hotkey order (1–4); 5 toggles the track flag.
+const CHOICES = VERDICTS;
+// Video-level flag saved next to the verdict: the subtitle track does not
+// match the player (text or timing). Independent of the verdict: the verdict
+// says what the text is, the flag says the video is not where the text is.
+const TRACK_FLAG = 'track_mismatch';
+// Legacy "Wrong text" verdicts (before 2026-10-18) are `unclear` with this
+// comment in front; the page still shows them as such.
 const WRONG_TEXT_COMMENT = 'Текст в видео не совпадает с текстом из субтитров.';
-// Verdict buttons in hotkey order (1–5).
-const CHOICES = [...VERDICTS, WRONG_TEXT];
-const CHOICE_LABELS = { [WRONG_TEXT]: 'Wrong text' };
 
 // Inline SVG icons (stroke = currentColor, Lucide-style 24×24 paths).
 function icon(paths, cls = 'icon') {
@@ -43,22 +45,23 @@ const CHOICE_ICONS = {
     self_promotion: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
     not_ad: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
     unclear: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
-    [WRONG_TEXT]: '<path d="M3 6h14"/><path d="M3 12h9"/><path d="M3 18h7"/><path d="m15 14 6 6"/><path d="m21 14-6 6"/>',
 };
 const QUOTE_ICON = '<path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/>';
 
-// The button a stored verdict lights up: `unclear` saved through "Wrong text"
-// keeps showing as Wrong text.
-function choiceOf(verdict) {
-    if (!verdict) return null;
-    if (verdict.verdict === 'unclear' && (verdict.comment || '').startsWith(WRONG_TEXT_COMMENT)) return WRONG_TEXT;
-    return verdict.verdict;
+function isLegacyWrongText(verdict) {
+    return verdict != null && verdict.verdict === 'unclear' && (verdict.comment || '').startsWith(WRONG_TEXT_COMMENT);
 }
 
 // Nav reference as the page shows it: the raw link becomes `player_link`
 // (null when not http(s)), so switching items can open the player.
 function presentNav(ref) {
     return ref ? { item_code: ref.item_code, decided: ref.decided, player_link: safeLink(ref.link) } : null;
+}
+
+// Same shape recordVerdict accepts; lets the decide route tell a bad id from
+// an unknown item before touching the repository.
+function validBodyItemId(id) {
+    return Number.isInteger(id) && id > 0 && id <= 2147483647;
 }
 
 function badge(category) {
@@ -138,6 +141,13 @@ const STYLE = `
         .hotkeys { margin-top: 18px; }
         .empty { color: #64748b; font-size: 0.85rem; }
         .signals-line { font-size: 0.85rem; margin-bottom: 8px; }
+        .rules { font-size: 0.85rem; color: #cbd5e1; line-height: 1.5; }
+        .rules li { margin-left: 18px; }
+        .flag-row { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; font-size: 0.9rem; }
+        .flag-row input { width: 18px; height: 18px; accent-color: #f59e0b; }
+        .flag-row .who { color: #64748b; font-size: 0.8rem; }
+        .picker a { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 10px 18px; border-radius: 8px; margin: 0 10px 10px 0; font-size: 1rem; }
+        .warn { color: #fcd34d; }
 `;
 
 function page(title, body) {
@@ -156,23 +166,43 @@ ${body}
 </html>`;
 }
 
-function renderBatchList(batches, token) {
+function renderReviewerPicker(reviewers, token) {
     const t = escapeHtml(urlToken(token));
+    const links = reviewers.map(r =>
+        `<a href="/admin/review?reviewer=${escapeHtml(encodeURIComponent(r))}&amp;verifyBearerToken=${t}">${escapeHtml(r)}</a>`).join('');
+    return page('Review', `
+    <h1>Review</h1>
+    <p class="muted" style="margin-bottom:14px">Who are you? Every verdict is saved under this name.</p>
+    <div class="picker">${links || '<span class="empty">No reviewers registered (prv_review_reviewers).</span>'}</div>`);
+}
+
+function renderBatchList(batches, reviewer, showAll, token) {
+    const t = escapeHtml(urlToken(token));
+    const r = escapeHtml(encodeURIComponent(reviewer));
     const rows = batches.map(b => `
             <tr>
-                <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?verifyBearerToken=${t}">${escapeHtml(b.batch)}</a></td>
+                <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${t}">${escapeHtml(b.batch)}</a></td>
+                <td>${b.assignee ? escapeHtml(b.assignee) : '<span class="muted">anyone</span>'}</td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
             </tr>`).join('');
     return page('Review', `
     <h1>Review</h1>
-    <div class="toolbar"><a href="/admin/review?format=json&amp;verifyBearerToken=${t}">JSON</a></div>
+    <div class="toolbar">
+        <span>Reviewer: <strong>${escapeHtml(reviewer)}</strong></span>
+        <a href="/admin/review?verifyBearerToken=${t}">switch</a>
+        <span class="spacer"></span>
+        ${showAll
+        ? `<a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${t}">my batches</a>`
+        : `<a href="/admin/review?reviewer=${r}&amp;show=all&amp;verifyBearerToken=${t}">all batches</a>`}
+        <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${t}">JSON</a>
+    </div>
     ${batches.length > 0 ? `
     <table>
-        <thead><tr><th>Batch</th><th>Items</th><th>Decided</th><th>Open</th></tr></thead>
+        <thead><tr><th>Batch</th><th>Assignee</th><th>Items</th><th>Decided</th><th>Open</th></tr></thead>
         <tbody>${rows}</tbody>
-    </table>` : '<div class="card empty">No review batches imported yet (scripts/import-review-sheet.js).</div>'}
+    </table>` : `<div class="card empty">${showAll ? 'No review batches imported yet (scripts/import-review-sheet.js).' : 'Nothing assigned to you or open to anyone.'}</div>`}
 <script>
     // A batch opens in a tab this page opens: the item page later turns that
     // tab into a player and the browser lets a page close only tabs a script
@@ -234,10 +264,11 @@ function renderSignals(signals, token) {
 }
 
 function renderItemPage(payload, token) {
-    const { batch, item, nav, signals } = payload;
+    const { batch, item, nav, signals, reviewer, video_flags } = payload;
     const t = escapeHtml(urlToken(token));
+    const r = escapeHtml(encodeURIComponent(reviewer));
     const itemHref = (code) =>
-        `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;verifyBearerToken=${t}`;
+        `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;reviewer=${r}&amp;verifyBearerToken=${t}`;
     const navLink = (ref, label) => ref
         ? `<a class="nav-btn" href="${itemHref(ref.item_code)}" data-item-code="${escapeHtml(ref.item_code)}"${ref.player_link ? ` data-player-link="${escapeHtml(ref.player_link)}"` : ''}>${label}</a>`
         : `<span class="nav-btn disabled">${label}</span>`;
@@ -247,7 +278,7 @@ function renderItemPage(payload, token) {
 
     const decidedBlock = current ? `
     <div class="card">
-        <div class="current">Current verdict: ${badge(current.verdict)}
+        <div class="current">Current verdict: ${badge(current.verdict)}${isLegacyWrongText(current) ? ' <span class="warn">(legacy "Wrong text": re-decide with the track flag)</span>' : ''}
             <span class="muted">by ${escapeHtml(current.reviewer)} (${escapeHtml(current.source)}), ${formatDate(current.decided_at)}</span></div>
         ${current.comment ? `<blockquote>${escapeHtml(current.comment)}</blockquote>` : ''}
         <div class="current flagged-by" style="margin-top:10px">Flagged by: ${(item.flagged_by || []).map(r => `<code>${escapeHtml(r)}</code>`).join(' ') || '<span class="muted">—</span>'}</div>
@@ -264,9 +295,11 @@ function renderItemPage(payload, token) {
         </table>
     </div>` : '';
 
-    const currentChoice = choiceOf(current);
+    const currentChoice = current ? current.verdict : null;
     const verdictButtons = CHOICES.map((v, i) => `
-            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${CHOICE_LABELS[v] || v}</button>`).join('');
+            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${v}</button>`).join('');
+    const track = video_flags[TRACK_FLAG];
+    const trackOn = track ? track.value === true : false;
 
     // Client state: only what the script needs. Never includes flagged_by.
     const state = {
@@ -282,16 +315,18 @@ function renderItemPage(payload, token) {
         verdict: current ? current.verdict : null,
         choice: currentChoice,
         comment: current && current.comment ? current.comment : '',
-        reviewer: current ? current.reviewer : null,
+        reviewer,
+        verdict_reviewer: current ? current.reviewer : null,
+        track_mismatch: trackOn,
         choices: CHOICES,
-        wrong_text_comment: WRONG_TEXT_COMMENT,
     };
 
     return page(`${item.item_code} · ${batch.batch}`, `
     <div class="toolbar">
-        <a href="/admin/review?verifyBearerToken=${t}">All batches</a>
+        <a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${t}">All batches</a>
         <strong>${escapeHtml(batch.batch)}</strong>
         <span>${batch.decided} / ${batch.total} decided · ${batch.open} open</span>
+        <span class="muted">· reviewer <strong>${escapeHtml(reviewer)}</strong>${batch.assignee && batch.assignee !== reviewer ? ` <span class="warn">(batch assigned to ${escapeHtml(batch.assignee)})</span>` : ''}</span>
         <span class="spacer"></span>
         ${navLink(nav.prev, `◀ ${nav.prev ? escapeHtml(nav.prev.item_code) : ''}`)}
         <strong>${escapeHtml(item.item_code)}</strong>
@@ -314,32 +349,38 @@ function renderItemPage(payload, token) {
 
     <div class="card">
         <div class="proposed"><span class="muted">Proposed as:</span> ${proposed}</div>
-        <label>Verdict</label>
+        <label>Verdict — what the <em>text</em> is</label>
         <div class="verdicts">${verdictButtons}
         </div>
-        <div class="row">
-            <div style="flex:1">
-                <label for="comment">Comment</label>
-                <textarea id="comment" style="width:100%">${escapeHtml(current && current.comment ? current.comment : '')}</textarea>
-            </div>
-            <div>
-                <label for="reviewer">Reviewer</label>
-                <input type="text" id="reviewer" maxlength="${REVIEWER_MAX}" placeholder="your name">
-            </div>
+        <label>Video</label>
+        <div class="flag-row">
+            <input type="checkbox" id="track-flag"${trackOn ? ' checked' : ''} onchange="setStatus('')">
+            <label for="track-flag" style="margin:0;color:#e2e8f0;font-size:0.9rem"><kbd>5</kbd> Subtitle track ≠ video (text or timing off; whole video)</label>
+            ${track ? `<span class="who">set ${track.value ? 'on' : 'off'} by ${escapeHtml(track.reviewer)}, ${formatDate(track.created_at)}</span>` : ''}
         </div>
+        <label for="comment">Comment</label>
+        <textarea id="comment" style="width:100%">${escapeHtml(current && current.comment ? current.comment : '')}</textarea>
         <button type="button" class="save-btn" id="save-btn" onclick="save()">Save ⏎</button>
         <div class="status" id="status"></div>
     </div>
 
+    <div class="card rules">
+        <strong>How to decide</strong>
+        <ul>
+            <li><strong>sponsor</strong> — an outside party paid for this piece. <strong>self_promotion</strong> — the speaker promotes themselves: subscribe, like, comment, own products, channels, events, client work. The test is <em>who paid</em>, not how long or how annoying it is.</li>
+            <li>A call to action woven into the content ("write in the comments which…") is still <strong>self_promotion</strong>; say in the comment that you would not skip it. Whether to skip is decided by thresholds in code, not here.</li>
+            <li><strong>not_ad</strong> — the text is neither. <strong>unclear</strong> — only when the text itself does not let you decide.</li>
+            <li>Judge the verdict by the <em>text</em>. If the player shows something else at these times (other words, or the same words shifted), tick <strong>Subtitle track ≠ video</strong> as well; it marks the whole video, not this item.</li>
+        </ul>
+    </div>
+
     ${renderSignals(signals, token)}
 
-    <div class="muted hotkeys">Hotkeys: <kbd>1</kbd>–<kbd>${CHOICES.length}</kbd> verdict · <kbd>c</kbd> comment · <kbd>Enter</kbd> save (<kbd>Ctrl/Cmd+Enter</kbd> in the comment box) · <kbd>Esc</kbd> leave a text box · <kbd>j</kbd> / <kbd>k</kbd> next / previous · <kbd>o</kbd> open player</div>
+    <div class="muted hotkeys">Hotkeys: <kbd>1</kbd>–<kbd>${CHOICES.length}</kbd> verdict · <kbd>5</kbd> track flag · <kbd>c</kbd> comment · <kbd>Enter</kbd> save (<kbd>Ctrl/Cmd+Enter</kbd> in the comment box) · <kbd>Esc</kbd> leave a text box · <kbd>j</kbd> / <kbd>k</kbd> next / previous · <kbd>o</kbd> open player</div>
 
 <script>
     const STATE = ${scriptJson(state)};
-    const REVIEWER_KEY = 'adminReview.reviewer';
     const FLASH_KEY = 'adminReview.flash';
-    const WRONG_TEXT = 'wrong_text';
     let picked = STATE.choice;
     let saving = false;
 
@@ -353,7 +394,7 @@ function renderItemPage(payload, token) {
     }
     function itemUrl(code) {
         return '/admin/review/' + encodeURIComponent(STATE.batch) + '?item=' + encodeURIComponent(code)
-            + '&verifyBearerToken=' + encodeURIComponent(STATE.token);
+            + '&reviewer=' + encodeURIComponent(STATE.reviewer) + '&verifyBearerToken=' + encodeURIComponent(STATE.token);
     }
     function openPlayer(link) {
         if (link) window.open(link, '_blank', 'noopener,noreferrer');
@@ -392,42 +433,32 @@ function renderItemPage(payload, token) {
         el.textContent = text;
         el.className = 'status' + (kind ? ' ' + kind : '');
     }
-    // Button → stored verdict: Wrong text saves as unclear.
-    function verdictOf(choice) {
-        return choice === WRONG_TEXT ? 'unclear' : choice;
-    }
-    // Wrong text puts its canned comment in front of the comment box; leaving
-    // it for another button takes the canned text back out.
     function pick(v) {
-        const box = document.getElementById('comment');
-        const canned = STATE.wrong_text_comment;
-        if (v === WRONG_TEXT && !box.value.startsWith(canned)) {
-            box.value = box.value.trim() ? canned + '\\n' + box.value : canned;
-        } else if (v !== WRONG_TEXT && picked === WRONG_TEXT && box.value.startsWith(canned)) {
-            box.value = box.value.slice(canned.length).replace(/^\\n/, '');
-        }
         picked = v;
         document.querySelectorAll('.verdict-btn').forEach(function (b) {
             b.classList.toggle('selected', b.dataset.verdict === v);
         });
         setStatus('');
     }
+    function toggleTrack() {
+        const box = document.getElementById('track-flag');
+        box.checked = !box.checked;
+        setStatus('');
+    }
     async function save() {
         if (saving) return;
         if (!picked) { setStatus('Pick a verdict first (1–' + STATE.choices.length + ').', 'error'); return; }
-        const verdict = verdictOf(picked);
+        const verdict = picked;
         const comment = document.getElementById('comment').value;
-        const reviewerEl = document.getElementById('reviewer');
-        const reviewer = reviewerEl.value.trim();
+        const track = document.getElementById('track-flag').checked;
         // A stray Enter on a decided item must not append a copy of its
         // verdict; another reviewer saving the same verdict is a new opinion.
+        // The server skips the duplicate row too; this only spares the round trip.
         if (verdict === STATE.verdict && comment.trim() === STATE.comment
-            && (reviewer === '' || reviewer === STATE.reviewer)) {
+            && STATE.reviewer === STATE.verdict_reviewer && track === STATE.track_mismatch) {
             setStatus('No change: ' + STATE.item_code + ' is already ' + verdict + '.');
             return;
         }
-        if (!reviewer) { setStatus('Enter your name in Reviewer.', 'error'); reviewerEl.focus(); return; }
-        storageSet('localStorage', REVIEWER_KEY, reviewer);
         saving = true;
         const btn = document.getElementById('save-btn');
         btn.disabled = true;
@@ -439,13 +470,14 @@ function renderItemPage(payload, token) {
                     item_id: STATE.item_id,
                     verdict: verdict,
                     comment: comment,
-                    reviewer: reviewer,
+                    reviewer: STATE.reviewer,
+                    track_mismatch: track,
                 }),
             });
             if (res.status === 201) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
-                let flash = 'Saved ' + STATE.item_code + ': ' + verdict + '. Flagged by: ' + flagged;
+                let flash = 'Saved ' + STATE.item_code + ': ' + verdict + (data.track_mismatch ? ' (track ≠ video)' : '') + '. Flagged by: ' + flagged;
                 if (closePlayerTab() === false) {
                     flash += '. Close the previous video tab by hand: the browser lets this page close only tabs it opened (start from the batch list).';
                 }
@@ -471,14 +503,13 @@ function renderItemPage(payload, token) {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); return; }
         if (typing) {
             if (e.key === 'Escape') el.blur();
-            // Enter in the one-line Reviewer box saves (the first save sends the user there).
-            else if (e.key === 'Enter' && el.id === 'reviewer') { e.preventDefault(); save(); }
             return;
         }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const digit = /^Digit([0-9])$/.exec(e.code || '');
         const n = digit ? Number(digit[1]) : Number(e.key);
         if (Number.isInteger(n) && n >= 1 && n <= STATE.choices.length) { e.preventDefault(); pick(STATE.choices[n - 1]); return; }
+        if (n === STATE.choices.length + 1) { e.preventDefault(); toggleTrack(); return; }
         if (e.key === 'Enter') {
             // Enter on a focused link (e.g. after clicking "Open in player") keeps following it.
             if (tag === 'A') return;
@@ -501,7 +532,6 @@ function renderItemPage(payload, token) {
         goTo(a.dataset.itemCode, a.dataset.playerLink);
     });
     (function init() {
-        document.getElementById('reviewer').value = storageGet('localStorage', REVIEWER_KEY) || '';
         const flash = storageGet('sessionStorage', FLASH_KEY);
         if (flash) { setStatus(flash, 'ok'); storageSet('sessionStorage', FLASH_KEY, null); }
     })();
@@ -512,20 +542,42 @@ function renderItemPage(payload, token) {
 module.exports = function createAdminReviewRoutes(models, { reviewRepository }) {
     const router = express.Router();
 
-    // GET /admin/review — batch list with progress.
+    // The reviewer travels in `?reviewer=` for the whole session (links and
+    // saves carry it on). Returns the code, or null when missing or unknown.
+    async function reviewerOf(req) {
+        const code = typeof req.query.reviewer === 'string' ? req.query.reviewer.trim() : '';
+        return code && await reviewRepository.isReviewer(code) ? code : null;
+    }
+
+    // GET /admin/review — reviewer picker, then the batch list with progress
+    // (the reviewer's own and unassigned batches; `show=all` for every batch).
     router.get('/admin/review', handler(async (req, res) => {
         if (!authorized(req, res)) return;
-        const batches = await reviewRepository.listBatches();
+        const reviewer = await reviewerOf(req);
+        if (!reviewer) {
+            const reviewers = await reviewRepository.listReviewers();
+            if (req.query.format === 'json') {
+                res.status(req.query.reviewer ? 400 : 200).json({ reviewers, reviewer: null });
+                return;
+            }
+            res.setHeader('Content-Type', 'text/html');
+            res.send(renderReviewerPicker(reviewers, req.query.verifyBearerToken));
+            return;
+        }
+        const showAll = req.query.show === 'all';
+        const batches = await reviewRepository.listBatches({ reviewer: showAll ? null : reviewer });
         if (req.query.format === 'json') {
-            res.json({ batches });
+            res.json({ reviewer, batches });
             return;
         }
         res.setHeader('Content-Type', 'text/html');
-        res.send(renderBatchList(batches, req.query.verifyBearerToken));
+        res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken));
     }));
 
-    // POST /admin/review/decide — append a verdict from the page. Validation
-    // lives in reviewRepository.recordVerdict (ReviewInputError → 400).
+    // POST /admin/review/decide — append a verdict from the page, and the video
+    // flag when it changed. Validation lives in the repository
+    // (ReviewInputError → 400). A verdict identical to the item's latest one by
+    // the same reviewer is not appended again (a flag-only save, a stray Enter).
     router.post('/admin/review/decide', handler(async (req, res) => {
         if (!authorized(req, res)) return;
         const body = req.body;
@@ -533,15 +585,33 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             res.status(400).send('request body must be a JSON object');
             return;
         }
-        let row;
+        let item;
         try {
-            row = await reviewRepository.recordVerdict({
-                item_id: body.item_id,
-                verdict: body.verdict,
-                comment: body.comment,
-                reviewer: body.reviewer,
-                source: 'page',
-            });
+            if (!(await reviewRepository.isReviewer(typeof body.reviewer === 'string' ? body.reviewer.trim() : ''))) {
+                throw new ReviewInputError(`unknown reviewer ${body.reviewer}`);
+            }
+            const reviewer = body.reviewer.trim();
+            if (body.track_mismatch !== undefined && typeof body.track_mismatch !== 'boolean') {
+                throw new ReviewInputError('track_mismatch must be true or false');
+            }
+            const before = await reviewRepository.getItemById(body.item_id);
+            if (!before && !validBodyItemId(body.item_id)) throw new ReviewInputError('item_id must be a positive integer');
+            if (!before) throw new ReviewInputError(`unknown review item ${body.item_id}`);
+            const comment = body.comment == null ? null : body.comment;
+            const text = typeof comment === 'string' ? comment.trim() : comment;
+            const same = before.verdict && before.verdict.verdict === body.verdict
+                && (before.verdict.comment || null) === (text === '' ? null : text)
+                && before.verdict.reviewer === reviewer;
+            if (!same) {
+                await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page' });
+            }
+            if (body.track_mismatch !== undefined) {
+                const current = await reviewRepository.getVideoFlag(before.native_id, TRACK_FLAG);
+                if ((current ? current.value : false) !== body.track_mismatch) {
+                    await reviewRepository.setVideoFlag({ native_id: before.native_id, flag: TRACK_FLAG, value: body.track_mismatch, reviewer });
+                }
+            }
+            item = await reviewRepository.getItemById(body.item_id);
         } catch (err) {
             if (err instanceof ReviewInputError) {
                 res.status(400).send(err.message);
@@ -549,15 +619,17 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             }
             throw err;
         }
-        // The verdict comes from the row just written (another reviewer may
-        // have decided the same item meanwhile); the item only adds code,
-        // position and flagged_by.
-        const item = await reviewRepository.getItemById(row.item_id);
-        const next = await reviewRepository.nextOpenItem(item.batch, item.position);
+        // The verdict is the item's latest (another reviewer may have decided
+        // the same item meanwhile).
+        const [next, track] = await Promise.all([
+            reviewRepository.nextOpenItem(item.batch, item.position),
+            reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
+        ]);
         res.status(201).json({
             item_id: item.id,
             item_code: item.item_code,
-            verdict: row.verdict,
+            verdict: item.verdict.verdict,
+            track_mismatch: track ? track.value : false,
             flagged_by: item.flagged_by || [],
             next_item: next ? next.item_code : null,
             next_player_link: next ? safeLink(next.link) : null,
@@ -565,9 +637,16 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     }));
 
     // GET /admin/review/:batch?item=C7 — item page; without `item` the first
-    // open item (or the last one when the batch is done).
+    // open item (or the last one when the batch is done). Needs a reviewer:
+    // without one the HTML goes back to the picker, JSON gets 400.
     router.get('/admin/review/:batch', handler(async (req, res) => {
         if (!authorized(req, res)) return;
+        const reviewer = await reviewerOf(req);
+        if (!reviewer) {
+            if (req.query.format === 'json') { res.status(400).send('reviewer required'); return; }
+            res.redirect(302, `/admin/review?verifyBearerToken=${encodeURIComponent(req.query.verifyBearerToken)}`);
+            return;
+        }
         const batchName = req.params.batch;
         const progress = await reviewRepository.getBatchProgress(batchName);
         if (!progress) { res.status(404).send('Batch not found'); return; }
@@ -579,14 +658,17 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         if (!raw) { res.status(404).send('Item not found'); return; }
 
         const item = presentItem(raw);
-        const [{ prev, next }, firstOpen, signals] = await Promise.all([
+        const [{ prev, next }, firstOpen, signals, track] = await Promise.all([
             reviewRepository.neighbours(batchName, item.position),
             reviewRepository.firstOpenItem(batchName),
             reviewRepository.getSignals(item.native_id, item.start, item.end),
+            reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
         ]);
         const payload = {
+            reviewer,
             batch: progress,
             item,
+            video_flags: { [TRACK_FLAG]: track },
             nav: { prev: presentNav(prev), next: presentNav(next), first_open: presentNav(firstOpen) },
             signals,
         };

@@ -4,6 +4,9 @@ const { VERDICTS } = require('../../lib/review-sheet');
 const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
 const REVIEWER_MAX = 64;
+// Video-level flags a reviewer may set (prv_review_video_flags.flag).
+const VIDEO_FLAGS = ['track_mismatch'];
+const VALID_FLAGS = new Set(VIDEO_FLAGS);
 const SIGNALS_WINDOW = 30;
 // item_id is a Postgres INTEGER; anything larger fails in the DB (500), not as input.
 const MAX_ITEM_ID = 2147483647;
@@ -104,18 +107,26 @@ module.exports = function createReviewRepository(models, sequelize) {
         return row || null;
     }
 
-    // Progress rows `{ batch, total, decided, open }`, optionally for one batch.
-    function batchProgress(batch) {
+    // Progress rows `{ batch, assignee, total, decided, open }`. `batch`
+    // narrows to one; `reviewer` keeps the batches that reviewer may take
+    // (assigned to them or to nobody). A batch without a prv_review_batches
+    // row counts as unassigned.
+    function batchProgress({ batch = null, reviewer = null } = {}) {
+        const where = [];
+        if (batch != null) where.push('i.batch = :batch');
+        if (reviewer != null) where.push('(b.assignee IS NULL OR b.assignee = :reviewer)');
         return sequelize.query(
             `SELECT i.batch,
+                    b.assignee,
                     COUNT(*)::int AS total,
                     COUNT(*) FILTER (WHERE ${IS_DECIDED})::int AS decided,
                     COUNT(*) FILTER (WHERE NOT ${IS_DECIDED})::int AS open
                FROM prv_review_items i
-              ${batch == null ? '' : 'WHERE i.batch = :batch'}
-              GROUP BY i.batch
+               LEFT JOIN prv_review_batches b ON b.batch = i.batch
+              ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+              GROUP BY i.batch, b.assignee
               ORDER BY MAX(i.created_at) DESC, i.batch ASC`,
-            { replacements: { batch }, type: QueryTypes.SELECT }
+            { replacements: { batch, reviewer }, type: QueryTypes.SELECT }
         );
     }
 
@@ -123,17 +134,77 @@ module.exports = function createReviewRepository(models, sequelize) {
 
     return {
         /**
-         * All batches with progress: `[{ batch, total, decided, open }]`,
-         * most recently imported first.
+         * Batches with progress: `[{ batch, assignee, total, decided, open }]`,
+         * most recently imported first. With `reviewer`, only the batches that
+         * reviewer may take (theirs or unassigned).
          */
-        listBatches() {
-            return batchProgress(null);
+        listBatches({ reviewer = null } = {}) {
+            return batchProgress({ reviewer });
         },
 
-        /** Progress of one batch: `{ batch, total, decided, open }` or null. */
+        /** Progress of one batch: `{ batch, assignee, total, decided, open }` or null. */
         async getBatchProgress(batch) {
-            const [row] = await batchProgress(batch);
+            const [row] = await batchProgress({ batch });
             return row || null;
+        },
+
+        /** Reviewer codes the page offers, alphabetical. */
+        async listReviewers() {
+            const rows = await sequelize.query(
+                'SELECT code FROM prv_review_reviewers ORDER BY code', { type: QueryTypes.SELECT });
+            return rows.map((r) => r.code);
+        },
+
+        /** True when `code` is a registered reviewer. */
+        async isReviewer(code, { transaction } = {}) {
+            if (typeof code !== 'string' || code === '') return false;
+            const row = await models.ReviewReviewer.findByPk(code, { attributes: ['code'], transaction });
+            return row != null;
+        },
+
+        /**
+         * Register `batch` with its assignee (null = anyone). An existing batch
+         * keeps its row; asking for a different assignee than the stored one
+         * throws ReviewInputError, so an import never silently re-routes a batch.
+         */
+        async createBatch(batch, assignee, { transaction } = {}) {
+            if (assignee != null && !(await this.isReviewer(assignee, { transaction }))) {
+                throw new ReviewInputError(`unknown reviewer ${assignee}`);
+            }
+            const existing = await models.ReviewBatch.findByPk(batch, { transaction });
+            if (existing) {
+                if (assignee != null && existing.assignee !== assignee) {
+                    throw new ReviewInputError(`batch ${batch} is assigned to ${existing.assignee || 'nobody'}, not ${assignee}`);
+                }
+                return existing;
+            }
+            return models.ReviewBatch.create({ batch, assignee: assignee || null }, { transaction });
+        },
+
+        /**
+         * Latest value of a video flag as `{ value, reviewer, created_at }`,
+         * or null when nobody has set it.
+         */
+        async getVideoFlag(native_id, flag) {
+            const [row] = await sequelize.query(
+                `SELECT value, reviewer, created_at FROM prv_review_video_flags
+                  WHERE native_id = :native_id AND flag = :flag
+                  ORDER BY created_at DESC, id DESC LIMIT 1`,
+                { replacements: { native_id, flag }, type: QueryTypes.SELECT }
+            );
+            return row || null;
+        },
+
+        /**
+         * Append a video flag row. Validates flag, value (boolean) and reviewer;
+         * throws ReviewInputError on bad input. Returns the created row.
+         */
+        async setVideoFlag({ native_id, flag, value, reviewer, transaction } = {}) {
+            if (!VALID_FLAGS.has(flag)) throw new ReviewInputError(`flag must be one of ${VIDEO_FLAGS.join(', ')}`);
+            if (typeof value !== 'boolean') throw new ReviewInputError(`${flag} must be true or false`);
+            if (typeof native_id !== 'string' || native_id === '') throw new ReviewInputError('native_id required');
+            if (!(await this.isReviewer(reviewer, { transaction }))) throw new ReviewInputError(`unknown reviewer ${reviewer}`);
+            return models.ReviewVideoFlag.create({ native_id, flag, value, reviewer }, { transaction });
         },
 
         getItem(batch, itemCode) {
@@ -237,8 +308,9 @@ module.exports = function createReviewRepository(models, sequelize) {
         /**
          * Append a verdict row — the single write entrypoint for verdicts
          * (page and importer). Validates everything and throws
-         * ReviewInputError on bad input; reviewer and comment are trimmed,
-         * empty comment → null. Returns the created row.
+         * ReviewInputError on bad input; reviewer (a code from
+         * prv_review_reviewers) and comment are trimmed, empty comment → null.
+         * Returns the created row.
          */
         async recordVerdict({ item_id, verdict, comment, reviewer, source, transaction } = {}) {
             // source is set by the callers themselves, never by user input.
@@ -249,6 +321,9 @@ module.exports = function createReviewRepository(models, sequelize) {
             const who = typeof reviewer === 'string' ? reviewer.trim() : '';
             if (who === '' || who.length > REVIEWER_MAX) {
                 throw new ReviewInputError(`reviewer must be 1-${REVIEWER_MAX} characters`);
+            }
+            if (!(await this.isReviewer(who, { transaction }))) {
+                throw new ReviewInputError(`unknown reviewer ${who}`);
             }
             if (!validItemId(item_id)) {
                 throw new ReviewInputError('item_id must be a positive integer');
@@ -364,3 +439,4 @@ module.exports = function createReviewRepository(models, sequelize) {
 module.exports.ReviewInputError = ReviewInputError;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
 module.exports.REVIEWER_MAX = REVIEWER_MAX;
+module.exports.VIDEO_FLAGS = VIDEO_FLAGS;

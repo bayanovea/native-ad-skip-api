@@ -169,6 +169,36 @@ module.exports = function(sequelize) {
     ReviewItem.hasMany(ReviewVerdict, { foreignKey: 'item_id', as: 'verdicts' });
     ReviewVerdict.belongsTo(ReviewItem, { foreignKey: 'item_id', as: 'item' });
 
+    // Who may review: the page makes the reviewer pick a code from this table
+    // and every verdict / flag carries it. Seeded in lib/schema.js.
+    const ReviewReviewer = sequelize.define('review_reviewer', {
+        code: { type: DataTypes.STRING(64), primaryKey: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_review_reviewers', timestamps: false });
+
+    // One row per batch; `assignee` null = any reviewer may take it (first come).
+    // Items reference the batch by name; a batch without a row counts as unassigned.
+    const ReviewBatch = sequelize.define('review_batch', {
+        batch: { type: DataTypes.STRING(64), primaryKey: true },
+        assignee: { type: DataTypes.STRING(64), allowNull: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_review_batches', timestamps: false });
+
+    // Video-level facts a reviewer records next to a verdict (today only
+    // `track_mismatch`: the subtitle track does not match the player).
+    // Append-only, latest row per (native_id, flag) wins, like verdicts.
+    const ReviewVideoFlag = sequelize.define('review_video_flag', {
+        native_id: { type: DataTypes.STRING(64), allowNull: false },
+        flag: { type: DataTypes.STRING(32), allowNull: false },
+        value: { type: DataTypes.BOOLEAN, allowNull: false },
+        reviewer: { type: DataTypes.STRING(64), allowNull: false },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, {
+        tableName: 'prv_review_video_flags',
+        timestamps: false,
+        indexes: [{ fields: [{ name: 'native_id' }, { name: 'flag' }, { name: 'created_at', order: 'DESC' }] }],
+    });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -183,5 +213,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag };
 };

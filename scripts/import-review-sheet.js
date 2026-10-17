@@ -8,7 +8,9 @@
 // stretch) fails and writes nothing.
 //
 // Usage: DB_NAME=skipper DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=… \
-//        node scripts/import-review-sheet.js <sheet.md> [--batch NAME]
+//        node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--assignee CODE] [--reviewer CODE]
+// --assignee: the reviewer the batch is for (default: anyone may take it);
+// --reviewer: who the md verdicts belong to (default bayanovea, the owner's sheets).
 // The key file is <sheet>.key.tsv next to the md. Tables must exist
 // (sequelize.sync(): app boot or scripts/sync-db.js).
 
@@ -21,20 +23,20 @@ const createReviewRepository = require('../prv/repository/review');
 
 function usage(msg) {
     if (msg) console.error(msg);
-    console.error('usage: node scripts/import-review-sheet.js <sheet.md> [--batch NAME]');
+    console.error('usage: node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--assignee CODE] [--reviewer CODE]');
     process.exit(2);
 }
 
 function parseArgs(argv) {
+    const opts = { batch: null, assignee: null, reviewer: 'bayanovea' };
     let mdPath = null;
-    let batch = null;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        if (a === '--batch') {
-            batch = argv[++i];
-            if (!batch) usage('--batch needs a value');
-        } else if (a.startsWith('--batch=')) {
-            batch = a.slice('--batch='.length);
+        const m = /^--(batch|assignee|reviewer)(?:=(.*))?$/.exec(a);
+        if (m) {
+            const value = m[2] != null ? m[2] : argv[++i];
+            if (!value) usage(`--${m[1]} needs a value`);
+            opts[m[1]] = value;
         } else if (a.startsWith('-')) {
             usage(`unknown option ${a}`);
         } else if (!mdPath) {
@@ -45,7 +47,7 @@ function parseArgs(argv) {
     }
     if (!mdPath) usage();
     if (!mdPath.endsWith('.md')) usage(`${mdPath}: expected a .md file`);
-    return { mdPath, batch: batch || path.basename(mdPath, '.md') };
+    return { mdPath, ...opts, batch: opts.batch || path.basename(mdPath, '.md') };
 }
 
 function timestamp(d = new Date()) {
@@ -68,9 +70,10 @@ function backupMd(mdPath) {
     }
 }
 
-async function importItems(sequelize, review, batch, items) {
+async function importItems(sequelize, review, batch, items, { assignee, reviewer }) {
     const summary = { inserted: [], present: [], imported: [], skipped: [] };
     await sequelize.transaction(async (transaction) => {
+        await review.createBatch(batch, assignee, { transaction });
         const { inserted, present } = await review.insertItems(batch, items, { transaction });
         summary.inserted = inserted;
         summary.present = present;
@@ -101,7 +104,7 @@ async function importItems(sequelize, review, batch, items) {
                 item_id: row.id,
                 verdict: it.verdict,
                 comment: it.comment,
-                reviewer: 'owner',
+                reviewer,
                 source: 'import',
                 transaction,
             });
@@ -111,9 +114,9 @@ async function importItems(sequelize, review, batch, items) {
     return summary;
 }
 
-function printSummary(batch, summary) {
+function printSummary(batch, assignee, summary) {
     const list = (codes) => (codes.length ? ` (${codes.join(', ')})` : '');
-    console.log(`batch ${batch}`);
+    console.log(`batch ${batch} (assignee: ${assignee || 'anyone'})`);
     console.log(`items inserted: ${summary.inserted.length}`);
     console.log(`items already present: ${summary.present.length}${list(summary.present)}`);
     console.log(`verdicts imported: ${summary.imported.length}`);
@@ -124,7 +127,7 @@ function printSummary(batch, summary) {
 }
 
 async function main() {
-    const { mdPath, batch } = parseArgs(process.argv.slice(2));
+    const { mdPath, batch, assignee, reviewer } = parseArgs(process.argv.slice(2));
 
     // Backup before anything else; the md is never written to.
     const backup = backupMd(mdPath);
@@ -141,8 +144,8 @@ async function main() {
         // All review-table SQL lives in the repository; verdicts go through the
         // same write entrypoint as the review page.
         const review = createReviewRepository(definePrvModels(sequelize), sequelize);
-        const summary = await importItems(sequelize, review, batch, items);
-        printSummary(batch, summary);
+        const summary = await importItems(sequelize, review, batch, items, { assignee, reviewer });
+        printSummary(batch, assignee, summary);
     } finally {
         await sequelize.close();
     }
