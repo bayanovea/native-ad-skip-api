@@ -2,6 +2,7 @@ const express = require('express');
 const { body } = require('express-validator');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
+const { lockVideoCalculated, recomputeSegmentRating } = require('../../lib/segment-rating');
 
 module.exports = function createVoteRoutes(models, { videoRepository, userService }) {
     const router = express.Router();
@@ -24,53 +25,39 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         const video = await videoRepository.findByNativeIdAndDuration(req.body.video_id, duration);
         if (!video) { res.status(404).send('Not found'); return; }
 
-        const calculatedVideo = await models.VideoCalculated.findOne({ where: { video_id: video.id } });
-        if (!calculatedVideo) { res.status(404).send('Not found'); return; }
+        // The VideoCalculated row lock serialises votes on the video with each
+        // other, with a recalculation and with `calculate --recompute-ratings`.
+        const found = await sequelize.transaction(async (transaction) => {
+            const calculatedVideo = await lockVideoCalculated(models, video.id, { transaction });
+            if (!calculatedVideo) return false;
 
-        let segment;
-        calculatedVideo.data.forEach(item => {
-            if (item.category_id === categoryId && item.start === start && item.end === end) {
-                segment = item;
-            }
-        });
-        if (!segment) { res.status(404).send('Not found'); return; }
+            const segment = (calculatedVideo.data || []).find(item =>
+                item.category_id === categoryId && item.start === start && item.end === end);
+            if (!segment) return false;
 
-        const prevVote = await models.Vote.findOne({
-            where: { user_id: userId, video_id: video.id, category_id: categoryId, start, end },
-        });
-
-        const voteObj = await models.Vote.create({
-            user_id: userId,
-            prv_user_id: req.body.prv_user_id,
-            video_id: video.id,
-            category_id: categoryId,
-            start,
-            end,
-            vote,
-        });
-
-        const diffCount = prevVote ? vote - prevVote.vote : vote;
-        if (diffCount) {
-            const calculatedSegment = await models.CalculatedSegment.findOne({
-                where: { video_id: video.id, category_id: categoryId, start, end },
+            const prevVote = await models.Vote.findOne({
+                where: { user_id: userId, video_id: video.id, category_id: categoryId, start, end },
+                transaction,
             });
-            if (calculatedSegment) await calculatedSegment.increment('rating', { by: diffCount });
 
-            const newData = calculatedVideo.data.map(item => {
-                if (item.category_id === categoryId && item.start === start && item.end === end) {
-                    const newRating = (item.rating || 0) + diffCount;
-                    const { rating: _, ...rest } = item;
-                    // omit rating field when 0 — zero is the default, no need to store it
-                    return newRating ? { ...rest, rating: newRating } : rest;
-                }
-                return item;
-            });
-            await calculatedVideo.update({ data: newData });
-        }
+            const voteObj = await models.Vote.create({
+                user_id: userId,
+                prv_user_id: req.body.prv_user_id,
+                video_id: video.id,
+                category_id: categoryId,
+                start,
+                end,
+                vote,
+            }, { transaction });
 
-        await userService.updateRatingByVote(voteObj, prevVote);
+            if (prevVote) await prevVote.destroy({ transaction });
 
-        if (prevVote) await prevVote.destroy();
+            await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
+
+            await userService.updateRatingByVote(voteObj, prevVote, { transaction });
+            return true;
+        });
+        if (!found) { res.status(404).send('Not found'); return; }
 
         res.status(204).send();
     }));

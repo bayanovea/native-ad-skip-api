@@ -127,10 +127,17 @@ func calculateVideo(videoId string, db *sql.DB, tablePrefix string) error {
 	if err := clearOldVideoCalculated(tx, videoId, tablePrefix); err != nil {
 		return err
 	}
-	if err := insertVideoCalculated(tx, videoId, intervals, tablePrefix); err != nil {
+	// Read the votes as late as possible. The video_calculateds row is locked by
+	// now (clearOldVideoCalculated), so a vote the API committed before is
+	// counted here, and one still in flight waits for this commit.
+	ratings, err := voteRatings(tx, videoId, tablePrefix)
+	if err != nil {
 		return err
 	}
-	if err := insertCalculatedSegments(tx, videoId, intervals, tablePrefix); err != nil {
+	if err := insertVideoCalculated(tx, videoId, intervals, ratings, tablePrefix); err != nil {
+		return err
+	}
+	if err := insertCalculatedSegments(tx, videoId, intervals, ratings, tablePrefix); err != nil {
 		return err
 	}
 	if err := updateIsNew(tx, newMarkupIds, tablePrefix); err != nil {
@@ -181,6 +188,15 @@ func clearOldVideoCalculated(tx *sql.Tx, videoId string, tablePrefix string) err
 	provider := providerName(tablePrefix)
 	segmentsTable := provider + "_calculated_segments"
 	markupsTable := provider + "_calculated_segment_markups"
+
+	// Lock the video_calculateds row before the segment rows. The vote handler
+	// (POST /vote, vote delete) and RecomputeRatings lock it first and then
+	// update a segment row; the same order here avoids a deadlock with them.
+	if _, err := tx.Exec(fmt.Sprintf(`
+		SELECT 1 FROM %svideo_calculateds WHERE video_id = $1 FOR UPDATE
+	`, tablePrefix), videoId); err != nil {
+		return fmt.Errorf("lock video calculated: %w", err)
+	}
 
 	if _, err := tx.Exec(fmt.Sprintf(`
 		DELETE FROM %s WHERE segment_id IN (SELECT id FROM %s WHERE video_id = $1)
@@ -266,16 +282,70 @@ func CalculateIntervals(q querier, videoId string, tablePrefix string) (map[int]
 	return intervals, nil
 }
 
-func insertVideoCalculated(tx *sql.Tx, videoId string, intervals map[int]map[int]IntervalAggregated, tablePrefix string) error {
+// segmentKey identifies a segment the way a vote matches one: exact category,
+// start and end. Vote bounds are double precision, segment bounds integers.
+type segmentKey struct {
+	categoryId int
+	start      float64
+	end        float64
+}
+
+func keyOf(categoryId int, start int, end int) segmentKey {
+	return segmentKey{categoryId, float64(start), float64(end)}
+}
+
+// voteRatings returns the rating of every voted segment of the video: the sum
+// of each user's latest vote ("createdAt" DESC, id DESC) on that exact
+// (category_id, start, end). The Node API (lib/segment-rating.js) uses the
+// same rule. Segments with a zero sum are absent.
+func voteRatings(q querier, videoId string, tablePrefix string) (map[segmentKey]int, error) {
+	rows, err := q.Query(fmt.Sprintf(`
+		SELECT category_id, start, "end", COALESCE(SUM(vote), 0)::int FROM (
+			SELECT DISTINCT ON (user_id, category_id, start, "end") category_id, start, "end", vote
+			FROM %svotes
+			WHERE video_id = $1
+			ORDER BY user_id, category_id, start, "end", "createdAt" DESC, id DESC
+		) latest
+		GROUP BY category_id, start, "end"
+	`, tablePrefix), videoId)
+	if err != nil {
+		return nil, fmt.Errorf("read votes: %w", err)
+	}
+	defer rows.Close()
+
+	ratings := make(map[segmentKey]int)
+	for rows.Next() {
+		var k segmentKey
+		var rating int
+		if err := rows.Scan(&k.categoryId, &k.start, &k.end, &rating); err != nil {
+			return nil, fmt.Errorf("read votes: %w", err)
+		}
+		if rating != 0 {
+			ratings[k] = rating
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read votes: %w", err)
+	}
+
+	return ratings, nil
+}
+
+func insertVideoCalculated(tx *sql.Tx, videoId string, intervals map[int]map[int]IntervalAggregated, ratings map[segmentKey]int, tablePrefix string) error {
 	var allData []map[string]interface{}
 
 	for categoryId, level1 := range intervals {
 		for _, level2 := range level1 {
-			allData = append(allData, map[string]interface{}{
+			entry := map[string]interface{}{
 				"category_id": categoryId,
 				"start":       level2.startAverage,
 				"end":         level2.endAverage,
-			})
+			}
+			// rating is omitted when 0 (sparse), as the vote handler writes it
+			if rating := ratings[keyOf(categoryId, level2.startAverage, level2.endAverage)]; rating != 0 {
+				entry["rating"] = rating
+			}
+			allData = append(allData, entry)
 		}
 	}
 
@@ -296,7 +366,7 @@ func insertVideoCalculated(tx *sql.Tx, videoId string, intervals map[int]map[int
 	return nil
 }
 
-func insertCalculatedSegments(tx *sql.Tx, videoId string, intervals map[int]map[int]IntervalAggregated, tablePrefix string) error {
+func insertCalculatedSegments(tx *sql.Tx, videoId string, intervals map[int]map[int]IntervalAggregated, ratings map[segmentKey]int, tablePrefix string) error {
 	provider := providerName(tablePrefix)
 	segmentsTable := provider + "_calculated_segments"
 	markupsTable := provider + "_calculated_segment_markups"
@@ -306,9 +376,10 @@ func insertCalculatedSegments(tx *sql.Tx, videoId string, intervals map[int]map[
 			var segmentId int
 			err := tx.QueryRow(fmt.Sprintf(`
 				INSERT INTO %s (video_id, category_id, start, "end", rating, "createdAt", "updatedAt")
-				VALUES ($1, $2, $3, $4, 0, now(), now())
+				VALUES ($1, $2, $3, $4, $5, now(), now())
 				RETURNING id
-			`, segmentsTable), videoId, categoryId, level2.startAverage, level2.endAverage).Scan(&segmentId)
+			`, segmentsTable), videoId, categoryId, level2.startAverage, level2.endAverage,
+				ratings[keyOf(categoryId, level2.startAverage, level2.endAverage)]).Scan(&segmentId)
 			if err != nil {
 				return fmt.Errorf("insert segment: %w", err)
 			}

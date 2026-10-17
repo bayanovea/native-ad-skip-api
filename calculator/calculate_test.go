@@ -67,3 +67,45 @@ func TestCalculateIntervals(t *testing.T) {
 		t.Errorf("expected endAverage to be 2, got %d", intervals[1][0].endAverage)
 	}
 }
+
+func TestApplyRatings(t *testing.T) {
+	ratings := map[segmentKey]int{
+		{1, 0, 10}:  2,
+		{1, 30, 40}: -1,
+	}
+	cases := []struct {
+		name    string
+		data    string
+		want    string
+		changed bool
+	}{
+		{"adds rating, keeps entry order and other fields",
+			`[{"category_id":2,"start":5,"end":9,"x":"keep"},{"category_id":1,"start":0,"end":10}]`,
+			`[{"category_id":2,"end":9,"start":5,"x":"keep"},{"category_id":1,"end":10,"rating":2,"start":0}]`, true},
+		{"updates and removes ratings",
+			`[{"category_id":1,"start":30,"end":40,"rating":5},{"category_id":2,"start":5,"end":9,"rating":3}]`,
+			`[{"category_id":1,"end":40,"rating":-1,"start":30},{"category_id":2,"end":9,"start":5}]`, true},
+		{"explicit zero becomes sparse",
+			`[{"category_id":2,"start":5,"end":9,"rating":0}]`,
+			`[{"category_id":2,"end":9,"start":5}]`, true},
+		{"unchanged data is returned as is",
+			`[{"category_id":1, "start":0, "end":10, "rating":2}, {"category_id":2,"start":5,"end":9}]`,
+			`[{"category_id":1, "start":0, "end":10, "rating":2}, {"category_id":2,"start":5,"end":9}]`, false},
+		{"null data", `null`, `null`, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, changed, err := applyRatings([]byte(c.data), ratings)
+			if err != nil {
+				t.Fatalf("applyRatings: %v", err)
+			}
+			if changed != c.changed {
+				t.Errorf("changed = %v, want %v", changed, c.changed)
+			}
+			if string(got) != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+}

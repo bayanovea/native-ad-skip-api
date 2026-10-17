@@ -10,9 +10,12 @@ import (
 func main() {
 	args := os.Args[1:]
 	var err error
-	if len(args) > 0 {
+	switch {
+	case len(args) > 0 && args[0] == "--recompute-ratings":
+		err = calculator.RecomputeRatings("rt_")
+	case len(args) > 0:
 		err = calculator.Run("rt_", args[0])
-	} else {
+	default:
 		err = calculator.Run("rt_")
 	}
 	if err != nil {

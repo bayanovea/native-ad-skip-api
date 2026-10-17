@@ -367,10 +367,12 @@ paths:
       tags: [prv]
       summary: Submit a vote on a calculated segment
       description: |
-        Increments the segment's `rating` (in `prv_calculated_segments` and the matching
-        `video_calculateds.data` entry) by the diff between the new and any previous vote
-        from the same user. Also adjusts the markup author's user `rating` only when a
-        single markup with an exact `(start, end)` match contributed to the segment.
+        Replaces the user's previous vote on the segment and recomputes the segment's
+        `rating` (in `prv_calculated_segments` and the matching `video_calculateds.data` entry,
+        omitted there when 0) from the votes table: the sum of each user's latest vote on the
+        exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
+        previous vote the user `rating` of every author whose markup has an interval with
+        the exact `(start, end)`.
       requestBody:
         required: true
         content:
@@ -701,10 +703,12 @@ paths:
       tags: [RT]
       summary: Submit a vote on a calculated segment
       description: |
-        Increments the segment's `rating` (in `rt_calculated_segments` and the matching
-        `rt_video_calculateds.data` entry) by the diff between the new and any previous vote
-        from the same user. Also adjusts the markup author's user `rating` only when a
-        single markup with an exact `(start, end)` match contributed to the segment.
+        Replaces the user's previous vote on the segment and recomputes the segment's
+        `rating` (in `rt_calculated_segments` and the matching `rt_video_calculateds.data` entry,
+        omitted there when 0) from the votes table: the sum of each user's latest vote on the
+        exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
+        previous vote the user `rating` of every author whose markup has an interval with
+        the exact `(start, end)`.
       requestBody:
         required: true
         content:
@@ -873,10 +877,12 @@ paths:
       tags: [YT]
       summary: Submit a vote on a calculated segment
       description: |
-        Increments the segment's `rating` (in `yt_calculated_segments` and the matching
-        `yt_video_calculateds.data` entry) by the diff between the new and any previous vote
-        from the same user. Also adjusts the markup author's user `rating` only when a
-        single markup with an exact `(start, end)` match contributed to the segment.
+        Replaces the user's previous vote on the segment and recomputes the segment's
+        `rating` (in `yt_calculated_segments` and the matching `yt_video_calculateds.data` entry,
+        omitted there when 0) from the votes table: the sum of each user's latest vote on the
+        exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
+        previous vote the user `rating` of every author whose markup has an interval with
+        the exact `(start, end)`.
       requestBody:
         required: true
         content:

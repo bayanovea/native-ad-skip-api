@@ -32,6 +32,7 @@ go build -mod=vendor -o yt/commands/calculate ./yt/commands/
 # Run (example for prv)
 ./prv/commands/calculate                # Process all videos with new markups
 ./prv/commands/calculate <video_id>    # Process a single video
+./prv/commands/calculate --recompute-ratings   # Reset every segment rating from the votes table (see Ops)
 ```
 
 ### Tests
@@ -39,7 +40,7 @@ go build -mod=vendor -o yt/commands/calculate ./yt/commands/
 ```bash
 go test ./calculator                            # Go unit tests; TestIntegration skips without DB env (CI), but a
                                                 # local .env with DB_USER makes it run against DB_HOST (fails on
-                                                # host.docker.internal) — locally add -run 'TestFindMedian|TestCalculateIntervals'
+                                                # host.docker.internal) — locally add -run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'
 go test ./calculator -run TestFindMedian        # Run a single test
 
 make test-calculator                            # Go integration tests against a real Postgres
@@ -55,6 +56,10 @@ make test-unit                                  # DB-free Node unit tests (no Do
 
 ```bash
 make pull-dump                                  # gzipped prod pg_dump over SSH → ~/Web/dumps/adskip-prod/ (weekly)
+
+# Segment ratings from the votes table (backfill after the 2026-10-17 deploy; safe to re-run, a second run
+# reports 0 changed). Inside the app container, under the cron lock so it never overlaps a recalculation:
+flock /tmp/calculate-prv.lock /app/prv/commands/calculate --recompute-ratings   # rt / yt: calculate-rt.lock, /app/rt/…
 
 # Assessor review on prod (source of truth for verdicts since 2026-10-16; page:
 # https://${API_HOST}/admin/review?verifyBearerToken=<AUTH_TOKEN>).
@@ -81,6 +86,7 @@ scripts/export-review-verdicts.sh <batch>       # psql (PG* env, defaults localh
 
 - **Importer** reads `<sheet>.md` + `<sheet>.key.tsv` (written by `adskip sheet` in `ad-skip-segment-eval`; blind `C<n>` sheets only, `K<n>` conflict sheets are rejected). Every item needs `Proposed as:`, an http(s) `Link:` and a `Verdict:` line. The verdict is the text on the `Verdict:` line; when that line is empty (as `adskip sheet` writes it), the first non-empty line after it must be the verdict (`Verdict: ` / `not an ad` / reason, the style of the 2026-10-12 sheets) and any other text there fails the import. The remaining lines are the comment, up to a markdown heading (`#`…`######` + space) or a `---` rule line, which ends the item. It first copies the md to `<sheet>.md.bak-YYYYMMDDHHMMSS` (suffix `-1`, `-2` instead of overwriting) and never writes the md. One transaction: items `ON CONFLICT (batch, item_code) DO NOTHING`, and an item already in the batch must be the same stretch (`native_id`, `start`, `end`, `proposed`) or the import fails, so a regenerated sheet or a wrong `--batch` never attaches verdicts to the wrong item; md verdicts (`source='import'`, `reviewer='owner'`) go through `recordVerdict` and only for items with no verdict yet, so re-running after more md marks adds only the new ones. An unknown verdict text fails the whole import (nothing written). Batch defaults to the md file name.
 - **Export** writes the latest verdict per decided item as `provider native_id category start end verdict item note` for `adskip review -file`: `sponsor`/`self_promotion` → `gold_missing` (category = the verdict), `not_ad` → `model_wrong`, `unclear` → `definition_unclear` (category = first proposed). Times with one decimal, note = comment with tabs/newlines collapsed. Exits 1 (nothing written) on an unknown batch; creates `review/` if missing and writes through `<file>.tmp` + `mv`, so a failed query never leaves a truncated TSV.
+- **`--recompute-ratings`** (`calculator.RecomputeRatings`, `calculator/recompute.go`): for every video with a `{prefix}video_calculateds` row, in its own transaction: locks that row (`FOR UPDATE`, as the vote handler and a recalculation do), computes the ratings with the calculator's rule (see Calculation Algorithm), updates only the segment rows whose rating differs and rewrites the JSON entries' `rating` (sparse; entry order and other fields kept) only when one changed. Never touches boundaries, markups or `is_new`. 10 videos in parallel; a failing video is logged (`Recompute ratings failed: <video_id>: <err>`) and the binary exits 1 at the end. Last line: `Recompute ratings finish: N videos processed, M segments changed, K video_calculateds rewritten`.
 
 ## Architecture
 
@@ -90,7 +96,7 @@ Two independent runtimes managed by Supervisor inside Docker:
 - **Node.js (Express)** — HTTP API: CRUD for markups, votes, and serving calculated results
 - **Go CLI** — Cron job every minute: aggregates new markups into `VideoCalculated`
 
-Communication is only through PostgreSQL. The Go binary reads `MarkupTimeInterval` rows where `is_new = true` and writes aggregated JSON to `VideoCalculated` plus relational rows in `{provider}_calculated_segments` (and the segment ↔ markup junction). Node reads `VideoCalculated.data` for client responses and updates the per-segment `rating` (in both the JSON and the segments table) when a vote arrives.
+Communication is only through PostgreSQL. The Go binary reads `MarkupTimeInterval` rows where `is_new = true` and writes aggregated JSON to `VideoCalculated` plus relational rows in `{provider}_calculated_segments` (and the segment ↔ markup junction). Node reads `VideoCalculated.data` for client responses and recomputes the per-segment `rating` from the votes table (in both the JSON and the segments table) when a vote arrives or is deleted; the Go binary computes it the same way on every recalculation.
 
 ### Request Flow
 
@@ -128,9 +134,9 @@ Each provider directory has the same internal layout:
 | Path | Purpose |
 |------|---------|
 | `prv/`, `rt/`, `yt/` | Per-provider Express routes, repositories, and Go CLI entry points |
-| `calculator/` | Shared Go source: `calculate.go` (algorithm), `pool.go` (goroutine pool) |
+| `calculator/` | Shared Go source: `calculate.go` (algorithm), `recompute.go` (`--recompute-ratings`), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`), validation, async error wrapper |
-| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category seeding, used by `db.js` boot and `scripts/sync-db.js`), `redact-request.js` (`redactRequest()` — request fields for the `server.js` error log with the `Authorization` header and `verifyBearerToken` (query and url) redacted), `validate-intervals.js` (`validateIntervals()` — `POST /markup` interval rules, shared by prv/rt/yt) |
+| `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime`), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category seeding, used by `db.js` boot and `scripts/sync-db.js`), `redact-request.js` (`redactRequest()` — request fields for the `server.js` error log with the `Authorization` header and `verifyBearerToken` (query and url) redacted), `validate-intervals.js` (`validateIntervals()` — `POST /markup` interval rules, shared by prv/rt/yt), `segment-rating.js` (`lockVideoCalculated()`, `recomputeSegmentRating()` — a segment's rating from the votes table, per provider `models`) |
 | `scripts/` | Local/ops scripts: `sync-db.js`, `pull-prod-dump.sh`, review import/export, gold export (`export-gold.sh`) |
 | `db.js` | Sequelize models and associations for all providers |
 | `api/doc/openapi.yaml` | OpenAPI spec served at `/api/doc` |
@@ -144,25 +150,26 @@ Each provider directory has the same internal layout:
    - Read all live intervals of the video and group them by `(category_id, startRounded)` where `startRounded = start - (start % 3)` (3-second buckets)
    - **Start** = average of all starts in the group
    - **End** = median of all ends in the group
-   - Clear the previous segments (`{provider}_calculated_segment_markups` → `{provider}_calculated_segments` → `video_calculateds`)
-   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`; `rating` is omitted when 0 — sparse representation). `meta` is no longer written.
-   - Insert one row per segment into `{provider}_calculated_segments` (with `rating = 0`) and one row per contributing markup into `{provider}_calculated_segment_markups`
+   - Row-lock the video's `video_calculateds` row (`FOR UPDATE`; the vote handler and `--recompute-ratings` take this lock first too, so the same order avoids deadlocks), then clear the previous segments (`{provider}_calculated_segment_markups` → `{provider}_calculated_segments` → `video_calculateds`)
+   - Read the ratings from `{prefix}votes` (`voteRatings`), as late as possible: a segment's rating is the SUM of each user's latest vote (`DISTINCT ON (user_id, category_id, start, "end")`, `"createdAt" DESC, id DESC`) with an exact `(video_id, category_id, start, end)` match — vote bounds are floats, segment bounds ints. The Node API uses the same rule (`lib/segment-rating.js`). Votes whose bounds match no segment after a boundary shift count nowhere (`docs/backlog/votes-lost-when-segment-boundaries-shift.md`).
+   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`, `rating` from the votes; `rating` is omitted when 0 — sparse representation). `meta` is no longer written.
+   - Insert one row per segment into `{provider}_calculated_segments` (with that `rating`) and one row per contributing markup into `{provider}_calculated_segment_markups`
    - Set `is_new = false` on `{provider}markups` only for the ids read in the first step, so markups posted during the run are picked up by the next one
 3. Per-video errors are returned, not panicked: the failing video is logged (`Calculate video failed: <video_id>: <err>`) and rolled back, the other videos go on, and the binary exits 1 at the end (`N of M videos failed`). Only startup failures (DB connect, listing the videos) abort the run.
 
-Cron starts each provider's binary every minute (`crontab`, offsets 0/20/40 s) under `flock -n /tmp/calculate-<provider>.lock`, so a run still going when the next minute fires makes the new one exit at once instead of overlapping. Their output (stdout and stderr) is appended to `/proc/1/fd/1`, supervisord's stdout, so it shows in `docker logs` next to the Node app's. The e2e suite covers the rollback, the mid-run markup and the skipped locked row (`calculator:` tests in `test/e2e.js`).
+Cron starts each provider's binary every minute (`crontab`, offsets 0/20/40 s) under `flock -n /tmp/calculate-<provider>.lock`, so a run still going when the next minute fires makes the new one exit at once instead of overlapping. Their output (stdout and stderr) is appended to `/proc/1/fd/1`, supervisord's stdout, so it shows in `docker logs` next to the Node app's. The e2e suite covers the rollback, the mid-run markup, the skipped locked row, ratings surviving a recalculation and `--recompute-ratings` (`calculator:` tests in `test/e2e.js`).
 
-The segment rows in `{provider}_calculated_segments` are the source of truth for joins (e.g. analytics) and carry the same `rating` that lives in `video_calculateds.data`. Both are kept in sync by the vote handler (see Routes → `votes.js`).
+The segment rows in `{provider}_calculated_segments` are the source of truth for joins (e.g. analytics) and carry the same `rating` that lives in `video_calculateds.data`. Both are derived from the votes table: by the calculator on every recalculation, by the vote handler on every vote or vote deletion (see Routes → `votes.js`), and by `calculate --recompute-ratings` (see Ops).
 
 ### Routes
 
 All three providers share the same route shape; `prv/` also mounts the shared `events.js` / `users.js` and the prv-only admin pages (`admin.js`, `admin-moderation.js`, `admin-review.js`).
 
 - **`markups.js`** — Core markup CRUD. `POST /markup` validates `data.intervals` with `lib/validate-intervals.js` (1–20 items; `start`/`end` finite numbers or numeric strings; after rounding `0 <= start < end <= 86400`; else 400) and creates the markup and all its intervals in one transaction. It rejects users with rating ≤ −2. It also silently returns 201 (no row created) when the user is hard-banned (banned_at IS NOT NULL); see Authentication. Several delete endpoints have both `DELETE` and `GET` variants because Grafana can only trigger GET requests.
-- **`votes.js`** — Vote submission. On each new vote:
-  - `{provider}_calculated_segments.rating` is incremented by `vote - prevVote.vote` (or just `vote` if no prior vote from this user)
-  - the matching entry in `video_calculateds.data` is rewritten with the same `rating` delta so clients see the updated value
-  - the markup author's user `rating` is adjusted via `prv/service/user.js` only when a single markup with an exact `(start, end)` match contributed to the segment
+- **`votes.js`** — Vote submission. Each new vote runs in one transaction that first row-locks the video's `VideoCalculated` (`lockVideoCalculated` in `lib/segment-rating.js`, which re-reads once when a recalculation replaced the row meanwhile), so votes on a video, its recalculation and `--recompute-ratings` serialise:
+  - the segment must exist in `video_calculateds.data` (exact category/start/end), else 404; the user's previous vote row on the segment is replaced by the new one
+  - `recomputeSegmentRating` (`lib/segment-rating.js`) sets `{provider}_calculated_segments.rating` and the matching `video_calculateds.data` entry (sparse) from the votes table, with the calculator's rule (each user's latest vote, summed)
+  - the markup authors' user `rating` is adjusted by `vote - prevVote.vote` via `prv/service/user.js` `updateRatingByVote(vote, prevVote, { transaction })` (every author whose live markup has an interval with the exact `(start, end)`; ascending user id, so concurrent votes do not deadlock)
   - if the rating mutation drops a user to rating ≤ −100, `prv/service/user.js` also sets `banned_at` and writes a `prv_admin_decisions` row with `decided_by='auto'` (idempotent — only the first crossing writes; the `banned_at == null` guard short-circuits repeat crossings)
 - **`videos.js`** — `GET /video-calculated` serves aggregated segments; prv additionally logs duration claims and tracks legacy client versions. Uses a read-only `findVideoForRead` helper (never creates Video rows): looks up by `(native_id, duration±1)`, then `(native_id, null duration)` updating it, then any `native_id` match, then 204.
 - **`prv/routes/events.js`** — `POST /events` (shared by all providers). Accepts a JSON array of mixed events; supported types below. Invalid events (unknown `type`, missing fields) are logged to stdout and skipped — the rest of the batch still processes. Returns `{ data: { time_saved: { ... } } }` when the batch contains at least one `time_saved` event.
@@ -200,7 +207,7 @@ All three providers share the same route shape; `prv/` also mounts the shared `e
 | `MarkupCategory` | Enum: intro, sponsor, self_promotion, credits |
 | `Video` | Video reference with optional duration |
 | `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`; `rating` present only when non-zero. `meta` is unused by current calculator |
-| `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating` updated by votes |
+| `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating`, derived from the votes table (calculator, vote handler, `--recompute-ratings`) |
 | `CalculatedSegmentMarkup` | Junction linking a `CalculatedSegment` to each contributing `Markup` — table `{provider}_calculated_segment_markups` |
 | `Vote` | User vote on a calculated segment (-1, 0, +1) |
 | `User` | Internal user mapped to prv user ID; tracks `rating`, `time_saved`, and `banned_at` (hard ban — set by admin via /admin/moderation/decide or automatically when rating ≤ -100; gates POST /markup independently of the soft `rating ≤ -2` check) |

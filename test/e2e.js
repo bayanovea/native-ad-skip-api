@@ -572,8 +572,8 @@ test('calculator: a failing video keeps its previous segments, the others are st
     assert.deepEqual(await isNewFlags(vidA), [false, false]);
 });
 
-// The run is held at A's video_calculateds DELETE (a row lock), after it has
-// read the markups; a markup posted meanwhile is neither aggregated nor marked
+// The run is held at the video_calculateds row lock (taken before the segments
+// are cleared), after it has read the markups; a markup posted meanwhile is neither aggregated nor marked
 // processed, so the next run picks it up.
 test('calculator: a markup posted during the recalculation stays is_new for the next run', async () => {
     const vid = '__e2e__prv_calc_concurrent';
@@ -591,7 +591,7 @@ test('calculator: a markup posted during the recalculation stays is_new for the 
         await lock.query('BEGIN');
         await lock.query('SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE', [videoId]);
         calc = runCalcAsync('prv');
-        await waitForQueryBlockedOnLock('DELETE FROM video_calculateds');
+        await waitForQueryBlockedOnLock('FROM video_calculateds WHERE video_id = $1 FOR UPDATE');
         await postMarkup('', { ...base, data: { intervals: [{ start: 60, end: 70 }] } });
     } finally {
         await lock.query('COMMIT');
@@ -639,6 +639,117 @@ test('calculator: a markup locked by another transaction is not waited for and s
 
     runCalc('prv');
     assert.deepEqual(await isNewFlags(vid), [false]);
+});
+
+// ── Calculator: segment ratings come from the votes table ─────────────────────
+
+function runRecomputeRatings(provider) {
+    const r = spawnSync(`${APP_DIR}/${provider}/commands/calculate`, ['--recompute-ratings'], {
+        env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(r.status, 0, `--recompute-ratings failed: ${r.error || ''} ${r.stdout}${r.stderr}`);
+    const m = r.stdout.match(/Recompute ratings finish: (\d+) videos processed, (\d+) segments changed, (\d+) video_calculateds rewritten/);
+    assert.ok(m, `no summary line in: ${r.stdout}`);
+    return { videos: Number(m[1]), segments: Number(m[2]), rewritten: Number(m[3]) };
+}
+
+// Video with one intro segment {start:1, end:11} (bucket 0: starts 0,1,2; ends 10,12,11).
+async function seedRatedVideo(prefix, vid, cat, extra = {}) {
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, ...extra };
+    await postMarkup(prefix, { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
+    await postMarkup(prefix, { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
+    await postMarkup(prefix, { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
+    runCalc(prefix || 'prv');
+}
+
+async function assertVoteSurvivesRecalc(prefix) {
+    const provider = prefix || 'prv';
+    const vid = `__e2e__${provider}_vote_survives_recalc`;
+    const duration = 300;
+    const extra = prefix ? { duration } : {};
+    const voterExtra = prefix ? { prv_user_id: 1, duration } : {};
+    await seedRatedVideo(prefix, vid, cats[provider].intro, extra);
+    await postVote(prefix, {
+        video_id: vid, user_id: 'voter-1', category_id: cats[provider].intro, start: 1, end: 11, vote: 1, ...voterExtra,
+    });
+
+    // A markup in another category and bucket makes the next run recalculate the video.
+    await postMarkup(prefix, {
+        video_id: vid, v: '1', user_id: 'test-user', category_id: cats[provider].sponsor, ...extra,
+        data: { intervals: [{ start: 60, end: 70 }] },
+    });
+    runCalc(provider);
+
+    assert.equal(await getJsonRating(prefix, vid, cats[provider].sponsor, 60, 70), 0, 'the new segment is calculated');
+    assert.equal((await getSegmentRow(prefix, vid, cats[provider].intro, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating(prefix, vid, cats[provider].intro, 1, 11), 1, 'JSON rating');
+}
+
+test('calculator: a vote survives a recalculation of the video (prv)', async () => {
+    await assertVoteSurvivesRecalc('');
+});
+
+test('calculator: a vote survives a recalculation of the video (rt, yt)', async () => {
+    await assertVoteSurvivesRecalc('rt');
+    await assertVoteSurvivesRecalc('yt');
+});
+
+// Two vote rows of one user (pre-May data): only the newer one counts.
+test('calculator: only each user\'s latest vote counts', async () => {
+    const vid = '__e2e__prv_calc_latest_vote';
+    const cat = cats.prv.intro;
+    await seedRatedVideo('', vid, cat);
+    const videoId = await prvVideoId(vid);
+    await dbQuery(
+        `INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt") VALUES
+         ('dup-voter', $1, $2, 1, 11, -1, now() - interval '1 day', now() - interval '1 day'),
+         ('dup-voter', $1, $2, 1, 11,  1, now(), now()),
+         ('other-voter', $1, $2, 1, 12, -1, now(), now())`,
+        [videoId, cat]
+    );
+
+    runCalc('prv'); // no new markups: nothing recalculated
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 0);
+
+    execSync(`${APP_DIR}/prv/commands/calculate ${videoId}`, { env: { ...process.env, DB_NAME: TEST_DB } });
+
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 1, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 1, 'JSON rating');
+});
+
+test('calculator: --recompute-ratings restores ratings from votes and leaves segments and is_new alone', async () => {
+    const vid = '__e2e__prv_recompute_ratings';
+    const cat = cats.prv.intro;
+    await seedRatedVideo('', vid, cat);
+    await postVote('', { video_id: vid, user_id: 'voter-1', category_id: cat, start: 1, end: 11, vote: 1 });
+    await postVote('', { video_id: vid, user_id: 'voter-2', category_id: cat, start: 1, end: 11, vote: 1 });
+    const videoId = await prvVideoId(vid);
+
+    // Lose the rating the way an old recalculation did; a pending markup must stay pending.
+    await dbQuery(`UPDATE prv_calculated_segments SET rating = 0 WHERE video_id = $1`, [videoId]);
+    const [{ data }] = await dbQuery(`SELECT data FROM video_calculateds WHERE video_id = $1`, [videoId]);
+    const stripped = data.map(({ rating: _, ...rest }) => rest);
+    await dbQuery(`UPDATE video_calculateds SET data = $1 WHERE video_id = $2`, [JSON.stringify(stripped), videoId]);
+    await postMarkup('', {
+        video_id: vid, v: '1', user_id: 'test-user', category_id: cat, data: { intervals: [{ start: 30, end: 40 }] },
+    });
+    const segmentsBefore = await prvSegmentRows(videoId);
+    const flagsBefore = await isNewFlags(vid);
+
+    const first = runRecomputeRatings('prv');
+    assert.ok(first.segments >= 1 && first.rewritten >= 1, `first run must change the rating: ${JSON.stringify(first)}`);
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 2, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), 2, 'JSON rating');
+    assert.deepEqual(await prvSegmentRows(videoId), segmentsBefore, 'segment boundaries unchanged');
+    assert.deepEqual(await isNewFlags(vid), flagsBefore, 'is_new unchanged');
+    assert.deepEqual(flagsBefore, [false, false, false, true]);
+    const [{ data: after }] = await dbQuery(`SELECT data FROM video_calculateds WHERE video_id = $1`, [videoId]);
+    assert.deepEqual(after.map(({ rating: _, ...rest }) => rest), stripped, 'entry order and other fields kept');
+
+    const second = runRecomputeRatings('prv');
+    assert.equal(second.segments, 0, 'a second run changes no segment');
+    assert.equal(second.rewritten, 0, 'a second run rewrites no JSON');
+    assert.ok(second.videos >= 1);
 });
 
 // ── Video lookup tests (no orphan Video rows) ─────────────────────────────────
