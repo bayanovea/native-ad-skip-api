@@ -1126,6 +1126,38 @@ test('prv vote delete: unknown vote id → 404, wrong token → 401 and the vote
     assert.equal((await getSegmentRow('', '__e2e__prv_vote_delete', cats.prv.intro, 1, 11)).rating, 1, 'rating kept');
 });
 
+// ── update-rating (Grafana GET link) ──────────────────────────────────────────
+
+test('update-rating: token checked first, rating must be an integer, the override is logged', async () => {
+    const [{ id }] = await dbQuery(`SELECT id FROM users WHERE generated_user_id = 'prv-del-author'`);
+    const before = await userRating('', 'prv-del-author');
+    const url = (qs) => `/votes/user/${id}/update-rating?${qs}`;
+
+    assert.equal((await request('GET', url(`verifyBearerToken=wrong&rating=abc`), null)).status, 401, 'wrong token before validation');
+    assert.equal((await request('GET', url(`rating=5`), null)).status, 401, 'no token');
+    for (const qs of ['', 'rating=', 'rating=abc', 'rating=1.5', 'rating=99999999999']) {
+        const res = await request('GET', url(`verifyBearerToken=${VOTE_AUTH}&${qs}`), null);
+        assert.equal(res.status, 400, `"${qs}" must be rejected, got ${res.status}`);
+    }
+    assert.equal(await userRating('', 'prv-del-author'), before, 'rejected requests change nothing');
+
+    const unknown = await request('GET', `/votes/user/999999999/update-rating?verifyBearerToken=${VOTE_AUTH}&rating=1`, null);
+    assert.equal(unknown.status, 404);
+
+    let logged = '';
+    const onData = d => (logged += d);
+    serverProc.stdout.on('data', onData);
+    try {
+        const ok = await request('GET', url(`verifyBearerToken=${VOTE_AUTH}&rating=-7`), null);
+        assert.equal(ok.status, 201);
+        for (let i = 0; i < 50 && !logged.includes('Admin rating override'); i++) await sleep(20);
+    } finally {
+        serverProc.stdout.off('data', onData);
+    }
+    assert.equal(await userRating('', 'prv-del-author'), -7, 'stored as an integer');
+    assert.match(logged, new RegExp(`Admin rating override.*internal_user_id: ${id}.*from: ${before}.*to: -7`, 's'));
+});
+
 // ── Metrics endpoint and path normalization ──────────────────────────────────
 
 test('metrics: GET /metrics returns 200 and includes expected metric names', async () => {

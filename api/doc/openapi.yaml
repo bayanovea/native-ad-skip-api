@@ -403,6 +403,10 @@ paths:
     get:
       tags: [prv]
       summary: Override a user's rating
+      description: |
+        Sets the user's `rating` and logs the change (`Admin rating override` with
+        `internal_user_id`, `from`, `to`) to the app's stdout. The token is checked before
+        the params, so a wrong token is a 401 whatever `rating` is.
       security:
         - tokenQuery: []
       parameters:
@@ -410,6 +414,7 @@ paths:
         - { name: rating, in: query, required: true, schema: { type: integer } }
       responses:
         '201': { description: Updated }
+        '400': { description: Missing or non-integer rating }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -743,6 +748,10 @@ paths:
     get:
       tags: [RT]
       summary: Override a user's rating
+      description: |
+        Sets the user's `rating` and logs the change (`Admin rating override` with
+        `internal_user_id`, `from`, `to`) to the app's stdout. The token is checked before
+        the params, so a wrong token is a 401 whatever `rating` is.
       security:
         - tokenQuery: []
       parameters:
@@ -750,6 +759,7 @@ paths:
         - { name: rating, in: query, required: true, schema: { type: integer } }
       responses:
         '201': { description: Updated }
+        '400': { description: Missing or non-integer rating }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -921,6 +931,10 @@ paths:
     get:
       tags: [YT]
       summary: Override a user's rating
+      description: |
+        Sets the user's `rating` and logs the change (`Admin rating override` with
+        `internal_user_id`, `from`, `to`) to the app's stdout. The token is checked before
+        the params, so a wrong token is a 401 whatever `rating` is.
       security:
         - tokenQuery: []
       parameters:
@@ -928,6 +942,7 @@ paths:
         - { name: rating, in: query, required: true, schema: { type: integer } }
       responses:
         '201': { description: Updated }
+        '400': { description: Missing or non-integer rating }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 

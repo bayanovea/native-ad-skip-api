@@ -187,7 +187,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://${API_HOST}/markups/${__data.fields.id}﻿/delete?verifyBearerToken=${verifyBearerToken}"
+                    "url": "https://${API_HOST}/markups/${__data.fields.id}/delete?verifyBearerToken=${verifyBearerToken}"
                   }
                 ]
               },
@@ -951,7 +951,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://${API_HOST}/votes/user/${__data.fields.id}﻿﻿/update-rating?rating=-100&verifyBearerToken=﻿${verifyBearerToken}"
+                    "url": "https://${API_HOST}/votes/user/${__data.fields.id}/update-rating?rating=-100&verifyBearerToken=${verifyBearerToken}"
                   }
                 ]
               },

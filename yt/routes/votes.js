@@ -1,6 +1,7 @@
 const express = require('express');
-const { body } = require('express-validator');
+const { body, query } = require('express-validator');
 const validateRequest = require('../../middleware/validate-request');
+const verifyQueryToken = require('../../middleware/verify-query-token');
 const handler = require('../../middleware/handler');
 const { lockVideoCalculated, recomputeSegmentRating } = require('../../lib/segment-rating');
 
@@ -63,12 +64,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
     }));
 
     // GET duplicate for Grafana compatibility
-    router.get('/votes/:id/delete', handler(async (req, res) => {
-        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
-            res.status(401).send('Unauthorized');
-            return;
-        }
-
+    router.get('/votes/:id/delete', verifyQueryToken, handler(async (req, res) => {
         const vote = await models.Vote.findByPk(req.params.id);
         if (!vote) { res.status(404).send('Vote not found'); return; }
 
@@ -92,16 +88,19 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         res.status(201).send('Updated');
     }));
 
-    router.get('/votes/user/:internal_user_id/update-rating', handler(async (req, res) => {
-        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
-            res.status(401).send('Unauthorized');
-            return;
-        }
-
+    // Token first, so a wrong token is a 401 even with a bad rating.
+    router.get('/votes/user/:internal_user_id/update-rating', [
+        verifyQueryToken,
+        query('rating').isInt({ min: -2147483648, max: 2147483647 }).toInt(), // users.rating is INTEGER
+        validateRequest,
+    ],
+    handler(async (req, res) => {
         const user = await models.User.findByPk(req.params.internal_user_id);
         if (!user) { res.status(404).send('Not found'); return; }
 
+        const from = user.rating;
         await user.update({ rating: req.query.rating });
+        console.log('Admin rating override', { internal_user_id: user.id, from, to: req.query.rating });
 
         res.status(201).send('Updated');
     }));
