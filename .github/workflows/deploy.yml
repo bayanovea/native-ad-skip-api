@@ -23,7 +23,7 @@ jobs:
     - name: Setup Go
       uses: actions/setup-go@v6
       with:
-        go-version-file: go.mod
+        go-version: '1.27'   # matches golang:1.27-bookworm in the Dockerfile
         cache: false   # deps are vendored
 
     - name: Install Node dependencies
