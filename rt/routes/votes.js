@@ -72,16 +72,22 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         const vote = await models.Vote.findByPk(req.params.id);
         if (!vote) { res.status(404).send('Vote not found'); return; }
 
-        await sequelize.transaction(async (transaction) => {
-            await models.Vote.destroy({ where: { id: req.params.id }, transaction });
+        // Undo what POST /vote did: the segment rating is recomputed without the
+        // vote, and the authors' rating change is reversed (the voter's own
+        // rating was never touched, so it is left alone).
+        const deleted = await sequelize.transaction(async (transaction) => {
+            const calculatedVideo = await lockVideoCalculated(models, vote.video_id, { transaction });
 
-            const user = await models.User.findOne({
-                where: { generated_user_id: vote.user_id, prv_user_id: vote.prv_user_id },
-            });
-            if (!user) { res.status(404).send('User not found'); return; }
+            const count = await models.Vote.destroy({ where: { id: vote.id }, transaction });
+            if (!count) return false; // deleted concurrently: nothing left to undo
 
-            await user.decrement('rating', { by: vote.vote }, transaction);
+            const segment = { videoId: vote.video_id, categoryId: vote.category_id, start: vote.start, end: vote.end };
+            if (calculatedVideo) await recomputeSegmentRating(models, segment, { transaction });
+
+            await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, vote, { transaction });
+            return true;
         });
+        if (!deleted) { res.status(404).send('Vote not found'); return; }
 
         res.status(201).send('Updated');
     }));

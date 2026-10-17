@@ -1044,6 +1044,88 @@ test('YT vote: +1 increments rating with duration check', async () => {
     assert.equal(await getJsonRating('yt', vid, cat, 1, 11), 1, 'JSON rating');
 });
 
+// ── Vote delete (Grafana GET link) ────────────────────────────────────────────
+
+const VOTE_AUTH = process.env.AUTH_TOKEN || 'test_token';
+
+async function userRating(prefix, generatedUserId) {
+    const tp = prefix ? `${prefix}_` : '';
+    const rows = await dbQuery(`SELECT rating FROM ${tp}users WHERE generated_user_id = $1`, [generatedUserId]);
+    return rows[0].rating;
+}
+
+async function voteIdOf(prefix, userId, nativeId) {
+    const tp = prefix ? `${prefix}_` : '';
+    const rows = await dbQuery(
+        `SELECT vt.id FROM ${tp}votes vt JOIN ${tp}videos v ON v.id = vt.video_id
+         WHERE vt.user_id = $1 AND v.native_id = $2`,
+        [userId, nativeId]
+    );
+    assert.equal(rows.length, 1, `expected one vote of ${userId}`);
+    return rows[0].id;
+}
+
+// The delete undoes what POST /vote did: segment rating (table + JSON) and the
+// author's rating change. The voter is a user too (they posted a markup), and
+// their own rating is not touched.
+async function assertVoteDeleteUndoesVote(prefix) {
+    const provider = prefix || 'prv';
+    const cat = cats[provider].intro;
+    const vid = `__e2e__${provider}_vote_delete`;
+    const author = `${provider}-del-author`;
+    const voter = `${provider}-del-voter`;
+    const extra = prefix ? { duration: 300 } : { v: '1' };
+    const voteExtra = prefix ? { prv_user_id: 1, duration: 300 } : {};
+    const voterUser = prefix ? { prv_user_id: 1 } : {};
+
+    await postMarkup(prefix, { video_id: vid, user_id: author, category_id: cat, ...extra, data: { intervals: [{ start: 1, end: 11 }] } });
+    await postMarkup(prefix, {
+        video_id: `${vid}_other`, user_id: voter, category_id: cat, ...extra, ...voterUser, data: { intervals: [{ start: 5, end: 9 }] },
+    });
+    runCalc(provider);
+
+    const voteBase = { video_id: vid, category_id: cat, start: 1, end: 11, ...voteExtra };
+    await postVote(prefix, { ...voteBase, user_id: `${provider}-del-other`, vote: 1 });
+    const authorBefore = await userRating(prefix, author);
+    const voterBefore = await userRating(prefix, voter);
+    await postVote(prefix, { ...voteBase, user_id: voter, vote: -1 });
+    assert.equal((await getSegmentRow(prefix, vid, cat, 1, 11)).rating, 0);
+    assert.equal(await userRating(prefix, author), authorBefore - 1, 'the vote changed the author\'s rating');
+
+    const voteId = await voteIdOf(prefix, voter, vid);
+    const base = prefix ? `/${prefix}` : '';
+    const res = await request('GET', `${base}/votes/${voteId}/delete?verifyBearerToken=${VOTE_AUTH}`, null);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+
+    assert.equal((await getSegmentRow(prefix, vid, cat, 1, 11)).rating, 1, 'segment table rating back to the pre-vote value');
+    assert.equal(await getJsonRating(prefix, vid, cat, 1, 11), 1, 'JSON rating back to the pre-vote value');
+    assert.equal(await userRating(prefix, author), authorBefore, 'author\'s rating change reversed');
+    assert.equal(await userRating(prefix, voter), voterBefore, 'voter\'s own rating untouched');
+    const tp = prefix ? `${prefix}_` : '';
+    assert.equal((await dbQuery(`SELECT 1 FROM ${tp}votes WHERE id = $1`, [voteId])).length, 0, 'vote row deleted');
+}
+
+test('prv vote delete: segment rating and author rating are reversed, the voter is untouched', async () => {
+    await assertVoteDeleteUndoesVote('');
+});
+
+test('RT/YT vote delete: segment rating and author rating are reversed', async () => {
+    await assertVoteDeleteUndoesVote('rt');
+    await assertVoteDeleteUndoesVote('yt');
+});
+
+test('prv vote delete: unknown vote id → 404, wrong token → 401 and the vote stays', async () => {
+    const missing = await request('GET', `/votes/999999999/delete?verifyBearerToken=${VOTE_AUTH}`, null);
+    assert.equal(missing.status, 404);
+    assert.equal((await request('GET', '/', null)).status, 200, 'server still up');
+
+    const voteId = await voteIdOf('', 'prv-del-other', '__e2e__prv_vote_delete');
+    const wrong = await request('GET', `/votes/${voteId}/delete?verifyBearerToken=wrong`, null);
+    assert.equal(wrong.status, 401);
+    assert.equal((await dbQuery(`SELECT 1 FROM votes WHERE id = $1`, [voteId])).length, 1, 'vote kept');
+    assert.equal((await getSegmentRow('', '__e2e__prv_vote_delete', cats.prv.intro, 1, 11)).rating, 1, 'rating kept');
+});
+
 // ── Metrics endpoint and path normalization ──────────────────────────────────
 
 test('metrics: GET /metrics returns 200 and includes expected metric names', async () => {

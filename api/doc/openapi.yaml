@@ -386,6 +386,10 @@ paths:
     get:
       tags: [prv]
       summary: Delete a vote (Grafana-compatible)
+      description: |
+        Undoes the vote: deletes it, recomputes the segment's `rating` from the remaining
+        votes (`prv_calculated_segments` and `video_calculateds.data`) and reverses the change the vote
+        made to the markup authors' user `rating`. The voter's own rating is not changed.
       security:
         - tokenQuery: []
       parameters:
@@ -393,7 +397,7 @@ paths:
       responses:
         '201': { description: Deleted }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Vote or user not found }
+        '404': { description: Vote not found }
 
   /votes/user/{internal_user_id}/update-rating:
     get:
@@ -722,6 +726,10 @@ paths:
     get:
       tags: [RT]
       summary: Delete a vote (Grafana-compatible)
+      description: |
+        Undoes the vote: deletes it, recomputes the segment's `rating` from the remaining
+        votes (`rt_calculated_segments` and `rt_video_calculateds.data`) and reverses the change the vote
+        made to the markup authors' user `rating`. The voter's own rating is not changed.
       security:
         - tokenQuery: []
       parameters:
@@ -729,7 +737,7 @@ paths:
       responses:
         '201': { description: Deleted }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Vote or user not found }
+        '404': { description: Vote not found }
 
   /rt/votes/user/{internal_user_id}/update-rating:
     get:
@@ -896,6 +904,10 @@ paths:
     get:
       tags: [YT]
       summary: Delete a vote (Grafana-compatible)
+      description: |
+        Undoes the vote: deletes it, recomputes the segment's `rating` from the remaining
+        votes (`yt_calculated_segments` and `yt_video_calculateds.data`) and reverses the change the vote
+        made to the markup authors' user `rating`. The voter's own rating is not changed.
       security:
         - tokenQuery: []
       parameters:
@@ -903,7 +915,7 @@ paths:
       responses:
         '201': { description: Deleted }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Vote or user not found }
+        '404': { description: Vote not found }
 
   /yt/votes/user/{internal_user_id}/update-rating:
     get:
