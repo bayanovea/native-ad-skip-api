@@ -35,7 +35,6 @@ module.exports = function(sequelize) {
     const VideoCalculated = sequelize.define('video_calculated', {
         video_id: DataTypes.INTEGER,
         data: DataTypes.JSON,
-        meta: DataTypes.JSON,
     }, { tableName: 'video_calculateds' });
 
     const Vote = sequelize.define('vote', {

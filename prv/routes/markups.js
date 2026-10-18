@@ -146,44 +146,6 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         res.status(200).send('Updated');
     }));
 
-    router.post('/admin/markups/edit', verifyBearerToken, [
-        body('video_id').isString(),
-        body('category_id').isInt({ min: 1 }),
-        body('start').isInt({ min: 0 }),
-        body('end').isInt({ min: 0 }),
-        body('new_category_id').isInt({ min: 1 }),
-        body('new_start').isInt({ min: 0 }),
-        body('new_end').isInt({ min: 0 }),
-        body('user_id').isString(),
-        body('prv_user_id').optional().isInt({ min: 1 }),
-        validateRequest,
-    ],
-    handler(async (req, res) => {
-        const { user_id: userId, prv_user_id: prvUserId } = req.body;
-
-        const video = await models.Video.findOne({ where: { native_id: req.body.video_id } });
-        if (!video) { res.status(404).send('Video not found'); return; }
-
-        const markupIds = await markupRepository.getIdsBySegmentData(video, req.body.category_id, req.body.start, req.body.end);
-        await markupRepository.softDeleteByIds(markupIds, userId, prvUserId);
-
-        await sequelize.transaction(async (transaction) => {
-            const markup = await models.Markup.create({
-                video_id: video.id,
-                user_id: userId,
-                prv_user_id: prvUserId,
-                category_id: req.body.new_category_id,
-            });
-            await models.MarkupTimeInterval.create({
-                markup_id: markup.id,
-                start: req.body.new_start,
-                end: req.body.new_end,
-            });
-        });
-
-        res.status(201).send('Created');
-    }));
-
     router.get('/markups', verifyBearerToken, handler(async (req, res) => {
         const markups = await markupRepository.findByRequest(req);
         res.status(200).send(markups);

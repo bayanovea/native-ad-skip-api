@@ -158,7 +158,7 @@ Each provider directory has the same internal layout:
    - **End** = median of all ends in the group
    - Row-lock the video's `video_calculateds` row (`FOR UPDATE`; the vote handler and `--recompute-ratings` take this lock first too, so the same order avoids deadlocks), then clear the previous segments (`{provider}_calculated_segment_markups` → `{provider}_calculated_segments` → `video_calculateds`)
    - Read the ratings from `{prefix}votes` (`voteRatings`), as late as possible: a segment's rating is the SUM of each user's latest vote (`DISTINCT ON (user_id, category_id, start, "end")`, `"createdAt" DESC, id DESC`) with an exact `(video_id, category_id, start, end)` match — vote bounds are floats, segment bounds ints. The Node API uses the same rule (`lib/segment-rating.js`). Votes whose bounds match no segment after a boundary shift count nowhere (`docs/backlog/votes-lost-when-segment-boundaries-shift.md`).
-   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`, `rating` from the votes; `rating` is omitted when 0 — sparse representation). `meta` is no longer written.
+   - Insert the JSON array into `video_calculateds.data` (each entry: `category_id`, `start`, `end`, `rating` from the votes; `rating` is omitted when 0 — sparse representation).
    - Insert one row per segment into `{provider}_calculated_segments` (with that `rating`) and one row per contributing markup into `{provider}_calculated_segment_markups`
    - Set `is_new = false` on `{provider}markups` only for the ids read in the first step, so markups posted during the run are picked up by the next one
 3. Per-video errors are returned, not panicked: the failing video is logged (`Calculate video failed: <video_id>: <err>`) and rolled back, the other videos go on, and the binary exits 1 at the end (`N of M videos failed`). Only startup failures (DB connect, listing the videos) abort the run.
@@ -215,7 +215,7 @@ All three providers share the same route shape; `prv/` also mounts the shared `e
 | `MarkupTimeInterval` | start/end times belonging to a Markup; also soft-deleted |
 | `MarkupCategory` | Enum: intro, sponsor, self_promotion, credits |
 | `Video` | Video reference with optional duration |
-| `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`; `rating` present only when non-zero. `meta` is unused by current calculator |
+| `VideoCalculated` | Aggregated JSON array per video (1:1 with Video). Each entry: `category_id`, `start`, `end`; `rating` present only when non-zero. The old `meta` column was dropped on 2026-10-18 (`lib/schema.js`) |
 | `CalculatedSegment` | One row per aggregated segment — table `{provider}_calculated_segments`; carries `rating`, derived from the votes table (calculator, vote handler, `--recompute-ratings`) |
 | `CalculatedSegmentMarkup` | Junction linking a `CalculatedSegment` to each contributing `Markup` — table `{provider}_calculated_segment_markups` |
 | `Vote` | User vote on a calculated segment (-1, 0, +1) |

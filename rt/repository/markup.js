@@ -38,26 +38,6 @@ module.exports = function createMarkupRepository(models, sequelize) {
             }
         },
 
-        async getIdsBySegmentData(video, categoryId, start, end) {
-            const videoCalculated = await models.VideoCalculated.findOne({
-                where: { video_id: String(video.id) },
-            });
-            if (!videoCalculated) throw new Error('Video calculated not found');
-
-            let markupIds = [];
-            for (let i = 0; i < videoCalculated.data.length; i++) {
-                const interval = videoCalculated.data[i];
-                if (interval.category_id === categoryId && interval.start === start && interval.end === end) {
-                    const metaSegment = videoCalculated.meta.segments[i];
-                    if (metaSegment.id !== i) throw new Error('Segment id should match iterator');
-                    markupIds.push(...metaSegment.markup_ids);
-                }
-            }
-            markupIds = [...new Set(markupIds)];
-            if (markupIds.length === 0) throw new Error('Empty markup ids');
-            return markupIds;
-        },
-
         async softDeleteByIds(markupIds, userId, prvUserId) {
             const updateValues = {
                 deleted_at: Date.now(),

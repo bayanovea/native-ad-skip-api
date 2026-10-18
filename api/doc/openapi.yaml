@@ -453,35 +453,6 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
 
   # ── Admin ────────────────────────────────────────────────────────────────────
-  /admin/markups/edit:
-    post:
-      tags: [Admin]
-      summary: Replace a calculated segment with new boundaries
-      description: "Soft-deletes all markups matching the segment, then creates a new markup."
-      security:
-        - basicAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [video_id, category_id, start, end, new_category_id, new_start, new_end, user_id]
-              properties:
-                video_id:       { type: string }
-                category_id:    { type: integer, minimum: 1 }
-                start:          { type: integer, minimum: 0 }
-                end:            { type: integer, minimum: 0 }
-                new_category_id: { type: integer, minimum: 1 }
-                new_start:      { type: integer, minimum: 0 }
-                new_end:        { type: integer, minimum: 0 }
-                user_id:        { type: string }
-                prv_user_id:     { type: integer, minimum: 1 }
-      responses:
-        '201': { description: Created }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Video not found }
-
   /admin/video/{video_id}:
     get:
       tags: [Admin]
