@@ -66,6 +66,29 @@ services:
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
+    configs:
+      - source: grafana-contact-points
+        target: /etc/grafana/provisioning/alerting/contact-points.yml
+
+configs:
+  # Rendered by Compose (needs 2.23.1+), not by Grafana's own `$VAR` expansion:
+  # Grafana turns an env var that parses as a number into a YAML number, and
+  # the Telegram integration requires `chatid` to be a string (Grafana 12.3.1
+  # then refuses to start). The two values come from the deploy environment
+  # (GitHub Actions secrets); rules and policies live in grafana/provisioning/alerting/.
+  grafana-contact-points:
+    content: |
+      apiVersion: 1
+      contactPoints:
+        - orgId: 1
+          name: telegram
+          receivers:
+            - uid: telegram
+              type: telegram
+              settings:
+                bottoken: "${TELEGRAM_BOT_TOKEN}"
+                chatid: "${TELEGRAM_CHAT_ID}"
+              disableResolveMessage: false
 
 volumes:
   prometheus_data:

@@ -77,6 +77,8 @@ jobs:
         NODE_APP_PORT: ${{ secrets.NODE_APP_PORT }}
         AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
       # The remote script goes over stdin to 'bash -s', so no secret is on any
@@ -94,6 +96,8 @@ jobs:
             NODE_APP_PORT "$NODE_APP_PORT" \
             AUTH_TOKEN "$AUTH_TOKEN" \
             GF_ADMIN_PASSWORD "$GF_ADMIN_PASSWORD" \
+            TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" \
+            TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID" \
             HOST_IP "$HOST_IP" \
             IMAGE_NAME "$IMAGE_NAME"
           cat <<'EOF'

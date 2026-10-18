@@ -1,0 +1,77 @@
+# Evaluated every minute against the Prometheus datasource (uid from
+# datasources/datasources.yml). The contact point `telegram` is rendered by
+# Compose into this directory (docker-compose.yml `configs:`). Annotations are
+# not run through Grafana's `$VAR` expansion, so `{{ $labels.provider }}` is
+# written as is.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: api
+    folder: native-ad-skip-api
+    interval: 1m
+    rules:
+      # No series at all means the calculator never ran (or /metrics has no
+      # heartbeat): that is the alert, hence noDataState Alerting.
+      - uid: calculator-stale
+        title: CalculatorStale
+        condition: B
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: 'calculator {{ $labels.provider }}: no successful run for over 10 min'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: time() - max by (provider) (calculator_last_success_timestamp_seconds)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [600]
+      - uid: http-5xx
+        title: Http5xx
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'more than 5 HTTP 5xx in 5 min'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: sum(increase(http_request_duration_seconds_count{status_code=~"5.."}[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [5]
