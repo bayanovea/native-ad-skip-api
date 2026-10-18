@@ -5,9 +5,9 @@ const yaml = require('js-yaml');
 const fs = require('fs');
 const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
-const { bootstrap } = require('./db');
+const { sequelize, bootstrap } = require('./db');
 const { redactRequest } = require('./lib/redact-request');
-require('./prometheus-wrapper');
+const { registerCalculatorHeartbeat } = require('./prometheus-wrapper');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -89,6 +89,7 @@ app.use((error, req, res, next) => {
 // (e.g. requests touching users.banned_at would fail with `column does not
 // exist` for the brief window between listen() and the ALTER completing).
 bootstrap().then(() => {
+    registerCalculatorHeartbeat(sequelize);
     app.listen(port, () => {
         console.log(`I am alive, http://localhost:${port}`);
     });

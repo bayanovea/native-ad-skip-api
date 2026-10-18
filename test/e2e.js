@@ -521,6 +521,42 @@ async function waitForQueryBlockedOnLock(fragment) {
     throw new Error(`no query blocked on a lock matching "${fragment}"`);
 }
 
+async function heartbeat(provider) {
+    const rows = await dbQuery(
+        `SELECT last_run_at, last_success_at, failed_videos FROM calculator_heartbeats WHERE provider = $1`,
+        [provider]);
+    return rows[0] || null;
+}
+
+// Every run (also an idle one) ends with a heartbeat row; GET /metrics turns it
+// into the gauges the Grafana alert watches. A missing table (Go cron before
+// Node's first sync on a fresh deploy) is a logged failure, not a panic.
+test('calculator: a run writes the heartbeat and /metrics exposes it', async () => {
+    await dbQuery(`DELETE FROM calculator_heartbeats WHERE provider = 'prv'`);
+    const before = Date.now() - 1000;
+    runCalc('prv');
+    const hb = await heartbeat('prv');
+    assert.ok(hb, 'heartbeat row for prv');
+    assert.equal(hb.failed_videos, 0);
+    assert.ok(hb.last_run_at.getTime() >= before, `last_run_at ${hb.last_run_at}`);
+    assert.equal(hb.last_success_at.getTime(), hb.last_run_at.getTime());
+
+    const text = await fetchMetrics();
+    const successTs = parseCounter(text, 'calculator_last_success_timestamp_seconds', { provider: 'prv' });
+    assert.equal(Math.round(successTs), Math.round(hb.last_success_at.getTime() / 1000));
+    assert.equal(parseCounter(text, 'calculator_last_run_timestamp_seconds', { provider: 'prv' }), successTs);
+
+    await dbQuery(`ALTER TABLE calculator_heartbeats RENAME TO calculator_heartbeats_e2e_gone`);
+    let r;
+    try {
+        r = runCalcStatus('prv');
+    } finally {
+        await dbQuery(`ALTER TABLE calculator_heartbeats_e2e_gone RENAME TO calculator_heartbeats`);
+    }
+    assert.equal(r.status, 1, `calculator should exit 1 without the table, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /Heartbeat write failed: .*calculator_heartbeats/);
+});
+
 // A failure after the clear (a trigger rejects A's segment insert) rolls A back
 // to its previous segments; B, in the same run, is still calculated, and the
 // binary exits non-zero.
@@ -553,6 +589,10 @@ test('calculator: a failing video keeps its previous segments, the others are st
     assert.equal(r.status, 1, `calculator should exit 1, got ${r.status}: ${r.stdout}${r.stderr}`);
     assert.match(r.stderr, new RegExp(`Calculate video failed: ${idA}: .*e2e: segment insert rejected`));
     assert.match(r.stderr, /1 of \d+ videos failed/);
+
+    const hb = await heartbeat('prv');
+    assert.equal(hb.failed_videos, 1, 'heartbeat counts the failed video');
+    assert.ok(hb.last_success_at < hb.last_run_at, `last_success_at must stay at the previous run: ${JSON.stringify(hb)}`);
 
     const a = await getCalculated('', vidA, { v: '1' });
     assert.equal(a.status, 200);

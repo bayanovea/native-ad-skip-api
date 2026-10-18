@@ -1,4 +1,4 @@
-const { Sequelize } = require('sequelize');
+const { Sequelize, DataTypes } = require('sequelize');
 const { syncSchema } = require('./lib/schema');
 
 // DB_PORT is optional (default 5432, what prod uses); set it to reach a local
@@ -29,6 +29,16 @@ const prv = require('./prv/db')(sequelize);
 const rt = require('./rt/db')(sequelize);
 const yt = require('./yt/db')(sequelize);
 
+// One row per provider, written by the Go calculator at the end of every run
+// (calculator/calculate.go writeHeartbeat) and read by GET /metrics
+// (prometheus-wrapper.js). Shared by prv/rt/yt, hence no table prefix.
+const CalculatorHeartbeat = sequelize.define('calculator_heartbeat', {
+    provider: { type: DataTypes.TEXT, primaryKey: true },
+    last_run_at: { type: DataTypes.DATE, allowNull: false },
+    last_success_at: { type: DataTypes.DATE, allowNull: true },
+    failed_videos: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+}, { tableName: 'calculator_heartbeats', timestamps: false });
+
 // bootstrap() performs schema sync, idempotent ALTERs (for columns not yet
 // represented by a Sequelize migration), and category seeding — see
 // lib/schema.js, shared with scripts/sync-db.js. server.js MUST await this
@@ -40,4 +50,4 @@ async function bootstrap() {
     console.log('Tables schemas synced');
 }
 
-module.exports = { sequelize, prv, rt, yt, bootstrap };
+module.exports = { sequelize, prv, rt, yt, CalculatorHeartbeat, bootstrap };

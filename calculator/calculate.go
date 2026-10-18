@@ -67,10 +67,33 @@ func Run(tablePrefix string, videoId ...string) error {
 
 	pool.Close()
 
+	if err := writeHeartbeat(db, tablePrefix, failed); err != nil {
+		log.Printf("Heartbeat write failed: %v", err)
+		return fmt.Errorf("heartbeat: %w", err)
+	}
+
 	if failed > 0 {
 		return fmt.Errorf("%d of %d videos failed", failed, len(ids))
 	}
 	return nil
+}
+
+// writeHeartbeat records the run in calculator_heartbeats (one row per
+// provider, read by GET /metrics). A run with nothing to process is a success:
+// that is the normal idle minute. The table is created by the Node app's
+// schema sync, so on a fresh deploy the first cron runs may fail here until
+// Node has booted.
+func writeHeartbeat(db *sql.DB, tablePrefix string, failed int) error {
+	_, err := db.Exec(`
+		INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
+		VALUES ($1, NOW(), CASE WHEN $2 = 0 THEN NOW() END, $2)
+		ON CONFLICT (provider) DO UPDATE SET
+			last_run_at = EXCLUDED.last_run_at,
+			failed_videos = EXCLUDED.failed_videos,
+			last_success_at = CASE WHEN EXCLUDED.failed_videos = 0
+				THEN EXCLUDED.last_run_at ELSE calculator_heartbeats.last_success_at END
+	`, providerName(tablePrefix), failed)
+	return err
 }
 
 func getVideoIdsWithNewMarkups(db *sql.DB, tablePrefix string) ([]string, error) {
