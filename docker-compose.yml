@@ -24,17 +24,6 @@ services:
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
-  swagger-ui:
-    image: swaggerapi/swagger-ui
-    logging: *default-logging
-    ports:
-      - "127.0.0.1:8080:8080"
-    networks:
-      - main-network
-    volumes:
-      - ./api/doc/openapi.yaml:/usr/share/nginx/html/openapi.yaml
-    environment:
-      - SWAGGER_JSON=/usr/share/nginx/html/openapi.yaml
   prometheus:
     image: prom/prometheus:v2.45.2
     restart: unless-stopped
