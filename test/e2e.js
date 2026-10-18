@@ -2316,6 +2316,73 @@ test('markup validation: rt uses the shared validator (21 intervals → 400, mis
     await assertMarkupRejected('rt', { ...base, data: { intervals: [{ start: 10 }] } }, /data\.intervals\[0\]\.end must be a finite number/);
 });
 
+// ── PUT /markups interval validation ─────────────────────────────────────────
+// The edited interval (new values merged with the stored ones) must obey the same
+// rules; a rejected edit leaves the interval and is_new untouched. The valid edit
+// writes the interval and is_new = true in one transaction.
+
+async function putMarkup(prefix, body) {
+    return request('PUT', prefix ? `/${prefix}/markups` : '/markups', body);
+}
+
+async function seedForPut(prefix, vid, userId, catId, extra = {}) {
+    await postMarkup(prefix, { video_id: vid, v: '1', user_id: userId, category_id: catId, ...extra,
+        data: { intervals: [{ start: 100, end: 130 }] } });
+    runCalc(prefix || 'prv'); // is_new → false, so the edit's is_new = true is observable
+    const rows = await markupRowsByUser(prefix, userId);
+    assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[100, 130]]);
+    return { video_id: vid, user_id: userId, category_id: catId, start: 100, end: 130, ...extra };
+}
+
+async function isNewByUser(prefix, userId) {
+    const tp = prefix ? `${prefix}_` : '';
+    const rows = await dbQuery(`SELECT is_new FROM ${tp}markups WHERE user_id = $1 AND deleted_at IS NULL`, [userId]);
+    return rows.map(r => r.is_new);
+}
+
+test('PUT /markups: new_start above the stored end → 400, interval and is_new unchanged', async () => {
+    const userId = 'put-markup-start';
+    const body = await seedForPut('', '__e2e__put_markup_start', userId, cats.prv.intro);
+    const res = await putMarkup('', { ...body, new_start: 130 });
+    assert.equal(res.status, 400, `expected 400, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.match(res.body, /start must be less than end/);
+    const rows = await markupRowsByUser('', userId);
+    assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[100, 130]]);
+    assert.deepEqual(await isNewByUser('', userId), [false]);
+});
+
+test('PUT /markups: new_end above 86400 → 400, interval unchanged', async () => {
+    const userId = 'put-markup-end';
+    const body = await seedForPut('', '__e2e__put_markup_end', userId, cats.prv.intro);
+    const res = await putMarkup('', { ...body, new_end: 86401 });
+    assert.equal(res.status, 400, `expected 400, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.match(res.body, /end must be <= 86400/);
+    const rows = await markupRowsByUser('', userId);
+    assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[100, 130]]);
+});
+
+test('PUT /markups: a valid edit → 200, the interval and is_new = true are stored', async () => {
+    const userId = 'put-markup-valid';
+    const body = await seedForPut('', '__e2e__put_markup_valid', userId, cats.prv.intro);
+    const res = await putMarkup('', { ...body, new_start: 90, new_end: 140 });
+    assert.equal(res.status, 200, `expected 200, got ${res.status} ${JSON.stringify(res.body)}`);
+    const rows = await markupRowsByUser('', userId);
+    assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[90, 140]]);
+    assert.deepEqual(await isNewByUser('', userId), [true]);
+});
+
+test('PUT /markups: rt and yt reject new_end <= start with 400', async () => {
+    const rt = await seedForPut('rt', '__e2e__put_markup_rt', 'put-markup-rt', cats.rt.intro, { duration: 300 });
+    const resRt = await putMarkup('rt', { ...rt, new_end: 100 });
+    assert.equal(resRt.status, 400, `rt: expected 400, got ${resRt.status} ${JSON.stringify(resRt.body)}`);
+    assert.deepEqual((await markupRowsByUser('rt', 'put-markup-rt')).intervals.map(r => [r.start, r.end]), [[100, 130]]);
+
+    const yt = await seedForPut('yt', '__e2e__put_markup_yt', 'put-markup-yt', cats.yt.intro, { duration: 300 });
+    const resYt = await putMarkup('yt', { ...yt, new_start: 0, new_end: 0 });
+    assert.equal(resYt.status, 400, `yt: expected 400, got ${resYt.status} ${JSON.stringify(resYt.body)}`);
+    assert.deepEqual((await markupRowsByUser('yt', 'put-markup-yt')).intervals.map(r => [r.start, r.end]), [[100, 130]]);
+});
+
 // ── /admin/user/:internal_id (video-less user view) tests ─────────────────────
 // Route param is INTERNAL users.id (PK), not prv_user_id — prv_user_id is not
 // unique across User rows (unique index is composite (generated_user_id,

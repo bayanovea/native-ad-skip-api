@@ -128,11 +128,19 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         if (req.body.new_start !== undefined) newIntervalValues.start = req.body.new_start;
         if (req.body.new_end !== undefined) newIntervalValues.end = req.body.new_end;
 
+        // The resulting interval must obey the POST /markup rules (0 <= start < end <= MAX_SECONDS).
+        try {
+            validateIntervals([{ start: markupInterval.start, end: markupInterval.end, ...newIntervalValues }]);
+        } catch (err) {
+            res.status(400).send(err.message);
+            return;
+        }
+
         await sequelize.transaction(async (transaction) => {
             if (Object.keys(newIntervalValues).length) {
-                await models.MarkupTimeInterval.update(newIntervalValues, { where: { id: markupInterval.id } });
+                await models.MarkupTimeInterval.update(newIntervalValues, { where: { id: markupInterval.id }, transaction });
             }
-            await models.Markup.update(newMarkupValues, { where: { id: markupInterval.markup_id } });
+            await models.Markup.update(newMarkupValues, { where: { id: markupInterval.markup_id }, transaction });
         });
 
         res.status(200).send('Updated');
