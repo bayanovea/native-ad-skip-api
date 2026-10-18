@@ -5,6 +5,12 @@
 # written as is.
 apiVersion: 1
 
+# File provisioning never removes a rule that merely disappeared from `groups`;
+# a dropped rule stays (and keeps firing) until it is listed here.
+deleteRules:
+  - orgId: 1
+    uid: lookup-not-found-share   # dropped 2026-10-19: not_found is 95% of normal traffic
+
 groups:
   - orgId: 1
     name: api
