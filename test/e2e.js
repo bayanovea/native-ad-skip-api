@@ -545,6 +545,8 @@ test('calculator: a run writes the heartbeat and /metrics exposes it', async () 
     const successTs = parseCounter(text, 'calculator_last_success_timestamp_seconds', { provider: 'prv' });
     assert.equal(Math.round(successTs), Math.round(hb.last_success_at.getTime() / 1000));
     assert.equal(parseCounter(text, 'calculator_last_run_timestamp_seconds', { provider: 'prv' }), successTs);
+    // parseCounter reads a missing series as 0, so a clean run needs the line itself.
+    assert.match(text, /^calculator_failed_videos\{provider="prv"\} 0$/m, 'calculator_failed_videos is exposed as 0');
 
     await dbQuery(`ALTER TABLE calculator_heartbeats RENAME TO calculator_heartbeats_e2e_gone`);
     let r;
@@ -593,6 +595,8 @@ test('calculator: a failing video keeps its previous segments, the others are st
     const hb = await heartbeat('prv');
     assert.equal(hb.failed_videos, 1, 'heartbeat counts the failed video');
     assert.ok(hb.last_success_at < hb.last_run_at, `last_success_at must stay at the previous run: ${JSON.stringify(hb)}`);
+    assert.equal(parseCounter(await fetchMetrics(), 'calculator_failed_videos', { provider: 'prv' }), 1,
+        'calculator_failed_videos gauge follows the heartbeat');
 
     const a = await getCalculated('', vidA, { v: '1' });
     assert.equal(a.status, 200);

@@ -1,5 +1,5 @@
-# Evaluated every minute against the Prometheus datasource (uid from
-# datasources/datasources.yml). The contact point `telegram` is rendered by
+# Evaluated every minute against the Prometheus datasource (StaleMarkups: the
+# Postgres one); uids from datasources/datasources.yml. The contact point `telegram` is rendered by
 # Compose into this directory (docker-compose.yml `configs:`). Annotations are
 # not run through Grafana's `$VAR` expansion, so `{{ $labels.provider }}` is
 # written as is.
@@ -75,3 +75,174 @@ groups:
                 - evaluator:
                     type: gt
                     params: [5]
+      # Queried as plain `up` with a < 1 threshold rather than `up == 0`: the
+      # filtered form is empty while healthy, and no data here must alert
+      # (Prometheus not scraping the app at all is also an outage).
+      - uid: api-down
+        title: ApiDown
+        condition: B
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: 'API is down: Prometheus cannot scrape app:3022'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: up{job="native-ad-skip-api"}
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+      # The histogram's top bucket is 2.5 s, so the quantile saturates there;
+      # fine for a 1 s threshold.
+      - uid: http-latency-p95
+        title: HttpLatencyP95
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'HTTP p95 latency over 1 s for 5 min'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [1]
+      # 3m = three one-minute cron runs in a row with the same video failing.
+      - uid: calculator-failed-videos
+        title: CalculatorFailedVideos
+        condition: B
+        for: 3m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'calculator {{ $labels.provider }}: a video fails on every run, look for "Calculate video failed: <video_id>" in docker logs'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: max by (provider) (calculator_failed_videos)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+      # prv only (`markups`); rt/yt have no data. Every writer that sets
+      # is_new = true goes through Sequelize, which bumps "updatedAt".
+      - uid: stale-markups
+        title: StaleMarkups
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $values.A }} markups with is_new for over 10 min: the calculator is skipping a locked row or not running'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ce68e9be-35fa-4d6a-8f59-35f03dae1d52
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COUNT(*) AS stale FROM markups
+                WHERE is_new = true AND deleted_at IS NULL
+                  AND "updatedAt" < NOW() - INTERVAL '10 minutes'
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+      # The `and` side drops the series when the hour has 50 lookups or fewer,
+      # so a quiet hour is no data (OK), not a noisy ratio.
+      - uid: lookup-not-found-share
+        title: LookupNotFoundShare
+        condition: B
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'over 30% of /video-calculated lookups in the last hour were not_found or mismatch'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: >-
+                sum(increase(video_calculated_lookup_total{outcome=~"not_found|mismatch"}[1h]))
+                / sum(increase(video_calculated_lookup_total[1h])) > 0.3
+                and sum(increase(video_calculated_lookup_total[1h])) > 50
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.3]
