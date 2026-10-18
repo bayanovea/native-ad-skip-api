@@ -802,14 +802,52 @@ test('prv GET /video-calculated: unknown video returns 204 and creates no Video 
     assert.equal(await countVideos('', vid), 0, 'no Video row should be created');
 });
 
-// Rule 1: find by native_id + duration within ±1
-test('prv GET /video-calculated: finds video by duration within ±1', async () => {
+// Rule 1: find by native_id + duration within ±2
+test('prv GET /video-calculated: finds video by duration within ±2', async () => {
     const vid = '__e2e__prv_duration_range';
     const cat = cats.prv.intro;
     await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
     runCalc('prv');
-    const res = await getCalculated('', vid, { v: '1', duration: 301 });
-    assert.equal(res.status, 200, 'should find video with duration 300 when requesting 301');
+    const res = await getCalculated('', vid, { v: '1', duration: 302 });
+    assert.equal(res.status, 200, 'should find video with duration 300 when requesting 302');
+});
+
+// POST /markup with a duration within ±2 of an existing video must reuse it, not split off a new
+// Video row; a diff of 3 must split. A duration that fits both rows of a split pair lands on the
+// closest one, on the write and on the read path alike.
+test('prv POST /markup: duration within ±2 reuses the video, diff of 3 splits, closest row wins', async () => {
+    const vid = '__e2e__prv_split_boundary';
+    const cat = cats.prv.intro;
+    const markup = (user, duration, end) =>
+        postMarkup('', { video_id: vid, v: '1', user_id: user, category_id: cat, duration, data: { intervals: [{ start: 0, end }] } });
+    const markupVideoDurations = async () => {
+        const c = adminClient(TEST_DB);
+        await c.connect();
+        try {
+            const { rows } = await c.query(
+                `SELECT m.user_id, v.duration FROM markups m JOIN videos v ON v.id = m.video_id
+                 WHERE v.native_id = $1 ORDER BY m.id`, [vid]);
+            return Object.fromEntries(rows.map(r => [r.user_id.trim(), r.duration]));
+        } finally {
+            await c.end();
+        }
+    };
+
+    await markup('u1', 300, 10);
+    await markup('u2', 302, 10);
+    assert.equal(await countVideos('', vid), 1, 'duration 302 should match the 300 row, not split');
+    await markup('u3', 303, 20);
+    assert.equal(await countVideos('', vid), 2, 'duration 303 should split into a new Video row');
+
+    // 302 is within ±2 of both 300 and 303: the closest row (303) wins, deterministically.
+    await markup('u4', 302, 20);
+    assert.equal(await countVideos('', vid), 2, 'duration 302 should reuse a row of the pair');
+    assert.deepEqual(await markupVideoDurations(), { u1: 300, u2: 300, u3: 303, u4: 303 });
+
+    runCalc('prv');
+    const res = await getCalculated('', vid, { v: '1', duration: 302 });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.map(s => s.end), [20], 'read with 302 serves the 303 row, same as the write');
 });
 
 // Rule 2: find by native_id with null duration, update it
@@ -842,14 +880,14 @@ test('RT GET /video-calculated: unknown video returns 204 and creates no Video r
 
 // ── Lookup-outcome metric tests ───────────────────────────────────────────────
 
-test('prv lookup metric: match outcome increments on duration ±1 hit', async () => {
+test('prv lookup metric: match outcome increments on duration ±2 hit', async () => {
     const vid = '__e2e__prv_metric_match';
     const cat = cats.prv.intro;
     await postMarkup('', { video_id: vid, v: '1', user_id: 'u1', category_id: cat, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
     runCalc('prv');
 
     const before = await getLookupCount('match', 'prv');
-    const res = await getCalculated('', vid, { v: '1', duration: 301 });
+    const res = await getCalculated('', vid, { v: '1', duration: 302 });
     assert.equal(res.status, 200);
     const after = await getLookupCount('match', 'prv');
     assert.equal(after - before, 1, 'match counter should increment by 1');

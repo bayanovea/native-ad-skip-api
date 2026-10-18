@@ -1,12 +1,10 @@
-const { Op } = require('sequelize');
+const { durationMatchQuery } = require('../../lib/duration-tolerance');
 
 module.exports = function createVideoRepository(models) {
     return {
         async findByNativeIdAndDuration(nativeId, duration) {
             if (duration != null) {
-                let video = await models.Video.findOne({
-                    where: { native_id: nativeId, duration: { [Op.between]: [duration - 1, duration + 1] } },
-                });
+                let video = await models.Video.findOne(durationMatchQuery(models, nativeId, duration));
 
                 if (!video) {
                     video = await models.Video.findOne({ where: { native_id: nativeId, duration: null } });

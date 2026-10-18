@@ -2,20 +2,23 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { Op } = require('sequelize');
+const { Op, Sequelize } = require('sequelize');
 const { findVideoForReadWithOutcome } = require('../lib/find-video-for-read');
 
 // Build a stubbed `models.Video` whose `findOne` returns the first row that
 // matches a recorded query (matched by deep-equal on the `where` clause).
-// Each query records the call so tests can assert on side effects too.
+// Each query records the call (`where` and `order`) so tests can assert on side effects too.
 function makeModels(rowsByQuery) {
     const updates = [];
     const findOneCalls = [];
+    const findOneOrders = [];
     return {
         models: {
             Video: {
-                async findOne({ where }) {
+                sequelize: { literal: Sequelize.literal },
+                async findOne({ where, order }) {
                     findOneCalls.push(where);
+                    findOneOrders.push(order);
                     for (const entry of rowsByQuery) {
                         if (matchesWhere(entry.where, where)) {
                             if (entry.row == null) return null;
@@ -35,6 +38,7 @@ function makeModels(rowsByQuery) {
         },
         updates,
         findOneCalls,
+        findOneOrders,
     };
 }
 
@@ -56,18 +60,38 @@ function matchesWhere(expected, actual) {
     return true;
 }
 
-test('match: video found by (native_id, duration ± 1)', async () => {
+test('match: video found by (native_id, duration ± 2)', async () => {
     const { models } = makeModels([
-        { where: { native_id: 'v1', duration: { [Op.between]: [299, 301] } }, row: { id: 1, native_id: 'v1', duration: 300 } },
+        { where: { native_id: 'v1', duration: { [Op.between]: [298, 302] } }, row: { id: 1, native_id: 'v1', duration: 300 } },
     ]);
     const result = await findVideoForReadWithOutcome(models, 'v1', 300);
     assert.equal(result.outcome, 'match');
     assert.equal(result.video.id, 1);
 });
 
+test('match: tolerance query is duration ± 2, ordered by closeness then id', async () => {
+    const { models, findOneCalls, findOneOrders } = makeModels([]);
+    await findVideoForReadWithOutcome(models, 'v1', 300);
+    assert.deepEqual(findOneCalls[0].duration[Op.between], [298, 302]);
+    const order = findOneOrders[0];
+    assert.equal(order.length, 2);
+    assert.equal(order[0][0].val, 'ABS(duration - 300)');
+    assert.equal(order[0][1], 'ASC');
+    assert.deepEqual(order[1], ['id', 'ASC']);
+    for (const other of findOneOrders.slice(1)) assert.equal(other, undefined, 'only the tolerance query is ordered');
+});
+
+test('match: numeric-string duration is used as a number, non-numeric throws', async () => {
+    const { models, findOneCalls, findOneOrders } = makeModels([]);
+    await findVideoForReadWithOutcome(models, 'v1', '300');
+    assert.deepEqual(findOneCalls[0].duration[Op.between], [298, 302]);
+    assert.equal(findOneOrders[0][0][0].val, 'ABS(duration - 300)');
+    await assert.rejects(() => findVideoForReadWithOutcome(models, 'v1', 'abc'), TypeError);
+});
+
 test('backfilled: video had null duration, helper updates it', async () => {
     const { models, updates } = makeModels([
-        { where: { native_id: 'v1', duration: { [Op.between]: [299, 301] } }, row: null },
+        { where: { native_id: 'v1', duration: { [Op.between]: [298, 302] } }, row: null },
         { where: { native_id: 'v1', duration: null }, row: { id: 2, native_id: 'v1', duration: null } },
     ]);
     const result = await findVideoForReadWithOutcome(models, 'v1', 300);
@@ -77,9 +101,9 @@ test('backfilled: video had null duration, helper updates it', async () => {
     assert.deepEqual(updates[0].values, { duration: 300 });
 });
 
-test('mismatch: only native_id matches, stored duration differs by > 1', async () => {
+test('mismatch: only native_id matches, stored duration differs by > 2', async () => {
     const { models, updates } = makeModels([
-        { where: { native_id: 'v1', duration: { [Op.between]: [299, 301] } }, row: null },
+        { where: { native_id: 'v1', duration: { [Op.between]: [298, 302] } }, row: null },
         { where: { native_id: 'v1', duration: null }, row: null },
         { where: { native_id: 'v1' }, row: { id: 3, native_id: 'v1', duration: 500 } },
     ]);
@@ -102,7 +126,7 @@ test('no_duration: request had no duration, video found by native_id alone', asy
 
 test('not_found: no row matches at all (duration provided)', async () => {
     const { models, updates } = makeModels([
-        { where: { native_id: 'v1', duration: { [Op.between]: [299, 301] } }, row: null },
+        { where: { native_id: 'v1', duration: { [Op.between]: [298, 302] } }, row: null },
         { where: { native_id: 'v1', duration: null }, row: null },
         { where: { native_id: 'v1' }, row: null },
     ]);
