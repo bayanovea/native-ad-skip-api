@@ -38,6 +38,7 @@ before(async () => {
     await createDb();
     startServer();
     await waitForSchema();
+    await waitForListen();
     cats.prv = await loadCats('');
     cats.rt = await loadCats('rt_');
     cats.yt = await loadCats('yt_');
@@ -109,6 +110,20 @@ async function waitForSchema() {
         await sleep(500);
     }
     await c.end();
+}
+
+// server.js calls listen() only after bootstrap() resolves, so the schema poll
+// above can succeed while port 3099 is still closed (ECONNREFUSED on a loaded
+// machine). Poll the health check until it answers.
+async function waitForListen() {
+    for (let i = 0; i < 60; i++) {
+        try {
+            await request('GET', '/');
+            return;
+        } catch (_) {}
+        await sleep(500);
+    }
+    throw new Error(`server did not listen on ${E2E_PORT} within 30 s`);
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
