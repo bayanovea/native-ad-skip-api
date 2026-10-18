@@ -6,6 +6,9 @@ x-logging: &default-logging
 
 services:
   app:
+    # Prod pulls the image CI pushed (IMAGE_TAG = commit sha, see .github/workflows/deploy.yml);
+    # 'build:' stays so a local 'docker compose up --build' still builds it under the same name.
+    image: ghcr.io/odedohbest/native-ad-skip-api:${IMAGE_TAG:-latest}
     build: .
     restart: unless-stopped
     logging: *default-logging

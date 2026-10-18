@@ -5,6 +5,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Rollback: deploy this image tag (a commit sha already in GHCR) instead of building one'
+        required: false
+        type: string
+        default: ''
+
+env:
+  IMAGE: ghcr.io/odedohbest/native-ad-skip-api
 
 jobs:
   test:
@@ -41,13 +50,43 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push the image to GHCR; the same job token pulls it on the host
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
+    env:
+      # An image_tag input (rollback) deploys that tag without building; a push deploys the commit's image.
+      IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
+
+    - name: Log in to GHCR
+      if: ${{ !inputs.image_tag }}
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Docker Buildx
+      if: ${{ !inputs.image_tag }}
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build and push the image
+      if: ${{ !inputs.image_tag }}
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.IMAGE }}:${{ github.sha }}
+          ${{ env.IMAGE }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Setup SSH
       env:
@@ -65,6 +104,7 @@ jobs:
         printf 'Host *\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
         chmod 600 ~/.ssh/config
 
+    # The host still needs the checkout: prometheus/grafana configs are bind-mounted from it.
     - name: Transfer Codebase to Timeweb
       run: |
         tar czf - --exclude=.git --exclude=node_modules . | ssh skipper-admin@${{ secrets.HOST_IP }} "cat > /home/skipper-admin/tmp/codebase.tar.gz"
@@ -81,6 +121,8 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # job token: can pull this repo's package, expires with the job
       # The remote script goes over stdin to 'bash -s', so no secret is on any
       # command line (ps on the host, or here: printf is a bash builtin), and
       # printf %q quotes each value safely whatever characters it contains.
@@ -99,22 +141,36 @@ jobs:
             TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" \
             TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID" \
             HOST_IP "$HOST_IP" \
-            IMAGE_NAME "$IMAGE_NAME"
+            IMAGE_NAME "$IMAGE_NAME" \
+            IMAGE_TAG "$IMAGE_TAG" \
+            GHCR_USER "$GHCR_USER" \
+            GHCR_TOKEN "$GHCR_TOKEN"
           cat <<'EOF'
         set -e
 
-        # Перенос и распаковка исходного кода
+        # Распаковка исходного кода в свежий каталог src/ (не поверх старого, чтобы
+        # удалённые из репозитория файлы не оставались на хосте); предыдущий — в src.old/.
         cd /home/skipper-admin/tmp
-        tar xzf codebase.tar.gz < /dev/null
+        rm -rf src.new
+        mkdir src.new
+        tar xzf codebase.tar.gz -C src.new < /dev/null
+        rm -rf src.old
+        if [ -d src ]; then mv src src.old; fi
+        mv src.new src
+        rm -f codebase.tar.gz
 
-        # Сборка и запуск с использованием Docker Compose v2. No 'down': 'up --build'
-        # builds the image first and touches containers only if the build succeeded,
-        # so the old stack keeps serving during the build and after a failed one.
-        # --force-recreate restarts prometheus/grafana too, as 'down' did, so they
-        # pick up the re-extracted bind-mounted configs.
-        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/docker-compose.yml up --build -d --force-recreate --remove-orphans app prometheus grafana < /dev/null
+        # Образ собран в CI и лежит в GHCR; хост только скачивает его. The pipe gives
+        # login its own stdin, so it cannot read the rest of this script. Logout runs
+        # whatever happens after it (set -e), so the job token never stays on the host.
+        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+        trap 'docker logout ghcr.io' EXIT
+        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml pull app < /dev/null
 
-        # Очистка
-        rm -rf /home/skipper-admin/tmp/codebase.tar.gz
+        # Запуск с использованием Docker Compose v2. No 'down': the old stack keeps
+        # serving until the pulled image is up, and stays up if the pull failed. --no-build
+        # because the service also has 'build:' (for local runs): without it, a missing
+        # image would be built on the host. --force-recreate restarts prometheus/grafana
+        # too, so they pick up the re-extracted bind-mounted configs.
+        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana < /dev/null
         EOF
         } | ssh skipper-admin@"$HOST_IP" 'bash -s'
