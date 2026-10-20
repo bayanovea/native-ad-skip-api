@@ -2949,7 +2949,7 @@ test('review import: works on review tables created without timestamp defaults; 
     }
 });
 
-test('schema one-off: batch assignee → exclusions and locks, column dropped; a second boot changes nothing', async () => {
+test('schema one-off: batch assignee → exclusions and locks, assignee cleared; a second boot changes nothing, an old image\'s assignee is re-migrated', async () => {
     const db = `${TEST_DB}_assignee`;
     const env = { ...process.env, DB_NAME: db, DB_HOST, DB_PORT: String(DB_PORT) };
     const sync = () => spawnSync('node', ['scripts/sync-db.js'], { cwd: APP_DIR, env, encoding: 'utf8' });
@@ -2966,8 +2966,7 @@ test('schema one-off: batch assignee → exclusions and locks, column dropped; a
         connected = true;
         // The pre-lock shape: assignee, none of the lock columns.
         await c.query(`ALTER TABLE prv_review_batches
-            DROP COLUMN reviews_needed, DROP COLUMN excluded, DROP COLUMN locked_by, DROP COLUMN locked_at,
-            ADD COLUMN assignee VARCHAR(64)`);
+            DROP COLUMN reviews_needed, DROP COLUMN excluded, DROP COLUMN locked_by, DROP COLUMN locked_at`);
         // [batch, assignee (undefined = no batch row), verdicts by reviewer]; every batch has items C1, C2.
         const seed = [
             ['g-started', 'gkshi', { gkshi: ['C1'] }],
@@ -3000,9 +2999,9 @@ test('schema one-off: batch assignee → exclusions and locks, column dropped; a
         const columns = (await c.query(
             `SELECT column_name FROM information_schema.columns WHERE table_name = 'prv_review_batches' ORDER BY column_name`)).rows
             .map(row => row.column_name);
-        assert.deepEqual(columns, ['batch', 'created_at', 'excluded', 'locked_at', 'locked_by', 'reviews_needed']);
+        assert.deepEqual(columns, ['assignee', 'batch', 'created_at', 'excluded', 'locked_at', 'locked_by', 'reviews_needed']);
         const batches = async () => (await c.query(
-            'SELECT batch, reviews_needed, excluded, locked_by, locked_at FROM prv_review_batches ORDER BY batch')).rows;
+            'SELECT batch, assignee, reviews_needed, excluded, locked_by, locked_at FROM prv_review_batches ORDER BY batch')).rows;
         const after = await batches();
         assert.deepEqual(after.map(b => [b.batch, b.reviews_needed, b.excluded, b.locked_by, b.locked_at != null]), [
             ['anyone', 1, [], null, false],
@@ -3017,7 +3016,31 @@ test('schema one-off: batch assignee → exclusions and locks, column dropped; a
 
         r = sync();
         assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        assert.ok(after.every(b => b.assignee === null));
         assert.deepEqual(await batches(), after, 'second boot is a no-op');
+
+        // Rollback: a pre-2026-10-20 image's boot insert and its batch filter still run.
+        await c.query(
+            `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed)
+             VALUES ('old-image', 'C1', 1, '-1_1', 10, 20, 'sponsor')`);
+        await c.query(
+            `INSERT INTO prv_review_batches (batch, assignee)
+             SELECT DISTINCT batch, 'bayanovea' FROM prv_review_items
+             ON CONFLICT DO NOTHING`);
+        assert.equal((await c.query(
+            `SELECT count(*)::int AS n FROM prv_review_batches b WHERE b.assignee IS NULL OR b.assignee = 'gkshi'`)).rows[0].n, 8);
+        await c.query(`UPDATE prv_review_batches SET assignee = 'gkshi' WHERE batch = 'anyone'`);
+
+        // Roll-forward re-migrates only those rows.
+        r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        const again = await batches();
+        const changed = again.filter(b => !after.some(a => JSON.stringify(a) === JSON.stringify(b)));
+        assert.deepEqual(changed.map(b => [b.batch, b.assignee, b.excluded, b.locked_by, b.locked_at != null]), [
+            ['anyone', null, ['bayanovea'], 'gkshi', true],
+            ['old-image', null, [], 'bayanovea', true],
+        ]);
+        assert.equal(again.length, 9);
     } finally {
         if (connected) await c.end();
         await admin.query(`DROP DATABASE IF EXISTS "${db}"`);

@@ -44,7 +44,7 @@ State lives on the batch row; "who has worked on it" is derived from verdicts.
 | `reviews_needed INT NOT NULL DEFAULT 1` | how many reviewers must finish the batch |
 | `excluded TEXT[] NOT NULL DEFAULT '{}'` | reviewers who may never take it (reviewed the same items elsewhere) |
 | `locked_by VARCHAR(64) NULL`, `locked_at TIMESTAMPTZ NULL` | current holder |
-| ~~`assignee`~~ | dropped by the one-off below |
+| `assignee VARCHAR(64) NULL` | legacy, not in the model; cleared by the one-off below, kept for rollback |
 
 Derived, per batch: `finished` = reviewers with a verdict on **every** item.
 
@@ -76,11 +76,11 @@ Derived, per batch: `finished` = reviewers with a verdict on **every** item.
 
 **JSON shapes** — batch rows `{batch, total, decided, open, reviews_needed, finished: [codes], locked_by, locked_at, state}` (`decided`/`open` for the requesting reviewer; `state` ∈ `mine | available | locked | done | closed`). Item page adds `can_decide` and `item.own_verdict`; `batch` is R's progress row. `assignee` is gone from all JSON.
 
-**Schema one-off** (`dropBatchAssignee()` in `lib/schema.js`, runs only while column `assignee` exists, one transaction so a failed boot retries it whole):
-1. ADD the new columns (`IF NOT EXISTS`, every boot).
+**Schema one-off** (`migrateBatchAssignees()` in `lib/schema.js`, every boot, only rows with `assignee IS NOT NULL`, one transaction so a failed boot retries it whole):
+1. ADD the new columns and `assignee` (`IF NOT EXISTS`, every boot; `assignee` only matters on a fresh DB, so the queries stay valid).
 2. `assignee = 'gkshi'` → `excluded = '{bayanovea}'` (`reviews_needed` keeps its column default 1).
-3. Any assignee X who has not finished the batch → `locked_by = X` (keeps X's in-progress batches with X); for `gkshi` only once gkshi has verdicts there, so the untouched overlap batches go to anyone else.
-4. DROP `assignee`.
+3. Any assignee X who has not finished a free batch → `locked_by = X` (keeps X's in-progress batches with X); for `gkshi` only once gkshi has verdicts there, so the untouched overlap batches go to anyone else.
+4. `assignee = NULL` for those rows. Not dropped: a pre-2026-10-20 image inserts `(batch, assignee)` on boot and filters by it, so a rollback to it still starts (it then sees every batch as unassigned); a roll-forward re-migrates only the rows it assigned meanwhile. Drop later: `docs/backlog/drop-review-batch-assignee.md`.
 
 The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row insert for every batch of `prv_review_items` (runs after the one-off); the rename of unknown-reviewer verdicts to `bayanovea` runs before it, because the one-off counts verdicts per reviewer.
 
@@ -125,10 +125,10 @@ The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row 
 **Files:**
 - Modify: `prv/db/index.js`, `lib/schema.js`, `prv/repository/review.js`, `test/e2e.js`
 
-- [x] model columns `reviews_needed`, `excluded`, `locked_by`, `locked_at`; remove `assignee`
-- [x] `lib/schema.js`: ADD COLUMN IF NOT EXISTS + the guarded one-off (gkshi → excluded bayanovea; unfinished assignee → lock; DROP `assignee`); the 2026-10-18 `assignee` insert replaced with a plain batch-row insert
+- [x] model columns `reviews_needed`, `excluded`, `locked_by`, `locked_at`; `assignee` out of the model (column kept)
+- [x] `lib/schema.js`: ADD COLUMN IF NOT EXISTS + the one-off on non-NULL `assignee` rows (gkshi → excluded bayanovea; unfinished assignee → lock; `assignee = NULL`); the 2026-10-18 `assignee` insert replaced with a plain batch-row insert
 - [x] repository: per-reviewer `batchProgress` with `state`, `takeBatch`, `releaseBatch({force})`, `withBatchLock`, `releaseIfFinished`; `createBatch(batch, {reviews_needed, excluded})`
-- [x] e2e (repository level): availability rules (first take, second review excludes finishers, excluded list, come-back after give-up only while reviews are short), concurrent take → one wins, one-off on a DB seeded with an `assignee` column (gkshi and partial-bayanovea cases), idempotent second boot
+- [x] e2e (repository level): availability rules (first take, second review excludes finishers, excluded list, come-back after give-up only while reviews are short), concurrent take → one wins, one-off on a DB seeded with `assignee` values (gkshi and partial-bayanovea cases), idempotent second boot, an old image's `(batch, assignee)` insert after it and its rows re-migrated
 
 ### Task 4: Take / give up / decide guard on the page
 
@@ -190,7 +190,7 @@ The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row 
 ## Post-Completion
 
 - **Test state at completion** (2026-10-20, on the branch): `make test-unit` 66 pass, `make test-e2e` 144 pass, calculator unit subset green.
-- **Deploy** = push to GitHub (owner only). The one-off runs on the first prod boot; check the batch list as `bayanovea` (overlap batches absent from "Available") and as a new test reviewer (overlap batches present).
+- **Deploy** = push to GitHub (owner only). Take `make pull-dump` right before the first deploy. The one-off runs on the first prod boot; check the batch list as `bayanovea` (overlap batches absent from "Available") and as a new test reviewer (overlap batches present).
 - Give assessors the page link (with the token) and ask them to open the onboarding block first.
 - Interview material: decision entry in job-study `job-hunt/portfolio/native-ad-skip-decisions.md` (lock on the batch row vs claims table; first-come + exclusion as the overlap model).
 
