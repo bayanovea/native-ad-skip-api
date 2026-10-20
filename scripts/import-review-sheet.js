@@ -12,7 +12,8 @@
 //        [--reviews N] [--exclude CODE[,CODE]]
 // --reviewer: who the md verdicts belong to (default bayanovea, the owner's sheets).
 //   When the imported verdicts leave the batch unfinished for them, it is locked on them;
-//   when they finish it, their lock is released.
+//   when they finish it, their lock is released. md verdicts into a batch locked by
+//   someone else fail the import.
 // --reviews: how many reviewers must finish the batch (default 1).
 // --exclude: reviewers who may never take it (they reviewed the same items in another batch);
 //   md verdicts of an excluded --reviewer fail the import.
@@ -91,6 +92,7 @@ async function importItems(sequelize, review, batch, items, { reviewer, reviews,
     const summary = { inserted: [], present: [], imported: [], skipped: [], locked: false, released: false };
     await sequelize.transaction(async (transaction) => {
         const batchRow = await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude }, { transaction });
+        const holder = await review.lockBatchRow(batch, { transaction });
         const { inserted, present } = await review.insertItems(batch, items, { transaction });
         summary.inserted = inserted;
         summary.present = present;
@@ -119,6 +121,9 @@ async function importItems(sequelize, review, batch, items, { reviewer, reviews,
             }
             if (batchRow.excluded.includes(reviewer)) {
                 throw new Error(`batch ${batch} excludes ${reviewer}: their md verdicts may not land there; nothing imported`);
+            }
+            if (holder != null && holder !== reviewer) {
+                throw new Error(`batch ${batch} is locked by ${holder}: ${reviewer}'s md verdicts may not land there; nothing imported`);
             }
             await review.recordVerdict({
                 item_id: row.id,

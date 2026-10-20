@@ -2815,17 +2815,25 @@ test('review import: md verdicts lock the unfinished batch on --reviewer, finish
     assert.match(done.stdout, /lock released: bayanovea has finished the batch/);
     await withReviewRepo(async (repo) => assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'),
         batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' })));
+});
 
-    // Someone else's lock is never taken over: gkshi's md verdicts land, the lock stays.
-    const held = 'e2e-review-import-lock-held';
-    assert.equal(runImport(copyReviewFixture(held), ['--reviews', '2']).status, 0);
-    const theirsMd = copyReviewFixture(held);
-    setVerdictLine(theirsMd, 'C7', 'sponsor');
-    const theirs = runImport(theirsMd, ['--reviewer', 'gkshi']);
+test('review import: md verdicts into a batch locked by another reviewer fail and write nothing; skipped ones pass', async () => {
+    const batch = 'e2e-review-import-lock-held';
+    const theirs = runImport(copyReviewFixture(batch), ['--reviewer', 'gkshi']);
     assert.equal(theirs.status, 0, theirs.stderr);
-    assert.match(theirs.stdout, /verdicts imported: 1\n {2}C7 sponsor/);
-    assert.doesNotMatch(theirs.stdout, /locked on/);
-    await withReviewRepo(async (repo) => assert.equal((await repo.getBatchProgress(held, 'gkshi')).locked_by, 'bayanovea'));
+    assert.match(theirs.stdout, /locked on gkshi/);
+
+    const mineMd = copyReviewFixture(batch);
+    setVerdictLine(mineMd, 'C7', 'sponsor');
+    const r = runImport(mineMd);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /batch e2e-review-import-lock-held is locked by gkshi: bayanovea's md verdicts may not land there; nothing imported/);
+    assert.deepEqual((await reviewState(batch)).verdicts.map(v => [v.item_code, v.reviewer]), [['C2', 'gkshi'], ['C5', 'gkshi']]);
+
+    const skipped = runImport(copyReviewFixture(batch));
+    assert.equal(skipped.status, 0, 'every md verdict is skipped, nothing would land');
+    assert.match(skipped.stdout, /verdicts imported: 0\n/);
+    await withReviewRepo(async (repo) => assert.equal((await repo.getBatchProgress(batch, 'gkshi')).locked_by, 'gkshi'));
 });
 
 test('review import: --reviews and --exclude set the batch row; an existing batch must match; bad values fail', async () => {

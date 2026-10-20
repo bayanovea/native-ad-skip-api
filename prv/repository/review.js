@@ -240,13 +240,19 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Run `fn(transaction)` in one transaction with the `batch` row locked
-         * (FOR UPDATE), so a take or release waits until it commits.
+         * Lock the `batch` row (FOR UPDATE) for the rest of `transaction`, so a
+         * take or release waits until it commits. Returns its holder, or null.
          */
+        async lockBatchRow(batch, { transaction }) {
+            const [row] = await sequelize.query('SELECT locked_by FROM prv_review_batches WHERE batch = :batch FOR UPDATE',
+                { replacements: { batch }, type: QueryTypes.SELECT, transaction });
+            return row ? row.locked_by : null;
+        },
+
+        /** Run `fn(transaction)` in one transaction with the `batch` row locked (lockBatchRow). */
         withBatchLock(batch, fn) {
             return sequelize.transaction(async (transaction) => {
-                await sequelize.query('SELECT 1 FROM prv_review_batches WHERE batch = :batch FOR UPDATE',
-                    { replacements: { batch }, transaction });
+                await this.lockBatchRow(batch, { transaction });
                 return fn(transaction);
             });
         },
