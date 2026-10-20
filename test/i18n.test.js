@@ -17,6 +17,23 @@ test('t and t.text return plain keys as written; t.text refuses _html keys', () 
     assert.throws(() => t.text('toolbar_reviewer_html'), /markup/);
 });
 
+test('params of a plain key are escaped by t, raw in t.text', () => {
+    const t = translator('en');
+    assert.equal(t('conflict_locked', { name: '<b>' }), '&lt;b&gt; holds this batch.');
+    assert.equal(t.text('conflict_locked', { name: '<b>' }), '<b> holds this batch.');
+});
+
+// The page renders these by batch state / 409 reason; a missing one is a 500 in prod.
+test('every batch state and conflict reason has its strings', () => {
+    const keys = [
+        ...['mine', 'available', 'locked', 'done', 'closed'].flatMap(s => [`state_${s}`, `lock_${s}`]),
+        ...['available', 'locked', 'done', 'closed'].map(r => `conflict_${r}`),
+    ];
+    for (const lang of LANGS) {
+        for (const key of keys) assert.equal(typeof LOCALES[lang][key], 'string', `${lang}.${key}`);
+    }
+});
+
 test('a placeholder without a param stays as is', () => {
     assert.equal(translator('en')('toolbar_reviewer_html'), 'Reviewer: <strong>{name}</strong>');
 });

@@ -46,7 +46,7 @@ State lives on the batch row; "who has worked on it" is derived from verdicts.
 | `locked_by VARCHAR(64) NULL`, `locked_at TIMESTAMPTZ NULL` | current holder |
 | ~~`assignee`~~ | dropped by the one-off below |
 
-Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `finished` = reviewers with a verdict on **every** item.
+Derived, per batch: `finished` = reviewers with a verdict on **every** item.
 
 **Batch states for reviewer R** (`STATE` in the repository, first match wins):
 
@@ -54,19 +54,19 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 2. *done*: R ∈ `finished`.
 3. *closed*: R ∈ `excluded`, even while someone else holds it (it can never be R's).
 4. *locked*: `locked_by` set to another reviewer.
-5. *available*: `locked_by IS NULL`, R ∉ `finished`, and either R ∈ `workers` (gave it up halfway and comes back) or `|finished| < reviews_needed`.
+5. *available*: `locked_by IS NULL`, R ∉ `finished`, `|finished| < reviews_needed`. A reviewer who gave up halfway may come back only until the batch has its reviews; after that it is *closed* to them, so their late verdicts never override a complete review in the default export (latest verdict per item).
 6. otherwise *closed*: hidden from R's list (`show=all` shows everything with its state).
 
-**Take**: one `UPDATE … SET locked_by = R, locked_at = now() WHERE batch = :b AND <available to R>`; 0 rows → 409 (or the existing lock when R already holds it). This is the race guard for "first come".
+**Take**: one `UPDATE … SET locked_by = R, locked_at = now() WHERE batch = :b AND <available to R>`; 0 rows → 409 (or the existing lock when R already holds it; a read that finds the batch free again retries the UPDATE once). This is the race guard for "first come".
 **Finish**: after each verdict, the decide route clears R's lock when R has a verdict on every item.
 **Give up**: holder clears the lock; verdicts stay. **Force release** of someone else's lock: the same button with a confirm dialog naming the holder (small trusted group, everyone has the admin token anyway; covers an assessor who disappeared).
-**Decide** is allowed only in states *mine* and *done* (fixing your own finished batch); otherwise 409 with the reason.
+**Decide** is allowed only in states *mine* and *done* (fixing your own finished batch); otherwise 409 with the reason. The state check, the verdict, the flag and the finish release run in one transaction with the `prv_review_batches` row locked `FOR UPDATE`, so a force release followed by someone else's take cannot land between the check and the write.
 
 **Per-reviewer progress**: `decided` / `open` and navigation (`first open`, save → next open, default item) count R's verdicts, so a second reviewer starts at C1. The verdict buttons pre-select R's own latest verdict; the "Current verdict" block and history still show everyone's (owner decision, not blind).
 
 **Why not a claims table** (`prv_review_claims` with claimed/finished/released rows): it needs a backfill from verdicts and becomes a second source of truth for "finished"; nobody asked for take history.
 
-**i18n**: `prv/locales/review/ru.json` and `en.json` (flat `key → string`, `{name}` placeholders), loaded by `lib/i18n.js`: `translator(lang)` → `t(key, params)` returns HTML, `t.text()` plain text for the inline script's `STATE`. A key missing in en falls back to ru; a key missing everywhere throws. Language: `?lang=ru|en` sets cookie `review_lang` (1 year, path `/admin/review`, httpOnly); otherwise the cookie; otherwise `ru`. A switch link in the toolbar; `<html lang>` follows. Only keys ending in `_html` may contain markup (repo-owned files; everything else is escaped, and params are always escaped). Verdict *values* stay English identifiers in the DB and the API; only labels are translated.
+**i18n**: `prv/locales/review/ru.json` and `en.json` (flat `key → string`, `{name}` placeholders), loaded by `lib/i18n.js`: `translator(lang)` → `t(key, params)` returns HTML, `t.text()` plain text for the inline script's `STATE`. Both files have the same keys (parity test); an unknown key throws. Language: `?lang=ru|en` sets cookie `review_lang` (1 year, path `/admin/review`, httpOnly); otherwise the cookie; otherwise `ru`. A switch link in the toolbar; `<html lang>` follows. Only keys ending in `_html` may contain markup (repo-owned files; everything else is escaped, and params are always escaped). Verdict *values* stay English identifiers in the DB and the API; only labels are translated.
 
 ## Technical Details
 
@@ -78,13 +78,13 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 
 **Schema one-off** (`dropBatchAssignee()` in `lib/schema.js`, runs only while column `assignee` exists, one transaction so a failed boot retries it whole):
 1. ADD the new columns (`IF NOT EXISTS`, every boot).
-2. `assignee = 'gkshi'` → `excluded = '{bayanovea}'`, `reviews_needed = 1`.
+2. `assignee = 'gkshi'` → `excluded = '{bayanovea}'` (`reviews_needed` keeps its column default 1).
 3. Any assignee X who has not finished the batch → `locked_by = X` (keeps X's in-progress batches with X); for `gkshi` only once gkshi has verdicts there, so the untouched overlap batches go to anyone else.
 4. DROP `assignee`.
 
 The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row insert for every batch of `prv_review_items` (runs after the one-off); the rename of unknown-reviewer verdicts to `bayanovea` runs before it, because the one-off counts verdicts per reviewer.
 
-**Importer** — `--assignee` removed (fails with a hint). New: `--reviews N` (default 1), `--exclude CODE[,CODE]` (registered codes; for subset sheets of an already reviewed sheet). Existing batch + a different `--reviews`/`--exclude` → fails (same "never silently re-route" rule as before); an option left out is not compared. `--reviewer CODE` md verdicts work as before; when newly imported verdicts leave the batch unfinished for that reviewer and they may take it, the importer locks it on them; when they finish it, their lock is released. A re-run that imports nothing touches no lock, so it never re-locks a batch the reviewer gave up.
+**Importer** — `--assignee` removed (fails with a hint). New: `--reviews N` (default 1), `--exclude CODE[,CODE]` (registered codes; for subset sheets of an already reviewed sheet). Existing batch + a different `--reviews`/`--exclude` → fails (same "never silently re-route" rule as before); an option left out is not compared. `--reviewer CODE` md verdicts work as before; when newly imported verdicts leave the batch unfinished for that reviewer and they may take it, the importer locks it on them; when they finish it, their lock is released. A re-run that imports nothing touches no lock, so it never re-locks a batch the reviewer gave up. md verdicts of a `--reviewer` in the batch's `excluded` list fail the import (exit 1, nothing written).
 
 **Export** — `export-review-verdicts.sh <batch> [reviewer]`: with a reviewer (registered, else exit 1), only that reviewer's latest verdict per item, output `<batch>.<reviewer>.verdicts.tsv`; without one, unchanged.
 
@@ -127,8 +127,8 @@ The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row 
 
 - [x] model columns `reviews_needed`, `excluded`, `locked_by`, `locked_at`; remove `assignee`
 - [x] `lib/schema.js`: ADD COLUMN IF NOT EXISTS + the guarded one-off (gkshi → excluded bayanovea; unfinished assignee → lock; DROP `assignee`); the 2026-10-18 `assignee` insert replaced with a plain batch-row insert
-- [x] repository: per-reviewer `batchProgress` with `state`, `takeBatch`, `releaseBatch({force})`, `canDecide`, `releaseIfFinished`; `createBatch(batch, {reviews_needed, excluded})`
-- [x] e2e (repository level): availability rules (first take, second review excludes workers, excluded list, come-back after give-up), concurrent take → one wins, one-off on a DB seeded with an `assignee` column (gkshi and partial-bayanovea cases), idempotent second boot
+- [x] repository: per-reviewer `batchProgress` with `state`, `takeBatch`, `releaseBatch({force})`, `withBatchLock`, `releaseIfFinished`; `createBatch(batch, {reviews_needed, excluded})`
+- [x] e2e (repository level): availability rules (first take, second review excludes finishers, excluded list, come-back after give-up only while reviews are short), concurrent take → one wins, one-off on a DB seeded with an `assignee` column (gkshi and partial-bayanovea cases), idempotent second boot
 
 ### Task 4: Take / give up / decide guard on the page
 

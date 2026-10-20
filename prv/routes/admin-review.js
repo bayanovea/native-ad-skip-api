@@ -100,9 +100,6 @@ function sendConflict(req, res, err) {
     res.status(409).json({ reason: err.reason, locked_by: err.locked_by, message: t.text(`conflict_${err.reason}`, { name: err.locked_by }) });
 }
 
-// Item as the page shows it: repository fields plus player times and the
-// player link. The stored link (from `adskip sheet`) already sits at
-// start − 2 s; it is used as is, never offset again. Null when not http(s).
 const LANG_COOKIE_MS = 365 * 24 * 3600 * 1000;
 
 // Translator for the request; an explicit `?lang=` is remembered in the cookie.
@@ -119,6 +116,9 @@ function langSwitch(req, t, query = req.query, path = `${req.baseUrl}${req.path}
     return `<a class="lang-switch" href="${escapeHtml(`${path}?${params}`)}">${t('lang_switch')}</a>`;
 }
 
+// Item as the page shows it: repository fields plus player times and the
+// player link. The stored link (from `adskip sheet`) already sits at
+// start − 2 s; it is used as is, never offset again. Null when not http(s).
 function presentItem(item) {
     return {
         ...item,
@@ -785,6 +785,8 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     // flag when it changed. Validation lives in the repository
     // (ReviewInputError → 400). Only the batch holder, or a reviewer who has
     // finished it, may decide (else 409); the last verdict releases the lock.
+    // The check and the writes run under the batch row lock, so a force release
+    // and someone else's take cannot slip in between.
     // A verdict identical to the reviewer's own latest one is not appended
     // again (a flag-only save, a stray Enter).
     router.post('/admin/review/decide', handler(async (req, res) => {
@@ -807,25 +809,25 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             const before = await reviewRepository.getItemById(body.item_id);
             if (!before && !validBodyItemId(body.item_id)) throw new ReviewInputError('item_id must be a positive integer');
             if (!before) throw new ReviewInputError(`unknown review item ${body.item_id}`);
-            if (!(await reviewRepository.canDecide(before.batch, reviewer))) {
-                const progress = (await reviewRepository.getBatchProgress(before.batch, reviewer)) || { state: 'closed', locked_by: null };
-                throw new ReviewConflictError(progress.state, progress.locked_by);
-            }
             const comment = body.comment == null ? null : body.comment;
             const text = typeof comment === 'string' ? comment.trim() : comment;
             const own = before.history.find(h => h.reviewer === reviewer);
             const same = own && own.verdict === body.verdict
                 && (own.comment || null) === (text === '' ? null : text);
-            if (!same) {
-                await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page' });
-            }
-            if (body.track_mismatch !== undefined) {
-                const current = await reviewRepository.getVideoFlag(before.native_id, TRACK_FLAG);
-                if ((current ? current.value : false) !== body.track_mismatch) {
-                    await reviewRepository.setVideoFlag({ native_id: before.native_id, flag: TRACK_FLAG, value: body.track_mismatch, reviewer });
+            await reviewRepository.withBatchLock(before.batch, async (transaction) => {
+                const progress = await reviewRepository.getBatchProgress(before.batch, reviewer, { transaction });
+                if (!mayDecide(progress.state)) throw new ReviewConflictError(progress.state, progress.locked_by);
+                if (!same) {
+                    await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', transaction });
                 }
-            }
-            await reviewRepository.releaseIfFinished(before.batch, reviewer);
+                if (body.track_mismatch !== undefined) {
+                    const current = await reviewRepository.getVideoFlag(before.native_id, TRACK_FLAG, { transaction });
+                    if ((current ? current.value : false) !== body.track_mismatch) {
+                        await reviewRepository.setVideoFlag({ native_id: before.native_id, flag: TRACK_FLAG, value: body.track_mismatch, reviewer, transaction });
+                    }
+                }
+                await reviewRepository.releaseIfFinished(before.batch, reviewer, { transaction });
+            });
             item = await reviewRepository.getItemById(body.item_id);
         } catch (err) {
             if (err instanceof ReviewInputError) {

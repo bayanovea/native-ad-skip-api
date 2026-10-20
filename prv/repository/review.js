@@ -1,6 +1,6 @@
 const { QueryTypes } = require('sequelize');
 const { VERDICTS } = require('../../lib/review-sheet');
-const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
+const { REVIEWER_MAX } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
@@ -22,7 +22,7 @@ class ReviewInputError extends Error {
 
 // The batch is not in a state that allows the action for this reviewer
 // (a route maps it to 409). `reason` is the reviewer's batch state
-// (`locked`, `done`, `closed`); `locked_by` the current holder, if any.
+// (`available`, `locked`, `done`, `closed`); `locked_by` the current holder, if any.
 class ReviewConflictError extends Error {
     constructor(reason, locked_by = null) {
         super(locked_by ? `batch ${reason} by ${locked_by}` : `batch ${reason}`);
@@ -46,11 +46,8 @@ const ITEM_COLUMNS = `
 const IS_DECIDED = 'EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)';
 const DECIDED_BY_REVIEWER = 'EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id AND v.reviewer = :reviewer)';
 
-// Reviewers with a verdict on any item (`workers`) / on every item
-// (`finished`) of the batch named by the SQL expression `batch`.
-const workersOf = (batch) => `ARRAY(
-    SELECT v.reviewer FROM prv_review_verdicts v JOIN prv_review_items wi ON wi.id = v.item_id
-     WHERE wi.batch = ${batch} GROUP BY v.reviewer ORDER BY v.reviewer)`;
+// Reviewers with a verdict on every item (`finished`) of the batch named by
+// the SQL expression `batch`.
 const finishedOf = (batch) => `ARRAY(
     SELECT v.reviewer FROM prv_review_verdicts v JOIN prv_review_items wi ON wi.id = v.item_id
      WHERE wi.batch = ${batch} GROUP BY v.reviewer
@@ -58,14 +55,15 @@ const finishedOf = (batch) => `ARRAY(
      ORDER BY v.reviewer)`;
 
 // `:reviewer` may take the batch: nobody holds it, they are not excluded and
-// have not finished it, and either they come back to their own unfinished
-// work or it still needs a review. `b` has the batch columns, `w` the arrays.
+// have not finished it, and it still needs a review. Someone who gave up
+// halfway may come back only until then, so their late verdicts never
+// override a complete review. `b` has the batch columns, `w` the `finished` array.
 const availableTo = (b, w) => `(${b}.locked_by IS NULL
     AND NOT (:reviewer = ANY(${b}.excluded))
     AND NOT (:reviewer = ANY(${w}.finished))
-    AND (:reviewer = ANY(${w}.workers) OR cardinality(${w}.finished) < ${b}.reviews_needed))`;
+    AND cardinality(${w}.finished) < ${b}.reviews_needed)`;
 
-// Batch states in which the reviewer may record verdicts (see canDecide).
+// Batch states in which the reviewer may record verdicts.
 function mayDecide(state) {
     return state === 'mine' || state === 'done';
 }
@@ -169,7 +167,6 @@ module.exports = function createReviewRepository(models, sequelize) {
                  GROUP BY i.batch
              ), s AS (
                 SELECT p.*, b.reviews_needed, b.excluded, b.locked_by, b.locked_at,
-                       ${workersOf('p.batch')} AS workers,
                        ${finishedOf('p.batch')} AS finished
                   FROM p JOIN prv_review_batches b ON b.batch = p.batch
              )
@@ -179,6 +176,19 @@ module.exports = function createReviewRepository(models, sequelize) {
               ORDER BY s.imported_at DESC, s.batch ASC`,
             { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
         );
+    }
+
+    // Lock `batch` on `reviewer` when it is available to them — one statement,
+    // so of two concurrent takes exactly one wins. The row, or undefined.
+    async function lockIfAvailable(batch, reviewer, transaction) {
+        const [row] = await sequelize.query(
+            `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
+               FROM (SELECT ${finishedOf(':batch')} AS finished) w
+              WHERE b.batch = :batch AND ${availableTo('b', 'w')}
+              RETURNING b.batch, b.locked_by, b.locked_at`,
+            { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
+        );
+        return row;
     }
 
     const OPEN_IN_BATCH = `i.batch = :batch AND NOT ${DECIDED_BY_REVIEWER}`;
@@ -201,26 +211,21 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Lock `batch` on `reviewer` when it is available to them — one
-         * statement, so of two concurrent takes exactly one wins. Returns
+         * Lock `batch` on `reviewer` when it is available to them. Returns
          * `{ batch, locked_by, locked_at }` (also when they hold it already),
          * null for an unknown batch; throws ReviewConflictError otherwise.
          */
         async takeBatch(batch, reviewer) {
             if (!(await this.isReviewer(reviewer))) throw new ReviewInputError(`unknown reviewer ${reviewer}`);
-            const [row] = await sequelize.query(
-                `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
-                   FROM (SELECT ${workersOf(':batch')} AS workers, ${finishedOf(':batch')} AS finished) w
-                  WHERE b.batch = :batch AND ${availableTo('b', 'w')}
-                  RETURNING b.batch, b.locked_by, b.locked_at`,
-                { replacements: { batch, reviewer }, type: QueryTypes.SELECT }
-            );
-            if (row) return row;
-            const progress = await this.getBatchProgress(batch, reviewer);
-            if (!progress) return null;
-            if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
-            // `available` here means the holder released it in between.
-            throw new ReviewConflictError(progress.state === 'available' ? 'locked' : progress.state, progress.locked_by);
+            for (let attempt = 0; ; attempt++) {
+                const row = await lockIfAvailable(batch, reviewer);
+                if (row) return row;
+                const progress = await this.getBatchProgress(batch, reviewer);
+                if (!progress) return null;
+                if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
+                // `available` here means the holder released it after the UPDATE: try once more.
+                if (progress.state !== 'available' || attempt > 0) throw new ReviewConflictError(progress.state, progress.locked_by);
+            }
         },
 
         /**
@@ -245,10 +250,16 @@ module.exports = function createReviewRepository(models, sequelize) {
             throw new ReviewConflictError('locked', current.locked_by);
         },
 
-        /** True when `reviewer` may record verdicts in `batch`: they hold it or have finished it. */
-        async canDecide(batch, reviewer, { transaction } = {}) {
-            const progress = await this.getBatchProgress(batch, reviewer, { transaction });
-            return progress != null && mayDecide(progress.state);
+        /**
+         * Run `fn(transaction)` in one transaction with the `batch` row locked
+         * (FOR UPDATE), so a take or release waits until it commits.
+         */
+        withBatchLock(batch, fn) {
+            return sequelize.transaction(async (transaction) => {
+                await sequelize.query('SELECT 1 FROM prv_review_batches WHERE batch = :batch FOR UPDATE',
+                    { replacements: { batch }, transaction });
+                return fn(transaction);
+            });
         },
 
         /**
@@ -266,19 +277,12 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Lock `batch` on `reviewer` when they have worked on it, have not
-         * finished it and may take it (the importer, after md verdicts left
-         * it half done). Returns true when it locked.
+         * Lock `batch` on `reviewer` when they have not finished it and may
+         * take it (the importer, after their md verdicts left it half done).
+         * Returns true when it locked.
          */
         async lockUnfinished(batch, reviewer, { transaction } = {}) {
-            const rows = await sequelize.query(
-                `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
-                   FROM (SELECT ${workersOf(':batch')} AS workers, ${finishedOf(':batch')} AS finished) w
-                  WHERE b.batch = :batch AND :reviewer = ANY(w.workers) AND ${availableTo('b', 'w')}
-                  RETURNING b.batch`,
-                { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
-            );
-            return rows.length > 0;
+            return (await lockIfAvailable(batch, reviewer, transaction)) != null;
         },
 
         /** Reviewer codes the page offers, alphabetical. */
@@ -289,15 +293,13 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Register a reviewer; returns the stored code (the cleaned name, see
-         * lib/reviewer-name.js), or null when the name is taken in any letter
-         * case. ReviewInputError when the name breaks the rules. Case is
-         * compared in JS: Postgres lower() under a C locale folds ASCII only.
-         * The table lock keeps two concurrent "Анна" / "анна" from both passing.
+         * Register a reviewer under `code`, a name already cleaned by
+         * lib/reviewer-name.js (the route checks it); returns the code, or null
+         * when it is taken in any letter case. Case is compared in JS: Postgres
+         * lower() under a C locale folds ASCII only. The table lock keeps two
+         * concurrent "Анна" / "анна" from both passing.
          */
-        async createReviewer(raw) {
-            const code = validReviewerName(raw);
-            if (!code) throw new ReviewInputError('invalid reviewer name');
+        async createReviewer(code) {
             return sequelize.transaction(async (transaction) => {
                 await sequelize.query('LOCK TABLE prv_review_reviewers IN EXCLUSIVE MODE', { transaction });
                 const taken = (await sequelize.query('SELECT code FROM prv_review_reviewers', { type: QueryTypes.SELECT, transaction }))
@@ -350,12 +352,12 @@ module.exports = function createReviewRepository(models, sequelize) {
          * Latest value of a video flag as `{ value, reviewer, created_at }`,
          * or null when nobody has set it.
          */
-        async getVideoFlag(native_id, flag) {
+        async getVideoFlag(native_id, flag, { transaction } = {}) {
             const [row] = await sequelize.query(
                 `SELECT value, reviewer, created_at FROM prv_review_video_flags
                   WHERE native_id = :native_id AND flag = :flag
                   ORDER BY created_at DESC, id DESC LIMIT 1`,
-                { replacements: { native_id, flag }, type: QueryTypes.SELECT }
+                { replacements: { native_id, flag }, type: QueryTypes.SELECT, transaction }
             );
             return row || null;
         },

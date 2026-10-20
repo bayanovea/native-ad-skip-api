@@ -14,7 +14,8 @@
 //   When the imported verdicts leave the batch unfinished for them, it is locked on them;
 //   when they finish it, their lock is released.
 // --reviews: how many reviewers must finish the batch (default 1).
-// --exclude: reviewers who may never take it (they reviewed the same items in another batch).
+// --exclude: reviewers who may never take it (they reviewed the same items in another batch);
+//   md verdicts of an excluded --reviewer fail the import.
 // For an existing batch, --reviews / --exclude must match the stored values.
 // The key file is <sheet>.key.tsv next to the md. Tables must exist
 // (sequelize.sync(): app boot or scripts/sync-db.js).
@@ -89,7 +90,7 @@ function backupMd(mdPath) {
 async function importItems(sequelize, review, batch, items, { reviewer, reviews, exclude }) {
     const summary = { inserted: [], present: [], imported: [], skipped: [], locked: false, released: false };
     await sequelize.transaction(async (transaction) => {
-        await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude }, { transaction });
+        const batchRow = await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude }, { transaction });
         const { inserted, present } = await review.insertItems(batch, items, { transaction });
         summary.inserted = inserted;
         summary.present = present;
@@ -115,6 +116,9 @@ async function importItems(sequelize, review, batch, items, { reviewer, reviews,
             if (row.has_verdict) {
                 summary.skipped.push(it.item_code);
                 continue;
+            }
+            if (batchRow.excluded.includes(reviewer)) {
+                throw new Error(`batch ${batch} excludes ${reviewer}: their md verdicts may not land there; nothing imported`);
             }
             await review.recordVerdict({
                 item_id: row.id,

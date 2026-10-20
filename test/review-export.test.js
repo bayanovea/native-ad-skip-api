@@ -179,7 +179,8 @@ test('review export: the .sh wrapper writes the same TSV through psql, a reviewe
     await addItem(b, 'C2', 2, '-9_9', 60, 70, 'sponsor');                    // open
     await addVerdict(c1, 'unclear', 'line one\nline two', '2026-10-15T10:00:00Z');
     await addVerdict(c1, 'sponsor', null, '2026-10-15T09:00:00Z', 'gkshi');
-    await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi')");
+    await addVerdict(c1, 'not_ad', 'анна', '2026-10-15T08:00:00Z', 'Анна П');
+    await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi'), ('Анна П')");
 
     // Data root without a review/ dir: the script creates it. A space in the
     // path checks that psql's `\o :out` keeps the value as one argument.
@@ -210,14 +211,22 @@ test('review export: the .sh wrapper writes the same TSV through psql, a reviewe
         assert.equal(r3.stdout.trim(), `wrote ${mine}: 1 verdicts of 2 items`);
         assert.equal(fs.readFileSync(mine, 'utf8'), await exportTsv(b, 'gkshi'));
         assert.match(fs.readFileSync(mine, 'utf8'), /\tgold_missing\tC1\t\n$/);
+        // A Cyrillic code with a space: one file name, one psql variable.
+        const anna = path.join(data, 'review', `${b}.Анна П.verdicts.tsv`);
+        const r4 = run(b, 'Анна П');
+        assert.equal(r4.status, 0, r4.stderr);
+        assert.equal(r4.stdout.trim(), `wrote ${anna}: 1 verdicts of 2 items`);
+        assert.equal(fs.readFileSync(anna, 'utf8'), await exportTsv(b, 'Анна П'));
+        assert.match(fs.readFileSync(anna, 'utf8'), /\tmodel_wrong\tC1\tанна\n$/);
         const files = () => fs.readdirSync(path.join(data, 'review')).sort();
-        assert.deepEqual(files(), [`${b}.gkshi.verdicts.tsv`, `${b}.verdicts.tsv`], 'no temp file left');
+        const written = [`${b}.gkshi.verdicts.tsv`, `${b}.verdicts.tsv`, `${b}.Анна П.verdicts.tsv`].sort();
+        assert.deepEqual(files(), written, 'no temp file left');
 
         const bad = run('export-no-such-batch');
         assert.equal(bad.status, 1);
         assert.match(bad.stderr, /unknown batch export-no-such-batch/);
         assert.equal(run('a', 'b', 'c').status, 2);
-        assert.deepEqual(files(), [`${b}.gkshi.verdicts.tsv`, `${b}.verdicts.tsv`], 'nothing written');
+        assert.deepEqual(files(), written, 'nothing written');
     } finally {
         fs.rmSync(data, { recursive: true, force: true });
     }

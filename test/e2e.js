@@ -15,7 +15,7 @@ const { Sequelize } = require('sequelize');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
 const { COOKIE: LANG_COOKIE, translator } = require('../lib/i18n');
-const { ReviewInputError, ReviewConflictError } = createReviewRepository;
+const { ReviewInputError, ReviewConflictError, mayDecide } = createReviewRepository;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -2872,6 +2872,29 @@ test('review import: --reviews and --exclude set the batch row; an existing batc
     assert.equal((await reviewState(fresh)).items.length, 0);
 });
 
+test('review import: md verdicts of an excluded --reviewer fail and write nothing; skipped ones pass', async () => {
+    const batch = 'e2e-review-import-excluded';
+    await withReviewRepo((repo) => repo.createBatch(batch, { excluded: ['bayanovea'] }));
+    const md = copyReviewFixture(batch);
+    const r = runImport(md);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /batch e2e-review-import-excluded excludes bayanovea: their md verdicts may not land there; nothing imported/);
+    assert.deepEqual(await reviewState(batch), { items: [], verdicts: [] });
+
+    assert.equal(runImport(md, ['--reviewer', 'gkshi']).status, 0);
+    const again = runImport(md);
+    assert.equal(again.status, 0, 'every md verdict is skipped, nothing would land');
+    assert.match(again.stdout, /verdicts imported: 0\n/);
+    assert.deepEqual((await reviewState(batch)).verdicts.map(v => v.reviewer), ['gkshi', 'gkshi']);
+
+    const fresh = 'e2e-review-import-excluded-fresh';
+    const viaFlag = runImport(copyReviewFixture(fresh), ['--exclude', 'bayanovea']);
+    assert.equal(viaFlag.status, 1);
+    assert.match(viaFlag.stderr, /excludes bayanovea/);
+    assert.deepEqual(await dbQuery('SELECT batch FROM prv_review_batches WHERE batch = $1', [fresh]), [], 'no batch row');
+    assert.deepEqual(await reviewState(fresh), { items: [], verdicts: [] });
+});
+
 test('review import: works on review tables created without timestamp defaults; sync-db.js adds them', async () => {
     // The local dump's review tables were created by sync() from the first
     // model (JS-only DataTypes.NOW): created_at / decided_at NOT NULL with no
@@ -3236,8 +3259,8 @@ test('review repository: take / give up / finish, availability per reviewer, one
             assert.equal(await state(one, 'gkshi'), 'mine');
             assert.equal(await state(one, 'bayanovea'), 'locked');
             await assert.rejects(repo.takeBatch(one, 'bayanovea'), conflict('locked', 'gkshi'));
-            assert.equal(await repo.canDecide(one, 'gkshi'), true);
-            assert.equal(await repo.canDecide(one, 'bayanovea'), false);
+            assert.equal(mayDecide(await state(one, 'gkshi')), true);
+            assert.equal(mayDecide(await state(one, 'bayanovea')), false);
             await assert.rejects(repo.releaseBatch(one, 'bayanovea'), conflict('locked', 'gkshi'), 'not the holder, no force');
 
             // gkshi decides C2 and gives up: the verdict stays, the lock goes.
@@ -3246,6 +3269,7 @@ test('review repository: take / give up / finish, availability per reviewer, one
             assert.deepEqual(await repo.releaseBatch(one, 'gkshi'), unlocked(one));
             assert.deepEqual(await repo.releaseBatch(one, 'gkshi'), unlocked(one), 'releasing a free batch is a no-op');
             assert.equal((await repo.getItem(one, 'C2')).verdict.reviewer, 'gkshi');
+            assert.equal(await state(one, 'gkshi'), 'available', 'may come back while the batch still needs its review');
 
             // bayanovea takes it and finishes: lock cleared, the one review is done.
             await repo.takeBatch(one, 'bayanovea');
@@ -3253,15 +3277,13 @@ test('review repository: take / give up / finish, availability per reviewer, one
             assert.equal(await repo.releaseIfFinished(one, 'bayanovea'), true);
             assert.deepEqual(await repo.getBatchProgress(one, 'bayanovea'),
                 batchRow(one, { decided: 3, finished: ['bayanovea'], state: 'done' }));
-            assert.equal(await repo.canDecide(one, 'bayanovea'), true, 'may fix their own finished batch');
+            assert.equal(mayDecide(await state(one, 'bayanovea')), true, 'may fix their own finished batch');
             await assert.rejects(repo.takeBatch(one, 'bayanovea'), conflict('done'));
             assert.equal(await state(one, NEWCOMER), 'closed', 'review count met → closed to newcomers');
             await assert.rejects(repo.takeBatch(one, NEWCOMER), conflict('closed'));
-            // gkshi gave up halfway: the batch stays theirs to come back to.
-            assert.equal(await state(one, 'gkshi'), 'available');
-            await repo.takeBatch(one, 'gkshi');
-            assert.deepEqual(await repo.releaseBatch(one, 'bayanovea', { force: true }), unlocked(one), 'force release');
-            assert.equal(await state(one, 'gkshi'), 'available');
+            // gkshi gave up halfway: once the batch has its review, no coming back.
+            assert.equal(await state(one, 'gkshi'), 'closed');
+            await assert.rejects(repo.takeBatch(one, 'gkshi'), conflict('closed'));
 
             // Two reviews needed: after bayanovea finishes, others may still take it; after the second, nobody new.
             await repo.takeBatch(two, 'bayanovea');
@@ -3270,7 +3292,11 @@ test('review repository: take / give up / finish, availability per reviewer, one
             assert.equal(await state(two, 'bayanovea'), 'done');
             assert.equal(await state(two, NEWCOMER), 'available');
             await repo.takeBatch(two, 'gkshi');
-            await decide(two, ['C2', 'C5', 'C7'], 'gkshi');
+            await decide(two, ['C2'], 'gkshi');
+            assert.deepEqual(await repo.releaseBatch(two, 'bayanovea', { force: true }), unlocked(two), 'force release');
+            assert.equal(await state(two, 'gkshi'), 'available', 'back after a force release: still one review short');
+            await repo.takeBatch(two, 'gkshi');
+            await decide(two, ['C5', 'C7'], 'gkshi');
             assert.equal(await repo.releaseIfFinished(two, 'gkshi'), true);
             assert.deepEqual(await repo.getBatchProgress(two, NEWCOMER),
                 batchRow(two, { decided: 0, finished: ['bayanovea', 'gkshi'], state: 'closed', reviews_needed: 2 }));
@@ -4104,16 +4130,27 @@ test('review page: take → decide → finish unlocks; no lock → 409 and read-
     assert.ok(html.includes(`onclick="lockAction('take', false)">${RU('lock_take')}</button>`));
     assert.match(html, /data-verdict="sponsor" onclick="pick\('sponsor'\)" disabled>/);
     assert.match(html, /id="save-btn" onclick="save\(\)" disabled>/);
+    assert.match(html, /id="track-flag" onchange="setStatus\(''\)" disabled>/);
+    assert.match(html, /<textarea id="comment" style="width:100%" disabled>/);
     page.key('1');
     assert.deepEqual(page.selected(), []);
+    assert.equal(page.els.status.textContent, RU.text('js_read_only'));
+    page.els.status.textContent = '';
+    page.key('5');
+    assert.equal(page.els['track-flag'].checked, false);
     assert.equal(page.els.status.textContent, RU.text('js_read_only'));
     page.key('Enter');
     await sleep(20);
     assert.equal(page.navigatedTo, null);
     assert.equal(await countReviewVerdicts(batch), 0);
+    const late = (await openKeyboardPage(itemPath('C1', 'gkshi'), storages)).page;
 
     // Take it from the banner → reload as holder.
     assert.equal(await runLock(page, 'take', false), itemPath('C1'));
+    // gkshi's page still offers "Take it": the take fails in place and names the holder.
+    assert.equal(await runLock(late, 'take', false), null);
+    assert.equal(late.els['lock-status'].textContent, RU.text('conflict_locked', { name: REVIEWER }));
+    assert.equal(late.els['lock-status'].className, 'status error');
     body = await json();
     assert.equal(body.batch.state, 'mine');
     assert.equal(body.can_decide, true);
@@ -4184,11 +4221,70 @@ test('review page: take → decide → finish unlocks; no lock → 409 and read-
     ]);
 });
 
+test('review page: closed and done over HTTP (409 with the translated reason, banner without a button)', async () => {
+    const batch = 'e2e-review-closed';
+    await withReviewRepo((repo) => repo.createBatch(batch, { excluded: [REVIEWER] }));
+    await seedKeyboardBatch(batch, 2, { holder: null });
+    const itemPath = `/admin/review/${batch}?item=C1&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
+    const c1 = (await getReview(batch, { item: 'C1', format: 'json' })).body.item;
+    const conflict = (reason) => ({ reason, locked_by: null, message: RU.text(`conflict_${reason}`) });
+
+    let res = await lockReview('take', batch, { reviewer: REVIEWER });
+    assert.equal(res.status, 409);
+    assert.deepEqual(res.body, conflict('closed'));
+    res = await decideReview({ item_id: c1.id, verdict: 'sponsor', reviewer: REVIEWER });
+    assert.equal(res.status, 409);
+    assert.deepEqual(res.body, conflict('closed'));
+    const { page, html } = await openKeyboardPage(itemPath, { local: memoryStorage(), session: memoryStorage() });
+    assert.ok(html.includes('class="card lock lock-closed"') && html.includes(RU('lock_closed')));
+    assert.ok(!html.includes('id="lock-btn"'), 'nothing to take or give up');
+    assert.match(html, /id="save-btn" onclick="save\(\)" disabled>/);
+    assert.match(html, /<textarea id="comment" style="width:100%" disabled>/);
+    page.key('2');
+    assert.deepEqual(page.selected(), []);
+    assert.equal(page.els.status.textContent, RU.text('js_read_only'));
+
+    await takeReview(batch, 'gkshi');
+    for (const code of ['C1', 'C2']) {
+        const item = (await getReview(batch, { item: code, reviewer: 'gkshi', format: 'json' })).body.item;
+        assert.equal((await decideReview({ item_id: item.id, verdict: 'not_ad', reviewer: 'gkshi' })).status, 201);
+    }
+    res = await lockReview('take', batch, { reviewer: 'gkshi' });
+    assert.equal(res.status, 409);
+    assert.deepEqual(res.body, conflict('done'));
+    assert.equal(await countReviewVerdicts(batch), 2);
+});
+
+test('review page: decide checks the lock under the batch row lock (a release in between → 409, nothing written)', async () => {
+    const batch = 'e2e-review-decide-lock';
+    await seedKeyboardBatch(batch, 2);
+    const c1 = (await getReview(batch, { item: 'C1', format: 'json' })).body.item;
+    const flagsBefore = (await videoFlags(c1.native_id)).length;
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        await c.query('BEGIN');
+        await c.query('SELECT 1 FROM prv_review_batches WHERE batch = $1 FOR UPDATE', [batch]);
+        const pending = decideReview({ item_id: c1.id, verdict: 'sponsor', reviewer: REVIEWER, track_mismatch: true });
+        await waitForQueryBlockedOnLock(`prv_review_batches WHERE batch = '${batch}' FOR UPDATE`);
+        // A force release and gkshi's take land while the save waits.
+        await c.query("UPDATE prv_review_batches SET locked_by = 'gkshi', locked_at = CURRENT_TIMESTAMP WHERE batch = $1", [batch]);
+        await c.query('COMMIT');
+        const res = await pending;
+        assert.equal(res.status, 409);
+        assert.deepEqual(res.body, { reason: 'locked', locked_by: 'gkshi', message: RU.text('conflict_locked', { name: 'gkshi' }) });
+    } finally {
+        await c.end();
+    }
+    assert.equal(await countReviewVerdicts(batch), 0);
+    assert.equal((await videoFlags(c1.native_id)).length, flagsBefore, 'no flag row either');
+});
+
 test('review page: create reviewer (form / JSON) → picker → batch list → item page → take → decide, a Cyrillic name with a space round-trips', async () => {
     const NAME = 'Анна Петрова-2';
     const batch = 'e2e-review-create-reviewer';
     const enc = encodeURIComponent(NAME);
-    const created = [NAME, 'Zoë Ng'];
+    const created = [NAME, 'Zoë Ng', 'Тест', 'тест'];
     const qs = (token) => (token == null ? '' : `?verifyBearerToken=${encodeURIComponent(token)}`);
     const form = (name, { token = MOD_AUTH, headers = {} } = {}) => request('POST', `/admin/review/reviewers${qs(token)}`,
         new URLSearchParams({ name }).toString(), { 'Content-Type': 'application/x-www-form-urlencoded', ...headers });
@@ -4260,6 +4356,11 @@ test('review page: create reviewer (form / JSON) → picker → batch list → i
         assert.ok(res.body.includes(`href="/admin/review?verifyBearerToken=${MOD_AUTH}&amp;lang=ru"`), 'the switch points at the picker');
         assert.deepEqual((await request('GET', `/admin/review?format=json&verifyBearerToken=${MOD_AUTH}`, null)).body.reviewers.sort(),
             ['bayanovea', 'gkshi', 'Zoë Ng', NAME].sort());
+
+        // Two concurrent names that differ only in letter case: exactly one is stored.
+        const raced = await withReviewRepo((repo) => Promise.all([repo.createReviewer('Тест'), repo.createReviewer('тест')]));
+        assert.equal(raced.filter(code => code === null).length, 1, JSON.stringify(raced));
+        assert.ok(['Тест', 'тест'].includes(raced.find(code => code !== null)), JSON.stringify(raced));
     } finally {
         // Later tests list the seeded reviewers only; a boot would rewrite these verdicts to bayanovea.
         await withReviewRepo(async (repo, sequelize) => {
@@ -4372,6 +4473,17 @@ test('review page: keyboard edge cases (Russian layout, focused link, errors, no
         { item_code: 'C1', verdict: 'sponsor', comment: null, reviewer: REVIEWER, source: 'page' },
         { item_code: 'C1', verdict: 'sponsor', comment: 'why', reviewer: REVIEWER, source: 'page' },
     ]);
+
+    // A force release while the page is open: the save shows the 409 message and stays.
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    assert.equal((await lockReview('release', batch, { reviewer: 'gkshi', force: true })).status, 200);
+    page.key('2');
+    page.key('Enter');
+    for (let i = 0; i < 200 && page.els.status.className !== 'status error'; i++) await sleep(10);
+    assert.equal(page.els.status.textContent, RU.text('conflict_available'));
+    assert.equal(page.navigatedTo, null);
+    assert.equal(page.els['save-btn'].disabled, false);
+    assert.equal((await reviewState(batch)).verdicts.length, 2);
 });
 
 test('review page: Russian by default, ?lang=en switches to English and sticks via the cookie', async () => {
@@ -4398,6 +4510,8 @@ test('review page: Russian by default, ?lang=en switches to English and sticks v
     assert.match(cookie, new RegExp(`^${LANG_COOKIE}=en;`));
     assert.match(cookie, /Path=\/admin\/review/);
     assert.match(cookie, /Max-Age=31536000/);
+    assert.match(cookie, /; HttpOnly/);
+    assert.match(cookie, /; SameSite=Lax/);
 
     // The cookie alone keeps English on every page; ?lang=ru wins over it.
     const picker = await request('GET', `/admin/review?verifyBearerToken=${MOD_AUTH}`, null, enCookie);
