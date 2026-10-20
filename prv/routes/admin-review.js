@@ -3,6 +3,7 @@ const handler = require('../../middleware/handler');
 const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
 const { ReviewInputError, SIGNALS_WINDOW } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
+const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
 
 // Assessor review page (prv only). Sibling of admin-moderation.js: same
 // `?verifyBearerToken=` query auth, server-rendered HTML + AJAX decide,
@@ -32,6 +33,7 @@ const CHOICES = VERDICTS;
 // match the player (text or timing). Independent of the verdict: the verdict
 // says what the text is, the flag says the video is not where the text is.
 const TRACK_FLAG = 'track_mismatch';
+const TRACK_KEY = CHOICES.length + 1;
 // Legacy "Wrong text" verdicts (before 2026-10-18) are `unclear` with this
 // comment in front; the page still shows them as such.
 const WRONG_TEXT_COMMENT = 'Текст в видео не совпадает с текстом из субтитров.';
@@ -64,9 +66,11 @@ function validBodyItemId(id) {
     return Number.isInteger(id) && id > 0 && id <= 2147483647;
 }
 
-function badge(category) {
+// Verdict-valued categories show the translated verdict label (as on the buttons).
+function badge(category, t) {
     const color = CATEGORY_COLORS[category] || '#64748b';
-    return `<span class="badge" style="background:${color}">${escapeHtml(category || '?')}</span>`;
+    const label = VERDICTS.includes(category) ? t(`verdict_${category}`) : escapeHtml(category || '?');
+    return `<span class="badge" style="background:${color}">${label}</span>`;
 }
 
 // Same check as admin-moderation.js, plus: an unset AUTH_TOKEN never matches
@@ -83,6 +87,22 @@ function authorized(req, res) {
 // Item as the page shows it: repository fields plus player times and the
 // player link. The stored link (from `adskip sheet`) already sits at
 // start − 2 s; it is used as is, never offset again. Null when not http(s).
+const LANG_COOKIE_MS = 365 * 24 * 3600 * 1000;
+
+// Translator for the request; an explicit `?lang=` is remembered in the cookie.
+function languageOf(req, res) {
+    if (LANGS.includes(req.query.lang)) {
+        res.cookie(COOKIE, req.query.lang, { path: '/admin/review', maxAge: LANG_COOKIE_MS, httpOnly: true, sameSite: 'lax' });
+    }
+    return translator(pickLang(req));
+}
+
+// The toolbar switch: this page with `lang` set to the other language.
+function langSwitch(req, t, query = req.query) {
+    const params = new URLSearchParams({ ...query, lang: LANGS.find(l => l !== t.lang) });
+    return `<a class="lang-switch" href="${escapeHtml(`${req.baseUrl}${req.path}?${params}`)}">${t('lang_switch')}</a>`;
+}
+
 function presentItem(item) {
     return {
         ...item,
@@ -150,9 +170,9 @@ const STYLE = `
         .warn { color: #fcd34d; }
 `;
 
-function page(title, body) {
+function page(title, body, lang) {
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -166,43 +186,45 @@ ${body}
 </html>`;
 }
 
-function renderReviewerPicker(reviewers, token) {
-    const t = escapeHtml(urlToken(token));
+function renderReviewerPicker(reviewers, token, t, langLink) {
+    const tok = escapeHtml(urlToken(token));
     const links = reviewers.map(r =>
-        `<a href="/admin/review?reviewer=${escapeHtml(encodeURIComponent(r))}&amp;verifyBearerToken=${t}">${escapeHtml(r)}</a>`).join('');
-    return page('Review', `
-    <h1>Review</h1>
-    <p class="muted" style="margin-bottom:14px">Who are you? Every verdict is saved under this name.</p>
-    <div class="picker">${links || '<span class="empty">No reviewers registered (prv_review_reviewers).</span>'}</div>`);
+        `<a href="/admin/review?reviewer=${escapeHtml(encodeURIComponent(r))}&amp;verifyBearerToken=${tok}">${escapeHtml(r)}</a>`).join('');
+    return page(t.text('page_title'), `
+    <h1>${t('page_title')}</h1>
+    <div class="toolbar"><span class="spacer"></span>${langLink}</div>
+    <p class="muted" style="margin-bottom:14px">${t('picker_prompt')}</p>
+    <div class="picker">${links || `<span class="empty">${t('picker_empty')}</span>`}</div>`, t.lang);
 }
 
-function renderBatchList(batches, reviewer, showAll, token) {
-    const t = escapeHtml(urlToken(token));
+function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
+    const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
     const rows = batches.map(b => `
             <tr>
-                <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${t}">${escapeHtml(b.batch)}</a></td>
-                <td>${b.assignee ? escapeHtml(b.assignee) : '<span class="muted">anyone</span>'}</td>
+                <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${tok}">${escapeHtml(b.batch)}</a></td>
+                <td>${b.assignee ? escapeHtml(b.assignee) : `<span class="muted">${t('list_anyone')}</span>`}</td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
             </tr>`).join('');
-    return page('Review', `
-    <h1>Review</h1>
+    return page(t.text('page_title'), `
+    <h1>${t('page_title')}</h1>
     <div class="toolbar">
-        <span>Reviewer: <strong>${escapeHtml(reviewer)}</strong></span>
-        <a href="/admin/review?verifyBearerToken=${t}">switch</a>
+        <span>${t('toolbar_reviewer_html', { name: reviewer })}</span>
+        <a href="/admin/review?verifyBearerToken=${tok}">${t('toolbar_switch')}</a>
         <span class="spacer"></span>
         ${showAll
-        ? `<a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${t}">my batches</a>`
-        : `<a href="/admin/review?reviewer=${r}&amp;show=all&amp;verifyBearerToken=${t}">all batches</a>`}
-        <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${t}">JSON</a>
+        ? `<a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${tok}">${t('toolbar_my_batches')}</a>`
+        : `<a href="/admin/review?reviewer=${r}&amp;show=all&amp;verifyBearerToken=${tok}">${t('toolbar_all_batches')}</a>`}
+        <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${tok}">${t('toolbar_json')}</a>
+        ${langLink}
     </div>
     ${batches.length > 0 ? `
     <table>
-        <thead><tr><th>Batch</th><th>Assignee</th><th>Items</th><th>Decided</th><th>Open</th></tr></thead>
+        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_assignee')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
         <tbody>${rows}</tbody>
-    </table>` : `<div class="card empty">${showAll ? 'No review batches imported yet (scripts/import-review-sheet.js).' : 'Nothing assigned to you or open to anyone.'}</div>`}
+    </table>` : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
 <script>
     // A batch opens in a tab this page opens: the item page later turns that
     // tab into a player and the browser lets a page close only tabs a script
@@ -212,25 +234,27 @@ function renderBatchList(batches, reviewer, showAll, token) {
         if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
         if (window.open(a.href, '_blank')) e.preventDefault();
     });
-</script>`);
+</script>`, t.lang);
 }
 
-function renderSignals(signals, token) {
-    const t = escapeHtml(urlToken(token));
-    const windowText = `${formatPlayerTime(signals.window.start)} – ${formatPlayerTime(signals.window.end)}`;
+function renderSignals(signals, token, t) {
+    const tok = escapeHtml(urlToken(token));
+    const range = `${formatPlayerTime(signals.window.start)} – ${formatPlayerTime(signals.window.end)}`;
     const videoLinks = signals.videos.map(v =>
-        `<a href="/admin/video/${v.id}?verifyBearerToken=${t}" target="_blank" rel="noopener">video #${v.id}${v.duration != null ? ` (${escapeHtml(v.duration)} s)` : ''} ↗</a>`
+        `<a href="/admin/video/${v.id}?verifyBearerToken=${tok}" target="_blank" rel="noopener">${v.duration != null
+            ? t('signals_video_duration', { id: v.id, seconds: v.duration })
+            : t('signals_video', { id: v.id })} ↗</a>`
     ).join(' · ');
 
     const markupRows = signals.markups.map(m => {
         const author = m.user_id != null
-            ? `<a href="/admin/user/${Number(m.user_id)}?verifyBearerToken=${t}" target="_blank" rel="noopener">user #${Number(m.user_id)}</a>`
+            ? `<a href="/admin/user/${Number(m.user_id)}?verifyBearerToken=${tok}" target="_blank" rel="noopener">${t('signals_user', { id: Number(m.user_id) })}</a>`
             : '<span class="muted">—</span>';
         return `
             <tr>
-                <td>${badge(m.category)}</td>
+                <td>${badge(m.category, t)}</td>
                 <td class="num">${formatPlayerTime(m.start)} – ${formatPlayerTime(m.end)}</td>
-                <td>${author}${m.author_banned ? '<span class="badge badge-banned">banned</span>' : ''}</td>
+                <td>${author}${m.author_banned ? `<span class="badge badge-banned">${t('signals_banned')}</span>` : ''}</td>
                 <td class="num">${m.author_rating != null ? escapeHtml(m.author_rating) : '—'}</td>
                 <td class="num muted">${Number(m.markup_id)}</td>
             </tr>`;
@@ -238,56 +262,56 @@ function renderSignals(signals, token) {
 
     const segmentRows = signals.segments.map(s => `
             <tr>
-                <td>${badge(s.category)}</td>
+                <td>${badge(s.category, t)}</td>
                 <td class="num">${formatPlayerTime(s.start)} – ${formatPlayerTime(s.end)}</td>
                 <td class="num">${escapeHtml(s.rating)}</td>
                 <td class="num">${Number(s.likes)} / ${Number(s.dislikes)}</td>
-                <td class="num muted">video #${Number(s.video_id)}</td>
+                <td class="num muted">${t('signals_video', { id: Number(s.video_id) })}</td>
             </tr>`).join('');
 
     return `
-    <h2>Signals <span class="muted">(±${SIGNALS_WINDOW} s: ${windowText})</span></h2>
+    <h2>${t('signals_title_html', { window: SIGNALS_WINDOW, range })}</h2>
     <div class="signals-line">
-        Undos: <strong>${Number(signals.undos)}</strong> · Clicks: <strong>${Number(signals.clicks)}</strong>
-        ${signals.videos.length > 0 ? ` · ${videoLinks}` : ' · <span class="muted">no video rows for this native_id</span>'}
+        ${t('signals_counts_html', { undos: Number(signals.undos), clicks: Number(signals.clicks) })}
+        ${signals.videos.length > 0 ? ` · ${videoLinks}` : ` · <span class="muted">${t('signals_no_videos')}</span>`}
     </div>
     ${signals.markups.length > 0 ? `
     <table>
-        <thead><tr><th>Markup</th><th>Interval</th><th>Author</th><th>Author rating</th><th>Id</th></tr></thead>
+        <thead><tr><th>${t('signals_col_markup')}</th><th>${t('signals_col_interval')}</th><th>${t('signals_col_author')}</th><th>${t('signals_col_author_rating')}</th><th>${t('signals_col_id')}</th></tr></thead>
         <tbody>${markupRows}</tbody>
-    </table>` : '<div class="empty">No live markups in the window.</div>'}
+    </table>` : `<div class="empty">${t('signals_no_markups')}</div>`}
     ${signals.segments.length > 0 ? `
     <table>
-        <thead><tr><th>Segment</th><th>Interval</th><th>Rating</th><th>Likes / dislikes</th><th>Video</th></tr></thead>
+        <thead><tr><th>${t('signals_col_segment')}</th><th>${t('signals_col_interval')}</th><th>${t('signals_col_rating')}</th><th>${t('signals_col_votes')}</th><th>${t('signals_col_video')}</th></tr></thead>
         <tbody>${segmentRows}</tbody>
-    </table>` : '<div class="empty">No calculated segments in the window.</div>'}`;
+    </table>` : `<div class="empty">${t('signals_no_segments')}</div>`}`;
 }
 
-function renderItemPage(payload, token) {
+function renderItemPage(payload, token, t, langLink) {
     const { batch, item, nav, signals, reviewer, video_flags } = payload;
-    const t = escapeHtml(urlToken(token));
+    const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
     const itemHref = (code) =>
-        `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;reviewer=${r}&amp;verifyBearerToken=${t}`;
+        `/admin/review/${escapeHtml(encodeURIComponent(batch.batch))}?item=${escapeHtml(encodeURIComponent(code))}&amp;reviewer=${r}&amp;verifyBearerToken=${tok}`;
     const navLink = (ref, label) => ref
         ? `<a class="nav-btn" href="${itemHref(ref.item_code)}" data-item-code="${escapeHtml(ref.item_code)}"${ref.player_link ? ` data-player-link="${escapeHtml(ref.player_link)}"` : ''}>${label}</a>`
         : `<span class="nav-btn disabled">${label}</span>`;
 
-    const proposed = String(item.proposed || '').split('+').filter(Boolean).map(badge).join(' ');
+    const proposed = String(item.proposed || '').split('+').filter(Boolean).map(c => badge(c, t)).join(' ');
     const current = item.verdict;
 
     const decidedBlock = current ? `
     <div class="card">
-        <div class="current">Current verdict: ${badge(current.verdict)}${isLegacyWrongText(current) ? ' <span class="warn">(legacy "Wrong text": re-decide with the track flag)</span>' : ''}
-            <span class="muted">by ${escapeHtml(current.reviewer)} (${escapeHtml(current.source)}), ${formatDate(current.decided_at)}</span></div>
+        <div class="current">${t('current_verdict')} ${badge(current.verdict, t)}${isLegacyWrongText(current) ? ` <span class="warn">${t('current_legacy_wrong_text')}</span>` : ''}
+            <span class="muted">${t('current_by', { reviewer: current.reviewer, source: current.source, date: formatDate(current.decided_at) })}</span></div>
         ${current.comment ? `<blockquote>${escapeHtml(current.comment)}</blockquote>` : ''}
-        <div class="current flagged-by" style="margin-top:10px">Flagged by: ${(item.flagged_by || []).map(r => `<code>${escapeHtml(r)}</code>`).join(' ') || '<span class="muted">—</span>'}</div>
+        <div class="current flagged-by" style="margin-top:10px">${t('current_flagged_by')} ${(item.flagged_by || []).map(r => `<code>${escapeHtml(r)}</code>`).join(' ') || '<span class="muted">—</span>'}</div>
         <table>
-            <thead><tr><th>When</th><th>Verdict</th><th>Reviewer</th><th>Source</th><th>Comment</th></tr></thead>
+            <thead><tr><th>${t('history_when')}</th><th>${t('history_verdict')}</th><th>${t('history_reviewer')}</th><th>${t('history_source')}</th><th>${t('history_comment')}</th></tr></thead>
             <tbody>${item.history.map(h => `
                 <tr>
                     <td class="muted">${formatDate(h.decided_at)}</td>
-                    <td>${badge(h.verdict)}</td>
+                    <td>${badge(h.verdict, t)}</td>
                     <td>${escapeHtml(h.reviewer)}</td>
                     <td class="muted">${escapeHtml(h.source)}</td>
                     <td style="white-space:pre-wrap">${escapeHtml(h.comment || '')}</td>
@@ -297,7 +321,7 @@ function renderItemPage(payload, token) {
 
     const currentChoice = current ? current.verdict : null;
     const verdictButtons = CHOICES.map((v, i) => `
-            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${v}</button>`).join('');
+            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${t(`verdict_${v}`)}</button>`).join('');
     const track = video_flags[TRACK_FLAG];
     const trackOn = track ? track.value === true : false;
 
@@ -319,28 +343,32 @@ function renderItemPage(payload, token) {
         verdict_reviewer: current ? current.reviewer : null,
         track_mismatch: trackOn,
         choices: CHOICES,
+        verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
+        i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error']
+            .map(key => [key, t.text(key)])),
     };
 
     return page(`${item.item_code} · ${batch.batch}`, `
     <div class="toolbar">
-        <a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${t}">All batches</a>
+        <a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${tok}">${t('item_all_batches')}</a>
         <strong>${escapeHtml(batch.batch)}</strong>
-        <span>${batch.decided} / ${batch.total} decided · ${batch.open} open</span>
-        <span class="muted">· reviewer <strong>${escapeHtml(reviewer)}</strong>${batch.assignee && batch.assignee !== reviewer ? ` <span class="warn">(batch assigned to ${escapeHtml(batch.assignee)})</span>` : ''}</span>
+        <span>${t('item_progress', { decided: batch.decided, total: batch.total, open: batch.open })}</span>
+        <span class="muted">${t('item_reviewer_html', { name: reviewer })}${batch.assignee && batch.assignee !== reviewer ? ` <span class="warn">${t('item_assigned_to', { name: batch.assignee })}</span>` : ''}</span>
         <span class="spacer"></span>
         ${navLink(nav.prev, `◀ ${nav.prev ? escapeHtml(nav.prev.item_code) : ''}`)}
         <strong>${escapeHtml(item.item_code)}</strong>
         ${navLink(nav.next, `${nav.next ? escapeHtml(nav.next.item_code) : ''} ▶`)}
-        ${navLink(nav.first_open, 'first open')}
-        <a href="${itemHref(item.item_code)}&amp;format=json">JSON</a>
+        ${navLink(nav.first_open, t('item_first_open'))}
+        <a href="${itemHref(item.item_code)}&amp;format=json">${t('toolbar_json')}</a>
+        ${langLink}
     </div>
 
     <div class="card">
-        <div class="item-head">${item.start_player} – ${item.end_player} (${item.duration_s} s)</div>
+        <div class="item-head">${t('item_duration', { start: item.start_player, end: item.end_player, seconds: item.duration_s })}</div>
         ${item.player_link
-        ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">Open in player ↗</a>
-        <span class="muted">(starts 2 s before the stretch)</span>`
-        : '<span class="muted">No player link for this item.</span>'}
+        ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">${t('item_open_player')}</a>
+        <span class="muted">${t('item_player_offset')}</span>`
+        : `<span class="muted">${t('item_no_player')}</span>`}
         ${item.cues ? `<div class="cues">${icon(QUOTE_ICON, 'quote-icon')}<div class="cues-text">${escapeHtml(item.cues)}</div></div>` : ''}
         <div class="muted item-id">${escapeHtml(item.item_code)} · ${escapeHtml(item.native_id)}</div>
     </div>
@@ -348,41 +376,47 @@ function renderItemPage(payload, token) {
     ${decidedBlock}
 
     <div class="card">
-        <div class="proposed"><span class="muted">Proposed as:</span> ${proposed}</div>
-        <label>Verdict — what the <em>text</em> is</label>
+        <div class="proposed"><span class="muted">${t('proposed_as')}</span> ${proposed}</div>
+        <label>${t('verdict_prompt_html')}</label>
         <div class="verdicts">${verdictButtons}
         </div>
-        <label>Video</label>
+        <label>${t('video_label')}</label>
         <div class="flag-row">
             <input type="checkbox" id="track-flag"${trackOn ? ' checked' : ''} onchange="setStatus('')">
-            <label for="track-flag" style="margin:0;color:#e2e8f0;font-size:0.9rem"><kbd>5</kbd> Subtitle track ≠ video (text or timing off; whole video)</label>
-            ${track ? `<span class="who">set ${track.value ? 'on' : 'off'} by ${escapeHtml(track.reviewer)}, ${formatDate(track.created_at)}</span>` : ''}
+            <label for="track-flag" style="margin:0;color:#e2e8f0;font-size:0.9rem"><kbd>${TRACK_KEY}</kbd> ${t('track_flag')}</label>
+            ${track ? `<span class="who">${t(track.value ? 'track_set_on' : 'track_set_off', { name: track.reviewer, date: formatDate(track.created_at) })}</span>` : ''}
         </div>
-        <label for="comment">Comment</label>
+        <label for="comment">${t('comment_label')}</label>
         <textarea id="comment" style="width:100%">${escapeHtml(current && current.comment ? current.comment : '')}</textarea>
-        <button type="button" class="save-btn" id="save-btn" onclick="save()">Save ⏎</button>
+        <button type="button" class="save-btn" id="save-btn" onclick="save()">${t('save_button')}</button>
         <div class="status" id="status"></div>
     </div>
 
     <div class="card rules">
-        <strong>How to decide</strong>
+        <strong>${t('rules_title')}</strong>
         <ul>
-            <li><strong>sponsor</strong> — an outside party paid for this piece. <strong>self_promotion</strong> — the speaker promotes themselves: subscribe, like, comment, own products, channels, events, client work. The test is <em>who paid</em>, not how long or how annoying it is.</li>
-            <li>A call to action woven into the content ("write in the comments which…") is still <strong>self_promotion</strong>; say in the comment that you would not skip it. Whether to skip is decided by thresholds in code, not here.</li>
-            <li><strong>not_ad</strong> — the text is neither. <strong>unclear</strong> — only when the text itself does not let you decide.</li>
-            <li>Judge the verdict by the <em>text</em>. If the player shows something else at these times (other words, or the same words shifted), tick <strong>Subtitle track ≠ video</strong> as well; it marks the whole video, not this item.</li>
+            <li>${t('rules_who_paid_html')}</li>
+            <li>${t('rules_call_to_action_html')}</li>
+            <li>${t('rules_not_ad_html')}</li>
+            <li>${t('rules_track_html')}</li>
         </ul>
     </div>
 
-    ${renderSignals(signals, token)}
+    ${renderSignals(signals, token, t)}
 
-    <div class="muted hotkeys">Hotkeys: <kbd>1</kbd>–<kbd>${CHOICES.length}</kbd> verdict · <kbd>5</kbd> track flag · <kbd>c</kbd> comment · <kbd>Enter</kbd> save (<kbd>Ctrl/Cmd+Enter</kbd> in the comment box) · <kbd>Esc</kbd> leave a text box · <kbd>j</kbd> / <kbd>k</kbd> next / previous · <kbd>o</kbd> open player</div>
+    <div class="muted hotkeys">${t('hotkeys_html', { n: CHOICES.length, flag: TRACK_KEY })}</div>
 
 <script>
     const STATE = ${scriptJson(state)};
     const FLASH_KEY = 'adminReview.flash';
     let picked = STATE.choice;
     let saving = false;
+
+    function tr(key, params) {
+        return STATE.i18n[key].replace(/[{]([a-z_]+)[}]/g, function (m, name) {
+            return params && params[name] != null ? String(params[name]) : m;
+        });
+    }
 
     function storageGet(store, key) {
         try { return window[store].getItem(key); } catch (e) { return null; }
@@ -447,7 +481,7 @@ function renderItemPage(payload, token) {
     }
     async function save() {
         if (saving) return;
-        if (!picked) { setStatus('Pick a verdict first (1–' + STATE.choices.length + ').', 'error'); return; }
+        if (!picked) { setStatus(tr('js_pick_first', { n: STATE.choices.length }), 'error'); return; }
         const verdict = picked;
         const comment = document.getElementById('comment').value;
         const track = document.getElementById('track-flag').checked;
@@ -456,7 +490,7 @@ function renderItemPage(payload, token) {
         // The server skips the duplicate row too; this only spares the round trip.
         if (verdict === STATE.verdict && comment.trim() === STATE.comment
             && STATE.reviewer === STATE.verdict_reviewer && track === STATE.track_mismatch) {
-            setStatus('No change: ' + STATE.item_code + ' is already ' + verdict + '.');
+            setStatus(tr('js_no_change', { item: STATE.item_code, verdict: STATE.verdict_labels[verdict] }));
             return;
         }
         saving = true;
@@ -477,18 +511,21 @@ function renderItemPage(payload, token) {
             if (res.status === 201) {
                 const data = await res.json();
                 const flagged = (data.flagged_by || []).join(', ') || '—';
-                let flash = 'Saved ' + STATE.item_code + ': ' + verdict + (data.track_mismatch ? ' (track ≠ video)' : '') + '. Flagged by: ' + flagged;
-                if (closePlayerTab() === false) {
-                    flash += '. Close the previous video tab by hand: the browser lets this page close only tabs it opened (start from the batch list).';
-                }
+                let flash = tr('js_saved', {
+                    item: STATE.item_code,
+                    verdict: STATE.verdict_labels[verdict],
+                    track: data.track_mismatch ? tr('js_saved_track') : '',
+                    flagged: flagged,
+                });
+                if (closePlayerTab() === false) flash += '. ' + tr('js_close_by_hand');
                 storageSet('sessionStorage', FLASH_KEY, flash);
                 if (data.next_item) goTo(data.next_item, data.next_player_link);
                 else window.location.href = itemUrl(STATE.item_code);
                 return;
             }
-            setStatus('Error ' + res.status + ': ' + (await res.text()), 'error');
+            setStatus(tr('js_error_status', { status: res.status, text: await res.text() }), 'error');
         } catch (err) {
-            setStatus('Error: ' + err.message, 'error');
+            setStatus(tr('js_error', { text: err.message }), 'error');
         }
         saving = false;
         btn.disabled = false;
@@ -535,7 +572,7 @@ function renderItemPage(payload, token) {
         const flash = storageGet('sessionStorage', FLASH_KEY);
         if (flash) { setStatus(flash, 'ok'); storageSet('sessionStorage', FLASH_KEY, null); }
     })();
-</script>`);
+</script>`, t.lang);
 }
 
 // `models` is unused here; kept for the shared route-factory signature (see index.js).
@@ -560,8 +597,9 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
                 res.status(req.query.reviewer ? 400 : 200).json({ reviewers, reviewer: null });
                 return;
             }
+            const t = languageOf(req, res);
             res.setHeader('Content-Type', 'text/html');
-            res.send(renderReviewerPicker(reviewers, req.query.verifyBearerToken));
+            res.send(renderReviewerPicker(reviewers, req.query.verifyBearerToken, t, langSwitch(req, t, { verifyBearerToken: req.query.verifyBearerToken })));
             return;
         }
         const showAll = req.query.show === 'all';
@@ -570,8 +608,9 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             res.json({ reviewer, batches });
             return;
         }
+        const t = languageOf(req, res);
         res.setHeader('Content-Type', 'text/html');
-        res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken));
+        res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken, t, langSwitch(req, t)));
     }));
 
     // POST /admin/review/decide — append a verdict from the page, and the video
@@ -677,8 +716,9 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             res.json(payload);
             return;
         }
+        const t = languageOf(req, res);
         res.setHeader('Content-Type', 'text/html');
-        res.send(renderItemPage(payload, req.query.verifyBearerToken));
+        res.send(renderItemPage(payload, req.query.verifyBearerToken, t, langSwitch(req, t)));
     }));
 
     return router;

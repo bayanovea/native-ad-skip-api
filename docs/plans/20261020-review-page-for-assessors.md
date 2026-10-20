@@ -114,11 +114,11 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 **Files:**
 - Modify: `prv/routes/admin-review.js`, locale files, `test/e2e.js`
 
-- [ ] every visible string (picker, batch list, item page, rules card, hotkeys line, client-side status texts) through `t()`; `<html lang>` follows the language
-- [ ] verdict button labels translated, `data-verdict` values unchanged
-- [ ] `?lang=` sets the cookie; toolbar switch RU / EN
-- [ ] e2e: default page is Russian, `?lang=en` is English and sticks via the cookie; existing review e2e still pass (update text matches)
-- [ ] `make test-e2e` passes
+- [x] every visible string (picker, batch list, item page, rules card, hotkeys line, client-side status texts) through `t()`; `<html lang>` follows the language
+- [x] verdict button labels translated, `data-verdict` values unchanged
+- [x] `?lang=` sets the cookie; toolbar switch RU / EN
+- [x] e2e: default page is Russian, `?lang=en` is English and sticks via the cookie; existing review e2e still pass (update text matches)
+- [x] `make test-e2e` passes
 
 ### Task 3: Batch lock model and schema one-off
 

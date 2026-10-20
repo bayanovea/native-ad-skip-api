@@ -14,6 +14,7 @@ const { Client } = require('pg');
 const { Sequelize } = require('sequelize');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
+const { COOKIE: LANG_COOKIE, translator } = require('../lib/i18n');
 const { ReviewInputError } = createReviewRepository;
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -128,7 +129,7 @@ async function waitForListen() {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-function request(method, path, body) {
+function request(method, path, body, headers = {}) {
     return new Promise((resolve, reject) => {
         const data = body ? JSON.stringify(body) : null;
         const req = http.request(
@@ -140,6 +141,7 @@ function request(method, path, body) {
                 headers: {
                     'Content-Type': 'application/json',
                     ...(data && { 'Content-Length': Buffer.byteLength(data) }),
+                    ...headers,
                 },
             },
             res => {
@@ -3015,6 +3017,17 @@ const REVIEW_RUN = '2026-10-14-claude-sonnet-5-5-v2.1-batch-nt-think';
 
 const REVIEWER = 'bayanovea';
 
+// The page is Russian by default; text checks go through the same locale.
+const RU = translator('ru');
+
+function savedFlash(item, verdict, { track = false, flagged = 'run-kbd' } = {}) {
+    return RU.text('js_saved', { item, verdict: RU.text(`verdict_${verdict}`), track: track ? RU.text('js_saved_track') : '', flagged });
+}
+
+function noChangeText(item, verdict) {
+    return RU.text('js_no_change', { item, verdict: RU.text(`verdict_${verdict}`) });
+}
+
 function reviewPath(route, query = {}) {
     const qs = new URLSearchParams({ reviewer: REVIEWER, ...query, verifyBearerToken: MOD_AUTH });
     return `${route}?${qs}`;
@@ -3080,7 +3093,7 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.ok(!html.body.includes(REVIEW_RUN), 'flagged_by must not be in HTML before a verdict');
     assert.ok(!html.body.includes('class="current flagged-by"'), 'no Flagged by block before a verdict');
     assert.ok(html.body.includes('href="https://example.invalid/video-1_456000903?t=1m0s"'));
-    assert.ok(html.body.includes('1:02 – 1:18 (16 s)'));
+    assert.ok(html.body.includes(RU('item_duration', { start: '1:02', end: '1:18', seconds: 16 })));
     assert.ok(html.body.includes("addEventListener('keydown'"));
 
     // A decided item shows its verdict, history and flagged_by.
@@ -3166,7 +3179,7 @@ test('review page: decide validation → 400 and no row written', async () => {
     // Pages need a registered reviewer: none → picker (HTML) / 400 (JSON).
     const picker = await request('GET', `/admin/review?verifyBearerToken=${MOD_AUTH}`, null);
     assert.equal(picker.status, 200);
-    assert.ok(picker.body.includes('Who are you?') && picker.body.includes('reviewer=gkshi&amp;verifyBearerToken='));
+    assert.ok(picker.body.includes(RU('picker_prompt')) && picker.body.includes('reviewer=gkshi&amp;verifyBearerToken='));
     assert.deepEqual((await request('GET', `/admin/review?format=json&verifyBearerToken=${MOD_AUTH}`, null)).body, { reviewers: ['bayanovea', 'gkshi'], reviewer: null });
     assert.equal((await request('GET', `/admin/review?format=json&reviewer=owner&verifyBearerToken=${MOD_AUTH}`, null)).status, 400);
     const noRev = await request('GET', `/admin/review/${batch}?verifyBearerToken=${MOD_AUTH}`, null);
@@ -3206,7 +3219,7 @@ test('review page: save → next open item after the current one, wrapping round
     // C1 has no stored link → no player link (never computed).
     assert.equal((await getReview(batch, { item: 'C1', format: 'json' })).body.item.player_link, null);
     const c1html = (await getReview(batch, { item: 'C1' })).body;
-    assert.ok(c1html.includes('No player link for this item.'));
+    assert.ok(c1html.includes(RU('item_no_player')));
     assert.ok(!c1html.includes('id="player-link"'));
 });
 
@@ -3235,12 +3248,12 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
     // An unknown reviewer in the URL is never reflected: the picker comes back.
     const bad = await request('GET', `/admin/review?reviewer=${encodeURIComponent(evil)}&verifyBearerToken=${MOD_AUTH}`, null);
     assert.equal(bad.status, 200);
-    assert.ok(bad.body.includes('Who are you?') && !bad.body.includes('<img src=x'));
+    assert.ok(bad.body.includes(RU('picker_prompt')) && !bad.body.includes('<img src=x') && !bad.body.includes('img%20src'));
     assert.ok(!html.includes('e2e-review-xss<b>'), 'batch name escaped');
     assert.ok(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)'));
     assert.ok(!html.includes('href="javascript:'), 'non-http link never rendered as href');
     assert.ok(!html.includes('javascript:alert(3)'), 'nor anywhere else (inline STATE included)');
-    assert.ok(html.includes('No player link for this item.'));
+    assert.ok(html.includes(RU('item_no_player')));
     assert.ok(html.includes('<meta name="referrer" content="no-referrer">'), 'token in the URL never sent as Referer');
     // Exactly one <script> element: the page's own, nothing injected.
     assert.equal(html.split('<script>').length - 1, 1);
@@ -3296,13 +3309,13 @@ test('review page: signals panel renders markups, segments, votes and links for 
     assert.equal(sig.undos, 1);
 
     const html = (await getReview(batch)).body;
-    assert.ok(html.includes('Signals <span class="muted">(±30 s: 2:50 – 4:20)</span>'));
+    assert.ok(html.includes('Сигналы <span class="muted">(±30 с: 2:50 – 4:20)</span>'));
     assert.ok(html.includes(`href="/admin/video/${ids.video}?verifyBearerToken=${MOD_AUTH}"`), 'video page link');
     assert.ok(html.includes(`href="/admin/user/${ids.user}?verifyBearerToken=${MOD_AUTH}"`), 'author link by internal id');
-    assert.ok(html.includes('<span class="badge badge-banned">banned</span>'));
+    assert.ok(html.includes(`<span class="badge badge-banned">${RU('signals_banned')}</span>`));
     assert.ok(html.includes('3:25 – 3:48'), 'markup interval in player time');
     assert.ok(html.includes('>1 / 2</td>'), 'likes / dislikes');
-    assert.ok(html.includes('Undos: <strong>1</strong>'));
+    assert.ok(html.includes('Отмены: <strong>1</strong>'));
     assert.ok(!html.includes('run-sig'), 'still blind');
 });
 
@@ -3512,7 +3525,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.equal(page.state().reviewer, REVIEWER);
     assert.ok(!html.includes('run-kbd'), 'blind before a verdict');
     assert.ok(!html.includes('id="reviewer"'), 'no Reviewer box: the reviewer comes from the URL');
-    assert.ok(html.includes('How to decide'), 'rules block on the page');
+    assert.ok(html.includes(RU('rules_title')), 'rules block on the page');
     page.key('k');
     assert.equal(page.navigatedTo, null, 'no previous item on C1');
     assert.deepEqual(page.opened, [], 'no item switch, no player');
@@ -3542,7 +3555,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     // C2: flash from the previous save; c → comment, a digit typed there is
     // text; Ctrl+Enter saves from the comment box.
     ({ page } = await openKeyboardPage(page.reviewUrl(), storages));
-    assert.equal(page.els.status.textContent, 'Saved C1: sponsor. Flagged by: run-kbd');
+    assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor'));
     assert.equal(page.els.status.className, 'status ok');
     assert.equal(storages.session.getItem('adminReview.flash'), null, 'flash shown once');
     page.key('2');
@@ -3558,7 +3571,7 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     page.key('Enter');
     await sleep(20);
     assert.equal(page.navigatedTo, null);
-    assert.match(page.els.status.textContent, /Pick a verdict first/);
+    assert.equal(page.els.status.textContent, RU.text('js_pick_first', { n: 4 }));
     page.key('3');
     assert.equal(await saveAndFollow(page), itemPath('C4'));
 
@@ -3569,10 +3582,10 @@ test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o)
     assert.deepEqual(page.opened, [], 'last open item reloads itself, no player');
     assert.equal(page.navigatedTo, itemPath('C4'));
     ({ page, html } = await openKeyboardPage(page.reviewUrl(), storages));
-    assert.ok(html.includes('4 / 4 decided · 0 open'));
+    assert.ok(html.includes(RU('item_progress', { decided: 4, total: 4, open: 0 })));
     assert.ok(html.includes('class="current flagged-by"') && html.includes('run-kbd'));
     assert.deepEqual(page.selected(), ['unclear']);
-    assert.equal(page.els.status.textContent, 'Saved C4: unclear. Flagged by: run-kbd');
+    assert.equal(page.els.status.textContent, savedFlash('C4', 'unclear'));
 
     const st = await reviewState(batch);
     assert.deepEqual(st.verdicts, [
@@ -3604,23 +3617,23 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
 
     // 5 toggles the box; the flag is not a verdict (Enter still asks for one).
     let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
-    assert.ok(html.includes('Subtitle track ≠ video'));
+    assert.ok(html.includes(RU('track_flag')));
     assert.equal(page.els['track-flag'].checked, false);
     page.key('5');
     assert.equal(page.els['track-flag'].checked, true);
     assert.deepEqual(page.selected(), []);
     page.key('Enter');
     await sleep(20);
-    assert.match(page.els.status.textContent, /Pick a verdict first/);
+    assert.equal(page.els.status.textContent, RU.text('js_pick_first', { n: 4 }));
     page.key('1');
     assert.equal(await saveAndFollow(page), itemPath('C2'));
 
     // C2 (same video): the box comes pre-checked with who set it; the JSON
     // carries the flag; the save flash names it.
     ({ page, html } = await openKeyboardPage(itemPath('C2'), storages));
-    assert.equal(page.els.status.textContent, 'Saved C1: sponsor (track ≠ video). Flagged by: run-kbd');
+    assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor', { track: true }));
     assert.equal(page.els['track-flag'].checked, true);
-    assert.ok(html.includes(`set on by ${REVIEWER}`));
+    assert.ok(html.includes(`включено: ${REVIEWER},`));
     const json = (await request('GET', itemPath('C2') + '&format=json', null)).body;
     assert.equal(json.video_flags.track_mismatch.value, true);
     assert.equal(json.video_flags.track_mismatch.reviewer, REVIEWER);
@@ -3637,7 +3650,7 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
     page.key('Enter');
     await sleep(20);
     assert.equal(page.navigatedTo, null);
-    assert.equal(page.els.status.textContent, 'No change: C1 is already sponsor.');
+    assert.equal(page.els.status.textContent, noChangeText('C1', 'sponsor'));
     page.key('5');
     assert.equal(page.els['track-flag'].checked, false);
     assert.equal(await saveAndFollow(page), itemPath('C3'), 'flag-only save moves on to the next open item');
@@ -3647,7 +3660,7 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
     ]);
     ({ page } = await openKeyboardPage(itemPath('C1'), storages));
     assert.equal(page.els['track-flag'].checked, false);
-    assert.equal(page.els.status.textContent, 'Saved C1: sponsor. Flagged by: run-kbd');
+    assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor'));
 
     // Another reviewer (other URL) agreeing with C1 adds a verdict row under their code.
     ({ page } = await openKeyboardPage(gkshiPath('C1'), storages));
@@ -3690,13 +3703,13 @@ test('review page: batch list shows the reviewer\'s own and unassigned batches; 
     assert.deepEqual(names(all), [anyone, mine, theirs]);
 
     const html = await request('GET', reviewPath('/admin/review'), null);
-    assert.ok(html.body.includes(`Reviewer: <strong>${REVIEWER}</strong>`));
+    assert.ok(html.body.includes(RU('toolbar_reviewer_html', { name: REVIEWER })));
     assert.ok(html.body.includes(`/admin/review/${mine}?reviewer=${REVIEWER}&amp;verifyBearerToken=`));
     assert.ok(!html.body.includes(`/admin/review/${theirs}?`), 'other reviewer\'s batch hidden by default');
     assert.ok(html.body.includes('show=all'));
     // Opening another reviewer's batch is allowed but says so.
     const theirsPage = await request('GET', reviewPath(`/admin/review/${theirs}`), null);
-    assert.ok(theirsPage.body.includes('batch assigned to gkshi'));
+    assert.ok(theirsPage.body.includes(RU('item_assigned_to', { name: 'gkshi' })));
 });
 
 test('review page: a save closes only the cross-origin player tab it was switched from', async () => {
@@ -3704,7 +3717,7 @@ test('review page: a save closes only the cross-origin player tab it was switche
     await seedKeyboardBatch(batch, 4);
     const storages = { local: memoryStorage(), session: memoryStorage() };
     const itemPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
-    const HAND = 'Close the previous video tab by hand';
+    const HAND = RU.text('js_close_by_hand');
 
     // The batch list opens a batch in a script-opened tab.
     const list = await request('GET', reviewPath('/admin/review'), null);
@@ -3724,14 +3737,14 @@ test('review page: a save closes only the cross-origin player tab it was switche
     assert.equal(await saveAndFollow(page), itemPath('C3'));
     assert.equal(page.opener.closed, false);
     ({ page } = await openKeyboardPage(itemPath('C3'), storages, { opener: null }));
-    assert.ok(page.els.status.textContent.startsWith('Saved C2: sponsor. Flagged by: run-kbd. ' + HAND),
+    assert.equal(page.els.status.textContent, savedFlash('C2', 'sponsor') + '. ' + HAND,
         page.els.status.textContent);
 
     // No opener: nothing to close, plain flash.
     page.key('1');
     assert.equal(await saveAndFollow(page), itemPath('C4'));
     ({ page } = await openKeyboardPage(itemPath('C4'), storages));
-    assert.equal(page.els.status.textContent, 'Saved C3: sponsor. Flagged by: run-kbd');
+    assert.equal(page.els.status.textContent, savedFlash('C3', 'sponsor'));
 });
 
 test('review page: keyboard edge cases (Russian layout, focused link, errors, no-change guard, broken storage)', async () => {
@@ -3771,8 +3784,8 @@ test('review page: keyboard edge cases (Russian layout, focused link, errors, no
     const realId = page.state().item_id;
     vm.runInContext('STATE.item_id = 2147483647', page.ctx);
     page.key('Enter');
-    for (let i = 0; i < 200 && !/^Error/.test(page.els.status.textContent); i++) await sleep(10);
-    assert.match(page.els.status.textContent, /^Error 400: unknown review item 2147483647/);
+    for (let i = 0; i < 200 && page.els.status.className !== 'status error'; i++) await sleep(10);
+    assert.equal(page.els.status.textContent, RU.text('js_error_status', { status: 400, text: 'unknown review item 2147483647' }));
     assert.equal(page.els.status.className, 'status error');
     assert.equal(page.els['save-btn'].disabled, false, 'button re-enabled after an error');
     assert.equal(page.opener.closed, false, 'a failed save keeps the player tab');
@@ -3792,7 +3805,7 @@ test('review page: keyboard edge cases (Russian layout, focused link, errors, no
     page.key('Enter');
     await sleep(20);
     assert.equal(page.navigatedTo, null);
-    assert.equal(page.els.status.textContent, 'No change: C1 is already sponsor.');
+    assert.equal(page.els.status.textContent, noChangeText('C1', 'sponsor'));
     page.key('с', { code: 'KeyC' });
     assert.equal(page.active(), 'comment');
     page.type('why');
@@ -3802,4 +3815,55 @@ test('review page: keyboard edge cases (Russian layout, focused link, errors, no
         { item_code: 'C1', verdict: 'sponsor', comment: null, reviewer: REVIEWER, source: 'page' },
         { item_code: 'C1', verdict: 'sponsor', comment: 'why', reviewer: REVIEWER, source: 'page' },
     ]);
+});
+
+test('review page: Russian by default, ?lang=en switches to English and sticks via the cookie', async () => {
+    const batch = 'e2e-review-lang';
+    await seedKeyboardBatch(batch, 1);
+    const itemPath = `/admin/review/${batch}?item=C1&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
+    const enCookie = { Cookie: `${LANG_COOKIE}=en` };
+
+    const ru = await request('GET', itemPath, null);
+    assert.equal(ru.status, 200);
+    assert.ok(ru.body.includes('<html lang="ru">'));
+    assert.ok(ru.body.includes('Как решать'));
+    assert.ok(ru.body.includes('Сохранить ⏎'));
+    assert.ok(/data-verdict="sponsor"[^>]*>.*Спонсор<\/button>/.test(ru.body), 'label translated, value kept');
+    assert.ok(ru.body.includes(`href="/admin/review/${batch}?item=C1&amp;reviewer=${REVIEWER}&amp;verifyBearerToken=${MOD_AUTH}&amp;lang=en">English</a>`));
+    assert.equal(ru.headers['set-cookie'], undefined, 'no cookie without ?lang=');
+
+    const en = await request('GET', `${itemPath}&lang=en`, null);
+    assert.ok(en.body.includes('<html lang="en">'));
+    assert.ok(en.body.includes('How to decide'));
+    assert.ok(/data-verdict="self_promotion"[^>]*>.*Self-promotion<\/button>/.test(en.body));
+    assert.ok(en.body.includes('&amp;lang=ru">Русский</a>'));
+    const cookie = en.headers['set-cookie'][0];
+    assert.match(cookie, new RegExp(`^${LANG_COOKIE}=en;`));
+    assert.match(cookie, /Path=\/admin\/review/);
+    assert.match(cookie, /Max-Age=31536000/);
+
+    // The cookie alone keeps English on every page; ?lang=ru wins over it.
+    const picker = await request('GET', `/admin/review?verifyBearerToken=${MOD_AUTH}`, null, enCookie);
+    assert.ok(picker.body.includes('<html lang="en">') && picker.body.includes('Who are you? Every verdict is saved under this name.'));
+    assert.ok(picker.body.includes(`href="/admin/review?verifyBearerToken=${MOD_AUTH}&amp;lang=ru">Русский</a>`));
+    const list = await request('GET', reviewPath('/admin/review'), null, enCookie);
+    assert.ok(list.body.includes(`Reviewer: <strong>${REVIEWER}</strong>`) && list.body.includes('<th>Decided</th>'));
+    const back = await request('GET', `${itemPath}&lang=ru`, null, enCookie);
+    assert.ok(back.body.includes('Как решать'));
+    assert.match(back.headers['set-cookie'][0], new RegExp(`^${LANG_COOKIE}=ru;`));
+    const unknown = await request('GET', `${itemPath}&lang=de`, null, enCookie);
+    assert.ok(unknown.body.includes('How to decide'), 'unknown lang: cookie still decides');
+    assert.equal(unknown.headers['set-cookie'], undefined);
+
+    // Client-side texts come with the page language.
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    const page = loadKeyboardPage((await request('GET', itemPath, null, enCookie)).body, storages);
+    page.key('Enter');
+    assert.equal(page.els.status.textContent, 'Pick a verdict first (1–4).');
+    page.key('1');
+    assert.equal(await saveAndFollow(page), itemPath);
+    const saved = loadKeyboardPage((await request('GET', itemPath, null, enCookie)).body, storages);
+    assert.equal(saved.els.status.textContent, 'Saved C1: Sponsor. Flagged by: run-kbd');
+    saved.key('Enter');
+    assert.equal(saved.els.status.textContent, 'No change: C1 is already Sponsor.');
 });
