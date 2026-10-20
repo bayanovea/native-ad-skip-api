@@ -204,17 +204,14 @@ module.exports = function createReviewRepository(models, sequelize) {
          */
         async takeBatch(batch, reviewer) {
             if (!(await this.isReviewer(reviewer))) throw new ReviewInputError(`unknown reviewer ${reviewer}`);
-            const row = await this.lockIfAvailable(batch, reviewer);
-            if (row) return row;
-            const progress = await this.getBatchProgress(batch, reviewer);
-            if (!progress) return null;
-            if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
-            if (progress.state === 'available') {
-                // The holder released it after the UPDATE: try once more.
-                const retry = await this.lockIfAvailable(batch, reviewer);
-                if (retry) return retry;
-            }
-            throw new ReviewConflictError(progress.state, progress.locked_by);
+            return this.withBatchLock(batch, async (transaction) => {
+                const row = await this.lockIfAvailable(batch, reviewer, { transaction });
+                if (row) return row;
+                const progress = await this.getBatchProgress(batch, reviewer, { transaction });
+                if (!progress) return null;
+                if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
+                throw new ReviewConflictError(progress.state, progress.locked_by);
+            });
         },
 
         /**
@@ -272,9 +269,11 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Lock `batch` on `reviewer` when it is available to them — one
-         * statement, so of two concurrent takes exactly one wins. Returns
+         * Lock `batch` on `reviewer` when it is available to them. Returns
          * `{ batch, locked_by, locked_at }`, or null when it did not lock.
+         * Call it with the batch row already locked (lockBatchRow): an UPDATE
+         * that waits on the row re-checks it but not the verdicts its subquery
+         * read, so it could lock a batch whose last review just committed.
          */
         async lockIfAvailable(batch, reviewer, { transaction } = {}) {
             const [row] = await sequelize.query(

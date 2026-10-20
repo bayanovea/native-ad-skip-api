@@ -4311,6 +4311,31 @@ test('review page: decide checks the lock under the batch row lock (a release in
     assert.equal((await videoFlags(c1.native_id)).length, flagsBefore, 'no flag row either');
 });
 
+test('review page: a take waiting on an import that completes a free batch sees its verdict (409 closed, no lock)', async () => {
+    const batch = 'e2e-review-take-after-final';
+    await seedKeyboardBatch(batch, 1, { holder: null });
+    const c1 = (await getReview(batch, { item: 'C1', format: 'json' })).body.item;
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        // REVIEWER's md verdict, lock and finish release, as the importer's transaction writes them.
+        await c.query('BEGIN');
+        await c.query('SELECT 1 FROM prv_review_batches WHERE batch = $1 FOR UPDATE', [batch]);
+        await c.query(`INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source) VALUES ($1, 'not_ad', $2, 'import')`, [c1.id, REVIEWER]);
+        await c.query('UPDATE prv_review_batches SET locked_by = $2, locked_at = CURRENT_TIMESTAMP WHERE batch = $1', [batch, REVIEWER]);
+        await c.query('UPDATE prv_review_batches SET locked_by = NULL, locked_at = NULL WHERE batch = $1', [batch]);
+        const pending = lockReview('take', batch, { reviewer: 'gkshi' });
+        await waitForQueryBlockedOnLock(`batch = '${batch}'`);
+        await c.query('COMMIT');
+        const res = await pending;
+        assert.equal(res.status, 409);
+        assert.deepEqual(res.body, { reason: 'closed', locked_by: null, message: RU.text('conflict_closed') });
+    } finally {
+        await c.end();
+    }
+    assert.deepEqual(await dbQuery('SELECT locked_by FROM prv_review_batches WHERE batch = $1', [batch]), [{ locked_by: null }]);
+});
+
 test('review page: create reviewer (form / JSON) → picker → batch list → item page → take → decide, a Cyrillic name with a space round-trips', async () => {
     const NAME = 'Анна Петрова-2';
     const batch = 'e2e-review-create-reviewer';
