@@ -136,6 +136,8 @@ module.exports = function(sequelize) {
     // db.js bootstrap() sets the same default on tables created before that.
     const ReviewItem = sequelize.define('review_item', {
         batch: { type: DataTypes.STRING(64), allowNull: false },
+        // Sheet the item came from (batch = its part); null on rows of an older image, read as COALESCE(sheet, batch).
+        sheet: { type: DataTypes.STRING(64), allowNull: true },
         item_code: { type: DataTypes.STRING(16), allowNull: false },
         position: { type: DataTypes.INTEGER, allowNull: false },
         native_id: { type: DataTypes.STRING(64), allowNull: false },

@@ -22,7 +22,7 @@ A batch is now locked on one assessor until they finish it, so a 104-item batch 
 
 ## Solution Overview
 
-- New column `prv_review_items.sheet` (sheet name, NOT NULL after backfill `sheet = batch`), unique `(sheet, item_code)`. `batch` = the part the item belongs to.
+- New column `prv_review_items.sheet` (sheet name), unique `(COALESCE(sheet, batch), item_code)`; `batch` = the part the item belongs to. Nullable, no backfill: a pre-branch image inserts items without `sheet`, so reads use `COALESCE(sheet, batch)`; the `(batch, item_code)` index stays for that image's `ON CONFLICT`, and the expression index makes its insert of a split sheet's code fail instead of duplicating it.
 - **Part sizes are balanced**: `n` items → `ceil(n / 30)` parts of near-equal size in `position` order (104 → 26/26/26/26, not 30/30/30/14). A sheet of ≤ 30 items keeps the plain name (no `-p1`), so small sheets look as before.
 - Every part gets its own `prv_review_batches` row with the sheet's `reviews_needed` / `excluded`.
 - **Re-import of a sheet** finds its items by `(sheet, item_code)` wherever they live; new items go to a new part (never into a part someone holds). md verdicts are written per part with the existing per-batch rules (excluded / held by another reviewer → refuse; lock-on-reviewer / release-if-finished per part).
@@ -38,10 +38,10 @@ Why a `sheet` column and not a name pattern (`<sheet>-pN` parsed back): a sheet 
 **Files:**
 - Modify: `prv/db/index.js`, `lib/schema.js`, `prv/repository/review.js`, `scripts/import-review-sheet.js`, `test/e2e.js`
 
-- [ ] `sheet` column + backfill + unique `(sheet, item_code)` in `lib/schema.js` (idempotent, rollback-safe: an older image ignores the column — check its INSERTs still work, `sheet` must then default to `batch` or be filled by a trigger-free rule; pick the simplest that keeps main's importer working)
-- [ ] repository: `itemsInSheet(sheet)`, `insertItems` writes `sheet`; part naming and balanced split as a small pure helper (unit-tested)
-- [ ] importer: `--max-items N` (default 30); sheet > N → parts; re-import matches by `(sheet, item_code)`; new items → a new part; md verdicts and locks per part
-- [ ] tests: unit for the split helper (sizes, names, ≤ N keeps the name); e2e import of a 70-item fixture → 3 parts of 24/23/23, re-import idempotent, md verdicts land in the right parts with per-part lock/release, refusal rules still per part
+- [x] `sheet` column + backfill + unique `(sheet, item_code)` in `lib/schema.js` (idempotent, rollback-safe: an older image ignores the column — check its INSERTs still work, `sheet` must then default to `batch` or be filled by a trigger-free rule; pick the simplest that keeps main's importer working)
+- [x] repository: `itemsInSheet(sheet)`, `insertItems` writes `sheet`; part naming and balanced split as a small pure helper (unit-tested)
+- [x] importer: `--max-items N` (default 30); sheet > N → parts; re-import matches by `(sheet, item_code)`; new items → a new part; md verdicts and locks per part
+- [x] tests: unit for the split helper (sizes, names, ≤ N keeps the name); e2e import of a 70-item fixture → 3 parts of 24/23/23, re-import idempotent, md verdicts land in the right parts with per-part lock/release, refusal rules still per part
 
 ### Task 2: Split script and export per sheet
 

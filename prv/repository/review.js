@@ -426,11 +426,11 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Insert sheet items into `batch`, keeping any item code already there
-         * (ON CONFLICT DO NOTHING). Returns the codes split into
-         * `{ inserted, present }`. Used by scripts/import-review-sheet.js.
+         * Insert items of `sheet` into its part `batch`, keeping any item code
+         * the sheet already has (ON CONFLICT DO NOTHING). Returns the codes split
+         * into `{ inserted, present }`. Used by scripts/import-review-sheet.js.
          */
-        async insertItems(batch, items, { transaction } = {}) {
+        async insertItems(sheet, batch, items, { transaction } = {}) {
             const inserted = [];
             const present = [];
             for (const it of items) {
@@ -439,12 +439,13 @@ module.exports = function createReviewRepository(models, sequelize) {
                     // the column default existed has none (NOT NULL fails
                     // before ON CONFLICT is considered).
                     `INSERT INTO prv_review_items
-                        (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
-                     VALUES (:batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, CURRENT_TIMESTAMP)
-                     ON CONFLICT (batch, item_code) DO NOTHING
+                        (sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
+                     VALUES (:sheet, :batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, CURRENT_TIMESTAMP)
+                     ON CONFLICT ((COALESCE(sheet, batch)), item_code) DO NOTHING
                      RETURNING id`,
                     {
                         replacements: {
+                            sheet,
                             batch,
                             item_code: it.item_code,
                             position: it.position,
@@ -466,18 +467,26 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Every item of `batch` as `{ id, item_code, native_id, start, end,
-         * proposed, has_verdict }` — raw rows for the importer's identity
-         * check, no blind rule (flagged_by is not selected).
+         * Every item of `sheet`, in whichever part, by position, as `{ id, batch,
+         * item_code, native_id, start, end, proposed, has_verdict }` — raw rows for
+         * the importer's identity check, no blind rule (flagged_by is not selected).
          */
-        itemsInBatch(batch, { transaction } = {}) {
+        itemsInSheet(sheet, { transaction } = {}) {
             return sequelize.query(
-                `SELECT i.id, i.item_code, i.native_id, i.start, i."end", i.proposed,
+                `SELECT i.id, i.batch, i.item_code, i.native_id, i.start, i."end", i.proposed,
                         ${IS_DECIDED} AS has_verdict
                    FROM prv_review_items i
-                  WHERE i.batch = :batch`,
-                { replacements: { batch }, type: QueryTypes.SELECT, transaction }
+                  WHERE COALESCE(i.sheet, i.batch) = :sheet
+                  ORDER BY i.position, i.id`,
+                { replacements: { sheet }, type: QueryTypes.SELECT, transaction }
             );
+        },
+
+        /** True when `batch` has items (of any sheet). */
+        async batchHasItems(batch, { transaction } = {}) {
+            const rows = await sequelize.query('SELECT 1 FROM prv_review_items WHERE batch = :batch LIMIT 1',
+                { replacements: { batch }, type: QueryTypes.SELECT, transaction });
+            return rows.length > 0;
         },
 
         /**

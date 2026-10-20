@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime, splitSheet } = require('../lib/review-sheet');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -222,4 +222,20 @@ test('parseSheet: only markdown headings and rule lines end an item', () => {
     assert.equal(items[0].comment, comment);
     // `####` is a heading, not an item header: it ends the item.
     assert.equal(parseSheet(block('C1', { verdict: 'Verdict: sponsor\nkept' }) + '#### Sub\nnot kept\n', KEY_C1).items[0].comment, 'kept');
+});
+
+test('splitSheet: balanced parts in position order, plain name within the limit, numbering from firstPart', () => {
+    const items = (n) => Array.from({ length: n }, (_, i) => ({ item_code: `C${n - i}`, position: n - i }));
+    const shape = (parts) => parts.map((p) => [p.batch, p.items.length]);
+
+    const seventy = splitSheet('s', items(70), 30);
+    assert.deepEqual(shape(seventy), [['s-p1', 24], ['s-p2', 23], ['s-p3', 23]]);
+    assert.deepEqual(seventy.flatMap((p) => p.items.map((it) => it.position)), Array.from({ length: 70 }, (_, i) => i + 1));
+    assert.deepEqual(shape(splitSheet('s', items(104), 30)), [['s-p1', 26], ['s-p2', 26], ['s-p3', 26], ['s-p4', 26]]);
+    assert.deepEqual(shape(splitSheet('s', items(31), 30)), [['s-p1', 16], ['s-p2', 15]]);
+    assert.deepEqual(shape(splitSheet('s', items(30), 30)), [['s', 30]]);
+    assert.deepEqual(shape(splitSheet('s', items(3), 2)), [['s-p1', 2], ['s-p2', 1]]);
+    assert.deepEqual(shape(splitSheet('s', items(5), 30, 4)), [['s-p4', 5]], 'a new part of an existing sheet is always numbered');
+    assert.deepEqual(shape(splitSheet('s', items(40), 30, 2)), [['s-p2', 20], ['s-p3', 20]]);
+    assert.deepEqual(splitSheet('s', [], 30), []);
 });

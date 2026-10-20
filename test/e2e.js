@@ -2868,6 +2868,7 @@ test('review import: --reviews and --exclude set the batch row; an existing batc
         [['--reviews', 'two'], /--reviews needs a positive integer/],
         [['--exclude', ' , '], /--exclude needs reviewer codes/],
         [['--exclude'], /--exclude needs a value/],
+        [['--max-items', '0'], /--max-items needs a positive integer/],
     ]) {
         const bad = runImport(copyReviewFixture(fresh), args);
         assert.equal(bad.status, 2, args.join(' '));
@@ -2901,6 +2902,162 @@ test('review import: md verdicts of an excluded --reviewer fail and write nothin
     assert.match(viaFlag.stderr, /excludes bayanovea/);
     assert.deepEqual(await dbQuery('SELECT batch FROM prv_review_batches WHERE batch = $1', [fresh]), [], 'no batch row');
     assert.deepEqual(await reviewState(fresh), { items: [], verdicts: [] });
+});
+
+// Generated sheet of `n` items C1…Cn (five per video), md verdicts from
+// `verdicts` ({ C3: 'sponsor' }); returns the md path. Same name and code → same stretch.
+function writeReviewSheet(name, n, verdicts = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-import-'));
+    reviewTmpDirs.push(dir);
+    const md = ['# Blind review sheet', ''];
+    const key = ['item\tnative_id\tstart\tend\tcategories\truns_flagging'];
+    for (let k = 1; k <= n; k++) {
+        const nid = `-1_${Math.ceil(k / 5)}`;
+        const start = 60 * k;
+        md.push(`### C${k}. ${nid} · 1:00 – 1:10 (10 s)`, '', 'Proposed as: sponsor', '',
+            `Link: https://example.invalid/video${nid}?t=${start}s`, '', '> cue', '', `Verdict: ${verdicts[`C${k}`] || ''}`, '');
+        key.push(`C${k}\t${nid}\t${start}.0\t${start + 10}.0\tsponsor\trun-a`);
+    }
+    const mdPath = path.join(dir, `${name}.md`);
+    fs.writeFileSync(mdPath, md.join('\n'));
+    fs.writeFileSync(path.join(dir, `${name}.key.tsv`), key.join('\n') + '\n');
+    return mdPath;
+}
+
+// [batch, items, first position, last position, reviews_needed, excluded, locked_by] per part of `sheet`.
+async function sheetParts(sheet) {
+    return (await dbQuery(
+        `SELECT i.batch, count(*)::int AS n, min(i.position) AS lo, max(i.position) AS hi,
+                b.reviews_needed, b.excluded, b.locked_by
+           FROM prv_review_items i JOIN prv_review_batches b USING (batch)
+          WHERE COALESCE(i.sheet, i.batch) = $1
+          GROUP BY i.batch, b.reviews_needed, b.excluded, b.locked_by ORDER BY i.batch`, [sheet]))
+        .map((r) => [r.batch, r.n, r.lo, r.hi, r.reviews_needed, r.excluded, r.locked_by]);
+}
+
+const firstVerdicts = (n, verdict = 'sponsor') => Object.fromEntries(Array.from({ length: n }, (_, i) => [`C${i + 1}`, verdict]));
+
+test('review import: a sheet over --max-items becomes balanced parts with per-part locks; re-import is idempotent; new items go to a new part', async () => {
+    const sheet = 'e2e-review-parts';
+    const r = runImport(writeReviewSheet(sheet, 70, firstVerdicts(30)), ['--reviews', '2']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, new RegExp(`sheet ${sheet}: batch ${sheet}-p1 \\(24 items\\), batch ${sheet}-p2 \\(23 items\\), batch ${sheet}-p3 \\(23 items\\)`));
+    assert.match(r.stdout, /items inserted: 70\n/);
+    assert.match(r.stdout, /verdicts imported: 30\n/);
+    assert.match(r.stdout, new RegExp(`batch ${sheet}-p2: locked on bayanovea: their verdicts leave the batch unfinished`));
+    assert.equal((r.stdout.match(/locked on/g) || []).length, 1, 'p1 is finished, p3 has no verdicts');
+    const split = [
+        [`${sheet}-p1`, 24, 1, 24, 2, [], null],
+        [`${sheet}-p2`, 23, 25, 47, 2, [], 'bayanovea'],
+        [`${sheet}-p3`, 23, 48, 70, 2, [], null],
+    ];
+    assert.deepEqual(await sheetParts(sheet), split);
+    assert.deepEqual(await dbQuery('SELECT DISTINCT sheet FROM prv_review_items WHERE batch LIKE $1', [`${sheet}-p%`]), [{ sheet }]);
+    await withReviewRepo(async (repo) => {
+        const states = [];
+        for (const [batch] of split) states.push((await repo.getBatchProgress(batch, 'bayanovea')).state);
+        assert.deepEqual(states, ['done', 'mine', 'available']);
+    });
+
+    const again = runImport(writeReviewSheet(sheet, 70, firstVerdicts(30)));
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /items inserted: 0\nitems already present: 70 /);
+    assert.match(again.stdout, /verdicts imported: 0\nverdicts skipped, item already has one: 30 /);
+    assert.doesNotMatch(again.stdout, /locked on|lock released/);
+    assert.deepEqual(await sheetParts(sheet), split);
+
+    const otherReviews = runImport(writeReviewSheet(sheet, 70), ['--reviews', '1']);
+    assert.equal(otherReviews.status, 1);
+    assert.match(otherReviews.stderr, new RegExp(`batch ${sheet}-p1 needs 2 review\\(s\\), not 1`));
+
+    // Five more items: a new part with the first part's settings; C40 lands in p2 (held by bayanovea), C72 in p4.
+    const grown = runImport(writeReviewSheet(sheet, 75, { ...firstVerdicts(30), C40: 'not an ad', C72: 'sponsor' }));
+    assert.equal(grown.status, 0, grown.stderr);
+    assert.match(grown.stdout, new RegExp(`batch ${sheet}-p4 \\(5 items\\)`));
+    assert.match(grown.stdout, /items inserted: 5\nitems already present: 70 /);
+    assert.match(grown.stdout, /verdicts imported: 2\n {2}C40 not_ad\n {2}C72 sponsor\n/);
+    assert.match(grown.stdout, new RegExp(`batch ${sheet}-p4: locked on bayanovea`));
+    assert.deepEqual(await sheetParts(sheet), [...split, [`${sheet}-p4`, 5, 71, 75, 2, [], 'bayanovea']]);
+    const c40 = await dbQuery(
+        `SELECT i.batch, v.verdict FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id
+          WHERE i.sheet = $1 AND i.item_code = 'C40'`, [sheet]);
+    assert.deepEqual(c40, [{ batch: `${sheet}-p2`, verdict: 'not_ad' }]);
+
+    // Finishing a part through the md releases that part only.
+    const finished = runImport(writeReviewSheet(sheet, 75, { ...firstVerdicts(47), C72: 'sponsor' }));
+    assert.equal(finished.status, 0, finished.stderr);
+    assert.match(finished.stdout, new RegExp(`batch ${sheet}-p2: lock released: bayanovea has finished the batch`));
+    assert.deepEqual((await sheetParts(sheet)).map((p) => p[6]), [null, null, null, 'bayanovea']);
+});
+
+test('review import: refusal rules hold per part (held by another reviewer, excluded)', async () => {
+    const sheet = 'e2e-review-parts-held';
+    assert.equal(runImport(writeReviewSheet(sheet, 40, { C1: 'sponsor' })).status, 0);
+    assert.deepEqual((await sheetParts(sheet)).map((p) => [p[0], p[1], p[6]]),
+        [[`${sheet}-p1`, 20, 'bayanovea'], [`${sheet}-p2`, 20, null]]);
+
+    const held = runImport(writeReviewSheet(sheet, 40, { C2: 'sponsor', C30: 'sponsor' }), ['--reviewer', 'gkshi']);
+    assert.equal(held.status, 1, held.stdout);
+    assert.match(held.stderr, new RegExp(`batch ${sheet}-p1 is locked by bayanovea: gkshi's md verdicts may not land there; nothing imported`));
+    assert.deepEqual(await dbQuery(
+        `SELECT v.reviewer FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id WHERE i.sheet = $1`, [sheet]),
+        [{ reviewer: 'bayanovea' }], 'nothing written, the free part included');
+
+    const free = runImport(writeReviewSheet(sheet, 40, { C30: 'sponsor' }), ['--reviewer', 'gkshi']);
+    assert.equal(free.status, 0, free.stderr);
+    assert.match(free.stdout, new RegExp(`batch ${sheet}-p2: locked on gkshi`));
+    assert.deepEqual((await sheetParts(sheet)).map((p) => p[6]), ['bayanovea', 'gkshi']);
+
+    const excl = 'e2e-review-parts-excluded';
+    assert.equal(runImport(writeReviewSheet(excl, 40), ['--exclude', 'gkshi']).status, 0);
+    assert.deepEqual((await sheetParts(excl)).map((p) => p[5]), [['gkshi'], ['gkshi']]);
+    const r = runImport(writeReviewSheet(excl, 40, { C35: 'sponsor' }), ['--reviewer', 'gkshi']);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, new RegExp(`batch ${excl}-p2 excludes gkshi: their md verdicts may not land there; nothing imported`));
+
+    // A part name that already holds another sheet's items is refused.
+    assert.equal(runImport(writeReviewSheet('e2e-review-parts-clash-p1', 3)).status, 0);
+    const clash = runImport(writeReviewSheet('e2e-review-parts-clash', 40));
+    assert.equal(clash.status, 1, clash.stdout);
+    assert.match(clash.stderr, /batch e2e-review-parts-clash-p1 already holds items of another sheet; nothing imported/);
+    assert.deepEqual(await sheetParts('e2e-review-parts-clash'), []);
+
+    const max = runImport(copyReviewFixture('e2e-review-parts-max'), ['--max-items', '2']);
+    assert.equal(max.status, 0, max.stderr);
+    assert.match(max.stdout, /sheet e2e-review-parts-max: batch e2e-review-parts-max-p1 \(2 items\), batch e2e-review-parts-max-p2 \(1 items\)/);
+});
+
+test('review import: rows of an older image (no sheet) are found by sheet, and its inserts never duplicate a sheet\'s codes', async () => {
+    // main's importer: no `sheet` column, ON CONFLICT on (batch, item_code).
+    const oldInsert = (batch, code, position, start) => dbQuery(
+        `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, link, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'sponsor', 'https://example.invalid/x', CURRENT_TIMESTAMP)
+         ON CONFLICT (batch, item_code) DO NOTHING RETURNING id`, [batch, code, position, ...start]);
+    const sheet = 'e2e-review-old-image';
+    const c2 = ['-1_456000901', 262.4, 269.2];
+    assert.equal((await oldInsert(sheet, 'C2', 2, c2)).length, 1);
+    assert.equal((await oldInsert(sheet, 'C2', 2, c2)).length, 0, 'its own ON CONFLICT still works');
+
+    const r = runImport(copyReviewFixture(sheet));
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /items inserted: 2\nitems already present: 1 \(C2\)/);
+    assert.match(r.stdout, /verdicts imported: 2\n/);
+    assert.deepEqual(await dbQuery(
+        'SELECT item_code, batch, sheet FROM prv_review_items WHERE COALESCE(sheet, batch) = $1 ORDER BY position', [sheet]), [
+        { item_code: 'C2', batch: sheet, sheet: null },
+        { item_code: 'C5', batch: `${sheet}-p2`, sheet },
+        { item_code: 'C7', batch: `${sheet}-p2`, sheet },
+    ], 'the new items go to a new part');
+
+    // An older image importing a split sheet under its plain name fails instead of duplicating C1.
+    const split = 'e2e-review-old-image-split';
+    assert.equal(runImport(writeReviewSheet(split, 40)).status, 0);
+    await assert.rejects(oldInsert(split, 'C1', 1, ['-1_1', 60, 70]), /prv_review_items_sheet_item_code/);
+
+    // Boot over rows without a sheet.
+    const sync = spawnSync('node', ['scripts/sync-db.js'], {
+        cwd: APP_DIR, env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) }, encoding: 'utf8' });
+    assert.equal(sync.status, 0, sync.stderr);
 });
 
 test('review import: works on review tables created without timestamp defaults; sync-db.js adds them', async () => {
