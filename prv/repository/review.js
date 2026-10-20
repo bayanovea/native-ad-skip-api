@@ -178,19 +178,6 @@ module.exports = function createReviewRepository(models, sequelize) {
         );
     }
 
-    // Lock `batch` on `reviewer` when it is available to them — one statement,
-    // so of two concurrent takes exactly one wins. The row, or undefined.
-    async function lockIfAvailable(batch, reviewer, transaction) {
-        const [row] = await sequelize.query(
-            `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
-               FROM (SELECT ${finishedOf(':batch')} AS finished) w
-              WHERE b.batch = :batch AND ${availableTo('b', 'w')}
-              RETURNING b.batch, b.locked_by, b.locked_at`,
-            { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
-        );
-        return row;
-    }
-
     const OPEN_IN_BATCH = `i.batch = :batch AND NOT ${DECIDED_BY_REVIEWER}`;
 
     return {
@@ -217,15 +204,17 @@ module.exports = function createReviewRepository(models, sequelize) {
          */
         async takeBatch(batch, reviewer) {
             if (!(await this.isReviewer(reviewer))) throw new ReviewInputError(`unknown reviewer ${reviewer}`);
-            for (let attempt = 0; ; attempt++) {
-                const row = await lockIfAvailable(batch, reviewer);
-                if (row) return row;
-                const progress = await this.getBatchProgress(batch, reviewer);
-                if (!progress) return null;
-                if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
-                // `available` here means the holder released it after the UPDATE: try once more.
-                if (progress.state !== 'available' || attempt > 0) throw new ReviewConflictError(progress.state, progress.locked_by);
+            const row = await this.lockIfAvailable(batch, reviewer);
+            if (row) return row;
+            const progress = await this.getBatchProgress(batch, reviewer);
+            if (!progress) return null;
+            if (progress.state === 'mine') return { batch, locked_by: reviewer, locked_at: progress.locked_at };
+            if (progress.state === 'available') {
+                // The holder released it after the UPDATE: try once more.
+                const retry = await this.lockIfAvailable(batch, reviewer);
+                if (retry) return retry;
             }
+            throw new ReviewConflictError(progress.state, progress.locked_by);
         },
 
         /**
@@ -277,12 +266,19 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Lock `batch` on `reviewer` when they have not finished it and may
-         * take it (the importer, after their md verdicts left it half done).
-         * Returns true when it locked.
+         * Lock `batch` on `reviewer` when it is available to them — one
+         * statement, so of two concurrent takes exactly one wins. Returns
+         * `{ batch, locked_by, locked_at }`, or null when it did not lock.
          */
-        async lockUnfinished(batch, reviewer, { transaction } = {}) {
-            return (await lockIfAvailable(batch, reviewer, transaction)) != null;
+        async lockIfAvailable(batch, reviewer, { transaction } = {}) {
+            const [row] = await sequelize.query(
+                `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
+                   FROM (SELECT ${finishedOf(':batch')} AS finished) w
+                  WHERE b.batch = :batch AND ${availableTo('b', 'w')}
+                  RETURNING b.batch, b.locked_by, b.locked_at`,
+                { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
+            );
+            return row || null;
         },
 
         /** Reviewer codes the page offers, alphabetical. */
@@ -321,31 +317,35 @@ module.exports = function createReviewRepository(models, sequelize) {
          * Register `batch` with how many reviewers must finish it and who may
          * never take it. An existing batch keeps its row; asking for other
          * values than the stored ones throws ReviewInputError, so an import
-         * never silently re-routes a batch (an option left undefined is not asked).
+         * never silently re-routes a batch (an option left null or out is not asked).
          */
         async createBatch(batch, { reviews_needed, excluded } = {}, { transaction } = {}) {
-            if (reviews_needed !== undefined && !(Number.isInteger(reviews_needed) && reviews_needed >= 1)) {
+            if (reviews_needed != null && !(Number.isInteger(reviews_needed) && reviews_needed >= 1)) {
                 throw new ReviewInputError('reviews_needed must be a positive integer');
             }
-            if (excluded !== undefined) {
+            if (excluded != null) {
                 if (!Array.isArray(excluded)) throw new ReviewInputError('excluded must be a list of reviewers');
                 for (const code of excluded) {
                     if (!(await this.isReviewer(code, { transaction }))) throw new ReviewInputError(`unknown reviewer ${code}`);
                 }
-                excluded = [...new Set(excluded)].sort();
             }
+            const codes = excluded == null ? null : [...new Set(excluded)].sort();
             const existing = await models.ReviewBatch.findByPk(batch, { transaction });
             if (existing) {
-                if (reviews_needed !== undefined && existing.reviews_needed !== reviews_needed) {
+                if (reviews_needed != null && existing.reviews_needed !== reviews_needed) {
                     throw new ReviewInputError(`batch ${batch} needs ${existing.reviews_needed} review(s), not ${reviews_needed}`);
                 }
                 const stored = [...existing.excluded].sort();
-                if (excluded !== undefined && stored.join(',') !== excluded.join(',')) {
-                    throw new ReviewInputError(`batch ${batch} excludes {${stored.join(',')}}, not {${excluded.join(',')}}`);
+                if (codes != null && stored.join(',') !== codes.join(',')) {
+                    throw new ReviewInputError(`batch ${batch} excludes {${stored.join(',')}}, not {${codes.join(',')}}`);
                 }
                 return existing;
             }
-            return models.ReviewBatch.create({ batch, reviews_needed: reviews_needed ?? 1, excluded: excluded ?? [] }, { transaction });
+            return models.ReviewBatch.create({
+                batch,
+                ...(reviews_needed != null && { reviews_needed }),
+                ...(codes != null && { excluded: codes }),
+            }, { transaction });
         },
 
         /**
@@ -610,5 +610,4 @@ module.exports.ReviewInputError = ReviewInputError;
 module.exports.ReviewConflictError = ReviewConflictError;
 module.exports.mayDecide = mayDecide;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
-module.exports.REVIEWER_MAX = REVIEWER_MAX;
 module.exports.VIDEO_FLAGS = VIDEO_FLAGS;

@@ -100,6 +100,19 @@ function sendConflict(req, res, err) {
     res.status(409).json({ reason: err.reason, locked_by: err.locked_by, message: t.text(`conflict_${err.reason}`, { name: err.locked_by }) });
 }
 
+// ReviewInputError → 400, ReviewConflictError → 409; true when it answered.
+function sendReviewError(req, res, err) {
+    if (err instanceof ReviewInputError) {
+        res.status(400).send(err.message);
+        return true;
+    }
+    if (err instanceof ReviewConflictError) {
+        sendConflict(req, res, err);
+        return true;
+    }
+    return false;
+}
+
 const LANG_COOKIE_MS = 365 * 24 * 3600 * 1000;
 
 // Translator for the request; an explicit `?lang=` is remembered in the cookie.
@@ -127,6 +140,11 @@ function presentItem(item) {
         duration_s: Math.round(item.end - item.start),
         player_link: safeLink(item.link),
     };
+}
+
+// `reviewer`'s latest verdict on a repository item (its history is newest first), or null.
+function ownVerdict(item, reviewer) {
+    return item.history.find(h => h.reviewer === reviewer) || null;
 }
 
 const STYLE = `
@@ -190,7 +208,7 @@ const STYLE = `
         .lock { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 0.95rem; border: 1px solid #334155; }
         .lock-available { border-color: #3b82f6; }
         .lock-locked, .lock-closed { border-color: #b45309; }
-        .lock-btn { background: #1d4ed8; border: none; color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
+        .lock-btn, .create-btn { background: #1d4ed8; border: none; color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
         .lock-mine .lock-btn, .lock-locked .lock-btn { background: #334155; color: #e2e8f0; }
         .lock .status { margin-top: 0; }
         button:disabled, textarea:disabled, input:disabled { opacity: 0.5; cursor: default; }
@@ -264,7 +282,7 @@ function renderReviewerPicker(reviewers, token, t, langLink, form = {}) {
         <label for="reviewer-name">${t('picker_create_label')}</label>
         <div class="row">
             <input type="text" id="reviewer-name" name="name" maxlength="${REVIEWER_MAX}" required value="${escapeHtml(form.value || '')}">
-            <button type="submit" class="lock-btn">${t('picker_create_button')}</button>
+            <button type="submit" class="create-btn">${t('picker_create_button')}</button>
         </div>
         <p class="muted">${t('picker_create_hint')}</p>
         ${form.error ? `<p class="status error">${form.error}</p>` : ''}
@@ -447,6 +465,7 @@ function renderItemPage(payload, token, t, langLink) {
         locked_by: batch.locked_by,
         track_mismatch: trackOn,
         choices: CHOICES,
+        track_key: TRACK_KEY,
         letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
@@ -521,7 +540,7 @@ function renderItemPage(payload, token, t, langLink) {
     let saving = false;
 
     function tr(key, params) {
-        return STATE.i18n[key].replace(/[{]([a-z_]+)[}]/g, function (m, name) {
+        return STATE.i18n[key].replace(/\\{(\\w+)\\}/g, function (m, name) {
             return params && params[name] != null ? String(params[name]) : m;
         });
     }
@@ -686,7 +705,7 @@ function renderItemPage(payload, token, t, langLink) {
         const digit = /^Digit([0-9])$/.exec(e.code || '');
         const n = digit ? Number(digit[1]) : Number(e.key);
         if (Number.isInteger(n) && n >= 1 && n <= STATE.choices.length) { e.preventDefault(); pick(STATE.choices[n - 1]); return; }
-        if (n === STATE.choices.length + 1) { e.preventDefault(); toggleTrack(); return; }
+        if (n === STATE.track_key) { e.preventDefault(); toggleTrack(); return; }
         if (e.key === 'Enter') {
             // Enter on a focused link (e.g. after clicking "Open in player") keeps following it.
             if (tag === 'A') return;
@@ -811,7 +830,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             if (!before) throw new ReviewInputError(`unknown review item ${body.item_id}`);
             const comment = body.comment == null ? null : body.comment;
             const text = typeof comment === 'string' ? comment.trim() : comment;
-            const own = before.history.find(h => h.reviewer === reviewer);
+            const own = ownVerdict(before, reviewer);
             const same = own && own.verdict === body.verdict
                 && (own.comment || null) === (text === '' ? null : text);
             await reviewRepository.withBatchLock(before.batch, async (transaction) => {
@@ -830,14 +849,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             });
             item = await reviewRepository.getItemById(body.item_id);
         } catch (err) {
-            if (err instanceof ReviewInputError) {
-                res.status(400).send(err.message);
-                return;
-            }
-            if (err instanceof ReviewConflictError) {
-                sendConflict(req, res, err);
-                return;
-            }
+            if (sendReviewError(req, res, err)) return;
             throw err;
         }
         // The verdict is the item's latest (another reviewer may have decided
@@ -874,8 +886,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
                 if (!lock) { res.status(404).send('Batch not found'); return; }
                 res.json(lock);
             } catch (err) {
-                if (err instanceof ReviewInputError) { res.status(400).send(err.message); return; }
-                if (err instanceof ReviewConflictError) { sendConflict(req, res, err); return; }
+                if (sendReviewError(req, res, err)) return;
                 throw err;
             }
         });
@@ -904,7 +915,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             : await reviewRepository.defaultItem(batchName, reviewer);
         if (!raw) { res.status(404).send('Item not found'); return; }
 
-        const item = { ...presentItem(raw), own_verdict: raw.history.find(h => h.reviewer === reviewer) || null };
+        const item = { ...presentItem(raw), own_verdict: ownVerdict(raw, reviewer) };
         const [{ prev, next }, firstOpen, signals, track] = await Promise.all([
             reviewRepository.neighbours(batchName, item.position, reviewer),
             reviewRepository.firstOpenItem(batchName, reviewer),

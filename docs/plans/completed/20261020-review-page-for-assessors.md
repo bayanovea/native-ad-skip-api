@@ -164,7 +164,7 @@ The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row 
 ### Task 7: Importer and export
 
 **Files:**
-- Modify: `scripts/import-review-sheet.js`, `scripts/export-review-verdicts.sh`, `scripts/export-review-verdicts.sql`, `prv/repository/review.js` (`lockUnfinished`), `test/e2e.js`, `test/review-export.test.js`
+- Modify: `scripts/import-review-sheet.js`, `scripts/export-review-verdicts.sh`, `scripts/export-review-verdicts.sql`, `prv/repository/review.js` (`lockIfAvailable`), `test/e2e.js`, `test/review-export.test.js`
 
 - [x] importer: `--reviews`, `--exclude`, `--assignee` → error with hint; lock on `--reviewer` when md verdicts leave the batch unfinished
 - [x] export: optional reviewer argument and file name

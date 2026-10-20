@@ -35,7 +35,7 @@ function usage(msg) {
 }
 
 function parseArgs(argv) {
-    const opts = { batch: null, reviewer: 'bayanovea', reviews: undefined, exclude: undefined };
+    const opts = { batch: null, reviewer: 'bayanovea', reviews: null, exclude: null };
     let mdPath = null;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -132,7 +132,7 @@ async function importItems(sequelize, review, batch, items, { reviewer, reviews,
         }
         // Only after new verdicts: a re-run must not re-lock a batch the reviewer gave up.
         if (summary.imported.length) {
-            summary.locked = await review.lockUnfinished(batch, reviewer, { transaction });
+            summary.locked = (await review.lockIfAvailable(batch, reviewer, { transaction })) != null;
             summary.released = await review.releaseIfFinished(batch, reviewer, { transaction });
         }
     });
