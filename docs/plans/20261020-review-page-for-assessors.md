@@ -170,10 +170,10 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 **Files:**
 - Modify: `scripts/import-review-sheet.js`, `scripts/export-review-verdicts.sh`, `scripts/export-review-verdicts.sql`, `test/e2e.js`, `test/review-export.test.js`
 
-- [ ] importer: `--reviews`, `--exclude`, `--assignee` → error with hint; lock on `--reviewer` when md verdicts leave the batch unfinished
-- [ ] export: optional reviewer argument and file name
-- [ ] e2e / export tests for both
-- [ ] `make test-unit` and `make test-e2e` pass
+- [x] importer: `--reviews`, `--exclude`, `--assignee` → error with hint; lock on `--reviewer` when md verdicts leave the batch unfinished
+- [x] export: optional reviewer argument and file name
+- [x] e2e / export tests for both
+- [x] `make test-unit` and `make test-e2e` pass
 
 ### Task 8: Verify acceptance criteria
 

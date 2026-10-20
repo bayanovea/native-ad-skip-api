@@ -9,7 +9,13 @@
 //
 // Usage: DB_NAME=skipper DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=… \
 //        node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--reviewer CODE]
+//        [--reviews N] [--exclude CODE[,CODE]]
 // --reviewer: who the md verdicts belong to (default bayanovea, the owner's sheets).
+//   When the imported verdicts leave the batch unfinished for them, it is locked on them;
+//   when they finish it, their lock is released.
+// --reviews: how many reviewers must finish the batch (default 1).
+// --exclude: reviewers who may never take it (they reviewed the same items in another batch).
+// For an existing batch, --reviews / --exclude must match the stored values.
 // The key file is <sheet>.key.tsv next to the md. Tables must exist
 // (sequelize.sync(): app boot or scripts/sync-db.js).
 
@@ -22,22 +28,31 @@ const createReviewRepository = require('../prv/repository/review');
 
 function usage(msg) {
     if (msg) console.error(msg);
-    console.error('usage: node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--reviewer CODE]');
+    console.error('usage: node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--reviewer CODE]'
+        + ' [--reviews N] [--exclude CODE[,CODE]]');
     process.exit(2);
 }
 
 function parseArgs(argv) {
-    const opts = { batch: null, reviewer: 'bayanovea' };
+    const opts = { batch: null, reviewer: 'bayanovea', reviews: undefined, exclude: undefined };
     let mdPath = null;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        const m = /^--(batch|reviewer)(?:=(.*))?$/.exec(a);
+        const m = /^--(batch|reviewer|reviews|exclude)(?:=(.*))?$/.exec(a);
         if (/^--assignee(=|$)/.test(a)) {
             usage('--assignee is gone: batches are first come, the reviewer takes one on the page');
         } else if (m) {
             const value = m[2] != null ? m[2] : argv[++i];
             if (!value) usage(`--${m[1]} needs a value`);
-            opts[m[1]] = value;
+            if (m[1] === 'reviews') {
+                if (!/^[1-9]\d*$/.test(value)) usage('--reviews needs a positive integer');
+                opts.reviews = Number(value);
+            } else if (m[1] === 'exclude') {
+                opts.exclude = value.split(',').map((c) => c.trim()).filter(Boolean);
+                if (opts.exclude.length === 0) usage('--exclude needs reviewer codes');
+            } else {
+                opts[m[1]] = value;
+            }
         } else if (a.startsWith('-')) {
             usage(`unknown option ${a}`);
         } else if (!mdPath) {
@@ -71,10 +86,10 @@ function backupMd(mdPath) {
     }
 }
 
-async function importItems(sequelize, review, batch, items, { reviewer }) {
-    const summary = { inserted: [], present: [], imported: [], skipped: [] };
+async function importItems(sequelize, review, batch, items, { reviewer, reviews, exclude }) {
+    const summary = { inserted: [], present: [], imported: [], skipped: [], locked: false, released: false };
     await sequelize.transaction(async (transaction) => {
-        await review.createBatch(batch, {}, { transaction });
+        await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude }, { transaction });
         const { inserted, present } = await review.insertItems(batch, items, { transaction });
         summary.inserted = inserted;
         summary.present = present;
@@ -111,11 +126,16 @@ async function importItems(sequelize, review, batch, items, { reviewer }) {
             });
             summary.imported.push(it);
         }
+        // Only after new verdicts: a re-run must not re-lock a batch the reviewer gave up.
+        if (summary.imported.length) {
+            summary.locked = await review.lockUnfinished(batch, reviewer, { transaction });
+            summary.released = await review.releaseIfFinished(batch, reviewer, { transaction });
+        }
     });
     return summary;
 }
 
-function printSummary(batch, summary) {
+function printSummary(batch, summary, reviewer) {
     const list = (codes) => (codes.length ? ` (${codes.join(', ')})` : '');
     console.log(`batch ${batch}`);
     console.log(`items inserted: ${summary.inserted.length}`);
@@ -125,10 +145,12 @@ function printSummary(batch, summary) {
         console.log(`  ${it.item_code} ${it.verdict}${it.comment ? ' (with comment)' : ''}`);
     }
     console.log(`verdicts skipped, item already has one: ${summary.skipped.length}${list(summary.skipped)}`);
+    if (summary.locked) console.log(`locked on ${reviewer}: their verdicts leave the batch unfinished`);
+    if (summary.released) console.log(`lock released: ${reviewer} has finished the batch`);
 }
 
 async function main() {
-    const { mdPath, batch, reviewer } = parseArgs(process.argv.slice(2));
+    const { mdPath, batch, reviewer, reviews, exclude } = parseArgs(process.argv.slice(2));
 
     // Backup before anything else; the md is never written to.
     const backup = backupMd(mdPath);
@@ -145,8 +167,8 @@ async function main() {
         // All review-table SQL lives in the repository; verdicts go through the
         // same write entrypoint as the review page.
         const review = createReviewRepository(definePrvModels(sequelize), sequelize);
-        const summary = await importItems(sequelize, review, batch, items, { reviewer });
-        printSummary(batch, summary);
+        const summary = await importItems(sequelize, review, batch, items, { reviewer, reviews, exclude });
+        printSummary(batch, summary, reviewer);
     } finally {
         await sequelize.close();
     }

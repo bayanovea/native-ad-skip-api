@@ -5,7 +5,7 @@
  *
  * The export is plain SQL run by psql (scripts/export-review-verdicts.sh). The mapping
  * tests run the same file through the Sequelize connection: the psql meta-command lines
- * (`\…`) are dropped and :'batch' is bound as $1, and the output lines are joined with
+ * (`\…`) are dropped, :'batch' is bound as $1 and :'reviewer' as $2, and the output lines are joined with
  * "\n" plus a trailing newline, as psql writes them in unaligned tuples-only mode. The
  * last test runs the real .sh through psql (installed in the e2e image only, see
  * docker-compose.e2e.yml) and checks it writes exactly that text.
@@ -40,21 +40,22 @@ function adminClient(dbName = 'postgres') {
     return new Client({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: dbName });
 }
 
-// The .sql file as one plain statement: psql meta-commands dropped, :'batch' → $1.
+// The .sql file as one plain statement: psql meta-commands dropped, :'batch' → $1, :'reviewer' → $2.
 function exportQuery() {
     const sql = fs.readFileSync(SQL_FILE, 'utf8')
         .split('\n')
         .filter((l) => !l.trimStart().startsWith('\\'))
         .join('\n')
         .replace(/:'batch'/g, '$1')
+        .replace(/:'reviewer'/g, '$2')
         .trim()
         .replace(/;$/, '');
     assert.ok(!sql.includes(':\''), 'unhandled psql variable in export SQL');
     return sql;
 }
 
-async function exportTsv(batch) {
-    const [rows] = await sequelize.query(exportQuery(), { bind: [batch] });
+async function exportTsv(batch, reviewer = '') {
+    const [rows] = await sequelize.query(exportQuery(), { bind: [batch, reviewer] });
     return rows.map((r) => r.line).join('\n') + '\n';
 }
 
@@ -71,11 +72,11 @@ async function addItem(batch, code, position, nativeId, start, end, proposed) {
     return row.id;
 }
 
-async function addVerdict(itemId, verdict, comment, decidedAt) {
+async function addVerdict(itemId, verdict, comment, decidedAt, reviewer = 'owner') {
     await q(
         `INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, decided_at)
-         VALUES ($1, $2, $3, 'owner', 'page', $4)`,
-        [itemId, verdict, comment, decidedAt]);
+         VALUES ($1, $2, $3, $4, 'page', $5)`,
+        [itemId, verdict, comment, reviewer, decidedAt]);
 }
 
 before(async () => {
@@ -155,17 +156,36 @@ test('review export: same decided_at → the higher id wins', async () => {
         + 'prv\t-8_8\tsponsor\t10.0\t20.0\tmodel_wrong\tC1\tsecond\n');
 });
 
-test('review export: the .sh wrapper writes the same TSV through psql, refuses an unknown batch', async () => {
+test('review export: a reviewer narrows to their latest verdict per item, the others stay out', async () => {
+    const b = 'export-reviewer';
+    const c1 = await addItem(b, 'C1', 1, '-11_11', 10, 20, 'sponsor');
+    const c2 = await addItem(b, 'C2', 2, '-12_12', 30, 40, 'sponsor');
+    await addVerdict(c1, 'sponsor', 'mine, earlier', '2026-10-15T10:00:00Z', 'Анна');
+    await addVerdict(c1, 'not_ad', 'mine, later', '2026-10-15T11:00:00Z', 'Анна');
+    await addVerdict(c1, 'unclear', 'owner, latest', '2026-10-15T12:00:00Z');
+    await addVerdict(c2, 'sponsor', 'owner only', '2026-10-15T10:00:00Z');
+
+    const header = 'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n';
+    assert.equal(await exportTsv(b, 'Анна'), header + 'prv\t-11_11\tsponsor\t10.0\t20.0\tmodel_wrong\tC1\tmine, later\n');
+    assert.equal(await exportTsv(b), header
+        + 'prv\t-11_11\tsponsor\t10.0\t20.0\tdefinition_unclear\tC1\towner, latest\n'
+        + 'prv\t-12_12\tsponsor\t30.0\t40.0\tgold_missing\tC2\towner only\n');
+    assert.equal(await exportTsv(b, 'nobody'), header);
+});
+
+test('review export: the .sh wrapper writes the same TSV through psql, a reviewer file, refuses an unknown batch or reviewer', async () => {
     const b = 'export-sh';
     const c1 = await addItem(b, 'C1', 1, '-9_9', 30, 45.5, 'self_promotion');
     await addItem(b, 'C2', 2, '-9_9', 60, 70, 'sponsor');                    // open
     await addVerdict(c1, 'unclear', 'line one\nline two', '2026-10-15T10:00:00Z');
+    await addVerdict(c1, 'sponsor', null, '2026-10-15T09:00:00Z', 'gkshi');
+    await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi')");
 
     // Data root without a review/ dir: the script creates it. A space in the
     // path checks that psql's `\o :out` keeps the value as one argument.
     const data = fs.mkdtempSync(path.join(os.tmpdir(), 'review export '));
     try {
-        const run = (batch) => spawnSync('sh', [SH_FILE, batch], {
+        const run = (...args) => spawnSync('sh', [SH_FILE, ...args], {
             encoding: 'utf8',
             env: {
                 ...process.env, ADSKIP_DATA: data,
@@ -179,12 +199,25 @@ test('review export: the .sh wrapper writes the same TSV through psql, refuses a
         assert.equal(r.stdout.trim(), `wrote ${out}: 1 verdicts of 2 items`);
         assert.equal(fs.readFileSync(out, 'utf8'), await exportTsv(b));
         assert.match(fs.readFileSync(out, 'utf8'), /\tC1\tline one line two\n$/);
-        assert.deepEqual(fs.readdirSync(path.join(data, 'review')), [`${b}.verdicts.tsv`], 'no temp file left');
+
+        const r2 = run(b, 'owner');
+        assert.equal(r2.status, 1, 'owner is not a registered reviewer');
+        assert.match(r2.stderr, /unknown reviewer owner/);
+
+        const mine = path.join(data, 'review', `${b}.gkshi.verdicts.tsv`);
+        const r3 = run(b, 'gkshi');
+        assert.equal(r3.status, 0, r3.stderr);
+        assert.equal(r3.stdout.trim(), `wrote ${mine}: 1 verdicts of 2 items`);
+        assert.equal(fs.readFileSync(mine, 'utf8'), await exportTsv(b, 'gkshi'));
+        assert.match(fs.readFileSync(mine, 'utf8'), /\tgold_missing\tC1\t\n$/);
+        const files = () => fs.readdirSync(path.join(data, 'review')).sort();
+        assert.deepEqual(files(), [`${b}.gkshi.verdicts.tsv`, `${b}.verdicts.tsv`], 'no temp file left');
 
         const bad = run('export-no-such-batch');
         assert.equal(bad.status, 1);
         assert.match(bad.stderr, /unknown batch export-no-such-batch/);
-        assert.deepEqual(fs.readdirSync(path.join(data, 'review')), [`${b}.verdicts.tsv`], 'nothing written');
+        assert.equal(run('a', 'b', 'c').status, 2);
+        assert.deepEqual(files(), [`${b}.gkshi.verdicts.tsv`, `${b}.verdicts.tsv`], 'nothing written');
     } finally {
         fs.rmSync(data, { recursive: true, force: true });
     }

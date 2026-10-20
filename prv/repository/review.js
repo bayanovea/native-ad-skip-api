@@ -265,6 +265,22 @@ module.exports = function createReviewRepository(models, sequelize) {
             return rows.length > 0;
         },
 
+        /**
+         * Lock `batch` on `reviewer` when they have worked on it, have not
+         * finished it and may take it (the importer, after md verdicts left
+         * it half done). Returns true when it locked.
+         */
+        async lockUnfinished(batch, reviewer, { transaction } = {}) {
+            const rows = await sequelize.query(
+                `UPDATE prv_review_batches b SET locked_by = :reviewer, locked_at = CURRENT_TIMESTAMP
+                   FROM (SELECT ${workersOf(':batch')} AS workers, ${finishedOf(':batch')} AS finished) w
+                  WHERE b.batch = :batch AND :reviewer = ANY(w.workers) AND ${availableTo('b', 'w')}
+                  RETURNING b.batch`,
+                { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
+            );
+            return rows.length > 0;
+        },
+
         /** Reviewer codes the page offers, alphabetical. */
         async listReviewers() {
             const rows = await sequelize.query(

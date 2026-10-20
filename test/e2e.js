@@ -2617,6 +2617,18 @@ function batchRow(batch, { decided, finished = [], locked_by = null, state = 'av
     return { batch, total: 3, decided, open: 3 - decided, reviews_needed, finished, locked_by, locked_at: null, state };
 }
 
+// The importer locks a half-done batch on the md reviewer; tests that start
+// from a free batch let them give it up.
+async function giveUp(...batches) {
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        await c.query('UPDATE prv_review_batches SET locked_by = NULL, locked_at = NULL WHERE batch = ANY($1)', [batches]);
+    } finally {
+        await c.end();
+    }
+}
+
 // Raw-SQL items need their batch row, as the importer writes it.
 function insertBatchRow(c, batch) {
     return c.query('INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING', [batch]);
@@ -2777,6 +2789,87 @@ test('review import: re-import with a different stretch under an existing code f
     const st = await reviewState(batch);
     assert.equal(st.items.find(i => i.item_code === 'C7').start, 62.2, 'existing item untouched');
     assert.deepEqual(st.verdicts.map(v => v.item_code), ['C2', 'C5'], 'no verdict for the changed item');
+});
+
+test('review import: md verdicts lock the unfinished batch on --reviewer, finishing releases it, a re-run does not re-lock', async () => {
+    const batch = 'e2e-review-import-lock';
+    const md = copyReviewFixture(batch);
+    const r = runImport(md);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /locked on bayanovea: their verdicts leave the batch unfinished/);
+    await withReviewRepo(async (repo) => {
+        assert.deepEqual({ ...(await repo.getBatchProgress(batch, 'bayanovea')), locked_at: null },
+            batchRow(batch, { decided: 2, locked_by: 'bayanovea', state: 'mine' }));
+        await repo.releaseBatch(batch, 'bayanovea');
+    });
+
+    const rerun = runImport(md);
+    assert.equal(rerun.status, 0, rerun.stderr);
+    assert.doesNotMatch(rerun.stdout, /locked on/);
+    await withReviewRepo(async (repo) => assert.equal((await repo.getBatchProgress(batch, 'bayanovea')).locked_by, null));
+
+    await withReviewRepo((repo) => repo.takeBatch(batch, 'bayanovea'));
+    setVerdictLine(md, 'C7', 'sponsor');
+    const done = runImport(md);
+    assert.equal(done.status, 0, done.stderr);
+    assert.match(done.stdout, /lock released: bayanovea has finished the batch/);
+    await withReviewRepo(async (repo) => assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'),
+        batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' })));
+
+    // Someone else's lock is never taken over: gkshi's md verdicts land, the lock stays.
+    const held = 'e2e-review-import-lock-held';
+    assert.equal(runImport(copyReviewFixture(held), ['--reviews', '2']).status, 0);
+    const theirsMd = copyReviewFixture(held);
+    setVerdictLine(theirsMd, 'C7', 'sponsor');
+    const theirs = runImport(theirsMd, ['--reviewer', 'gkshi']);
+    assert.equal(theirs.status, 0, theirs.stderr);
+    assert.match(theirs.stdout, /verdicts imported: 1\n {2}C7 sponsor/);
+    assert.doesNotMatch(theirs.stdout, /locked on/);
+    await withReviewRepo(async (repo) => assert.equal((await repo.getBatchProgress(held, 'gkshi')).locked_by, 'bayanovea'));
+});
+
+test('review import: --reviews and --exclude set the batch row; an existing batch must match; bad values fail', async () => {
+    const batch = 'e2e-review-import-routing';
+    const md = copyReviewFixture(batch);
+    const r = runImport(md, ['--reviews', '2', '--exclude', 'gkshi']);
+    assert.equal(r.status, 0, r.stderr);
+    const row = async (b) => {
+        const c = adminClient(TEST_DB);
+        await c.connect();
+        try {
+            return (await c.query('SELECT reviews_needed, excluded FROM prv_review_batches WHERE batch = $1', [b])).rows[0];
+        } finally {
+            await c.end();
+        }
+    };
+    assert.deepEqual(await row(batch), { reviews_needed: 2, excluded: ['gkshi'] });
+
+    assert.equal(runImport(md).status, 0, 'options left out are not compared');
+    assert.equal(runImport(md, ['--reviews=2', '--exclude=gkshi']).status, 0, 'same values pass');
+    const other = runImport(md, ['--reviews', '1']);
+    assert.equal(other.status, 1);
+    assert.match(other.stderr, /batch e2e-review-import-routing needs 2 review\(s\), not 1/);
+    const otherExcl = runImport(md, ['--exclude', 'gkshi,bayanovea']);
+    assert.equal(otherExcl.status, 1);
+    assert.match(otherExcl.stderr, /excludes \{gkshi\}, not \{bayanovea,gkshi\}/);
+    assert.deepEqual(await row(batch), { reviews_needed: 2, excluded: ['gkshi'] });
+
+    const fresh = 'e2e-review-import-routing-bad';
+    for (const [args, re] of [
+        [['--reviews', '0'], /--reviews needs a positive integer/],
+        [['--reviews', 'two'], /--reviews needs a positive integer/],
+        [['--exclude', ' , '], /--exclude needs reviewer codes/],
+        [['--exclude'], /--exclude needs a value/],
+    ]) {
+        const bad = runImport(copyReviewFixture(fresh), args);
+        assert.equal(bad.status, 2, args.join(' '));
+        assert.match(bad.stderr, re);
+    }
+    const unknown = runImport(copyReviewFixture(fresh), ['--exclude', 'e2e-nobody']);
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /unknown reviewer e2e-nobody/);
+    assert.equal(await row(fresh), undefined, 'nothing written');
+    assert.equal((await reviewState(fresh)).items.length, 0);
 });
 
 test('review import: works on review tables created without timestamp defaults; sync-db.js adds them', async () => {
@@ -3022,6 +3115,7 @@ test('review repository: getSignals collects live markups, segments + votes, und
 test('review repository: latest verdict wins, history kept, blind until decided, navigation helpers', async () => {
     const batch = 'e2e-review-repo';
     assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C2 sponsor, C5 not_ad, C7 open
+    await giveUp(batch);
 
     await withReviewRepo(async (repo, sequelize) => {
         const open = await repo.getItem(batch, 'C7');
@@ -3116,6 +3210,7 @@ test('review repository: take / give up / finish, availability per reviewer, one
     try {
         for (const b of [one, two]) assert.equal(runImport(copyReviewFixture(b)).status, 0);   // bayanovea: C2, C5; C7 open
         assert.equal(runImport(copyReviewFixture(excl), ['--reviewer', 'gkshi']).status, 0);
+        await giveUp(one, two, excl);
 
         await withReviewRepo(async (repo) => {
             const state = async (batch, who) => (await repo.getBatchProgress(batch, who)).state;
@@ -3275,6 +3370,7 @@ test('review page: 401 without or with a wrong token', async () => {
 test('review page: default item is the first open one, blind until decided, decide → flagged_by + progress', async () => {
     const batch = 'e2e-review-page';
     assert.equal(runImport(copyReviewFixture(batch)).status, 0);   // C2 sponsor, C5 not_ad, C7 open
+    await giveUp(batch);
 
     // Batch list carries the progress.
     const list = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
@@ -3357,6 +3453,7 @@ test('review page: decide validation → 400 and no row written', async () => {
     const batch = 'e2e-review-page-bad';
     await withReviewRepo((repo) => repo.createBatch(batch, { reviews_needed: 2 }));
     assert.equal(runImport(copyReviewFixture(batch)).status, 0);
+    await giveUp(batch);
     const c7 = (await getReview(batch, { item: 'C7', format: 'json' })).body.item;
     const before = await countReviewVerdicts(batch);
 
@@ -3938,6 +4035,7 @@ test('review page: batch list shows the reviewer\'s state per batch; closed batc
         const r = runImport(copyReviewFixture(b), ['--reviewer', 'gkshi']);
         assert.equal(r.status, 0, r.stderr);
     }
+    await giveUp(mine, theirs, anyone, excluded);
     assert.deepEqual((await reviewState(theirs)).verdicts.map(v => v.reviewer), ['gkshi', 'gkshi'], '--reviewer names the md verdicts');
     const gone = runImport(copyReviewFixture(anyone), ['--batch', anyone, '--assignee', 'gkshi']);
     assert.equal(gone.status, 2);

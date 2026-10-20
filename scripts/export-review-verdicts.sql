@@ -2,14 +2,16 @@
 -- (ad-skip-segment-eval, internal/score/review.go).
 -- Columns: provider, native_id, category, start, end, verdict, item, note.
 -- One row per decided item (latest verdict wins), ordered by position; open items are skipped.
+-- A non-empty :reviewer narrows to that reviewer's verdicts (their latest per item).
 --
 --   sponsor / self_promotion -> gold_missing,       category = the verdict
 --   not_ad                   -> model_wrong,        category = first proposed category
 --   unclear                  -> definition_unclear, category = first proposed category
 --
 -- Usage (see scripts/export-review-verdicts.sh):
---   psql ... -v batch=2026-10-14-clean -v out=/abs/path/2026-10-14-clean.verdicts.tsv -f scripts/export-review-verdicts.sql
--- test/review-export.test.js runs the same query without the psql lines (`\…`), binding :'batch' as $1.
+--   psql ... -v batch=2026-10-14-clean -v reviewer= -v out=/abs/path/2026-10-14-clean.verdicts.tsv -f scripts/export-review-verdicts.sql
+-- test/review-export.test.js runs the same query without the psql lines (`\…`), binding :'batch' as $1
+-- and :'reviewer' as $2.
 \set ON_ERROR_STOP on
 \pset format unaligned
 \pset tuples_only on
@@ -38,6 +40,7 @@ FROM (
   JOIN (
     SELECT DISTINCT ON (item_id) item_id, verdict, comment
     FROM prv_review_verdicts
+    WHERE :'reviewer' = '' OR reviewer = :'reviewer'
     ORDER BY item_id, decided_at DESC, id DESC
   ) v ON v.item_id = i.id
   WHERE i.batch = :'batch'
