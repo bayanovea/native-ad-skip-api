@@ -65,6 +65,11 @@ const availableTo = (b, w) => `(${b}.locked_by IS NULL
     AND NOT (:reviewer = ANY(${w}.finished))
     AND (:reviewer = ANY(${w}.workers) OR cardinality(${w}.finished) < ${b}.reviews_needed))`;
 
+// Batch states in which the reviewer may record verdicts (see canDecide).
+function mayDecide(state) {
+    return state === 'mine' || state === 'done';
+}
+
 // Excluded reviewers see `closed` even while someone holds the batch: it can never be theirs.
 const STATE = `CASE
     WHEN s.locked_by = :reviewer THEN 'mine'
@@ -135,10 +140,10 @@ module.exports = function createReviewRepository(models, sequelize) {
     }
 
     // Navigation reference `{ item_code, decided, link }` or null — one light
-    // query, no verdict history.
+    // query, no verdict history. `decided` is by `:reviewer`.
     async function selectNav(whereSql, orderSql, replacements) {
         const [row] = await sequelize.query(
-            `SELECT i.item_code, ${IS_DECIDED} AS decided, i.link
+            `SELECT i.item_code, ${DECIDED_BY_REVIEWER} AS decided, i.link
                FROM prv_review_items i
               WHERE ${whereSql}
               ORDER BY ${orderSql}
@@ -176,7 +181,7 @@ module.exports = function createReviewRepository(models, sequelize) {
         );
     }
 
-    const OPEN_IN_BATCH = `i.batch = :batch AND NOT ${IS_DECIDED}`;
+    const OPEN_IN_BATCH = `i.batch = :batch AND NOT ${DECIDED_BY_REVIEWER}`;
 
     return {
         /**
@@ -243,7 +248,7 @@ module.exports = function createReviewRepository(models, sequelize) {
         /** True when `reviewer` may record verdicts in `batch`: they hold it or have finished it. */
         async canDecide(batch, reviewer, { transaction } = {}) {
             const progress = await this.getBatchProgress(batch, reviewer, { transaction });
-            return progress != null && (progress.state === 'mine' || progress.state === 'done');
+            return progress != null && mayDecide(progress.state);
         },
 
         /**
@@ -341,35 +346,38 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Item shown when the page has no `?item=`: the first open one, or the
-         * last item by position when the whole batch is decided. Null only for
-         * an unknown/empty batch.
+         * Item shown when the page has no `?item=`: the first one `reviewer`
+         * has not decided, or the last item by position when they have
+         * decided them all. Null only for an unknown/empty batch.
          */
-        async defaultItem(batch) {
-            return (await selectOne(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch }))
+        async defaultItem(batch, reviewer) {
+            return (await selectOne(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch, reviewer }))
                 || selectOne('i.batch = :batch', 'i.position DESC, i.id DESC', { batch });
         },
 
-        /** First undecided item by position as `{ item_code, decided, link }`, or null. */
-        firstOpenItem(batch) {
-            return selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
+        /**
+         * Navigation helpers below return `{ item_code, decided, link }` refs;
+         * "open" and `decided` are by `reviewer`, so a second reviewer starts at
+         * the first item. First open item by position, or null.
+         */
+        firstOpenItem(batch, reviewer) {
+            return selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch, reviewer });
         },
 
         /**
-         * Next open item after `position` (wrapping round to the first open
-         * one) as `{ item_code, decided, link }`, or null when nothing is open.
-         * Used for "save → next open".
+         * Next open item after `position`, wrapping round to the first open
+         * one, or null when nothing is open. Used for "save → next open".
          */
-        async nextOpenItem(batch, position) {
-            return (await selectNav(`${OPEN_IN_BATCH} AND i.position > :position`, 'i.position ASC, i.id ASC', { batch, position }))
-                || selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch });
+        async nextOpenItem(batch, position, reviewer) {
+            return (await selectNav(`${OPEN_IN_BATCH} AND i.position > :position`, 'i.position ASC, i.id ASC', { batch, position, reviewer }))
+                || selectNav(OPEN_IN_BATCH, 'i.position ASC, i.id ASC', { batch, reviewer });
         },
 
-        /** `{ prev, next }` by position as `{ item_code, decided, link }` (null at either end). */
-        async neighbours(batch, position) {
+        /** `{ prev, next }` by position (null at either end). */
+        async neighbours(batch, position, reviewer) {
             const [prev, next] = await Promise.all([
-                selectNav('i.batch = :batch AND i.position < :position', 'i.position DESC, i.id DESC', { batch, position }),
-                selectNav('i.batch = :batch AND i.position > :position', 'i.position ASC, i.id ASC', { batch, position }),
+                selectNav('i.batch = :batch AND i.position < :position', 'i.position DESC, i.id DESC', { batch, position, reviewer }),
+                selectNav('i.batch = :batch AND i.position > :position', 'i.position ASC, i.id ASC', { batch, position, reviewer }),
             ]);
             return { prev, next };
         },
@@ -562,6 +570,7 @@ module.exports = function createReviewRepository(models, sequelize) {
 
 module.exports.ReviewInputError = ReviewInputError;
 module.exports.ReviewConflictError = ReviewConflictError;
+module.exports.mayDecide = mayDecide;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
 module.exports.REVIEWER_MAX = REVIEWER_MAX;
 module.exports.VIDEO_FLAGS = VIDEO_FLAGS;

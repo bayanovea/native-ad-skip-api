@@ -28,6 +28,7 @@ const metricsMiddleware = promBundle({
         [/^\/admin\/video\/[^/]+$/, '/admin/video/#video_id'],
         [/^\/admin\/user\/\d+$/, '/admin/user/#internal_id'],
         [/^\/admin\/review\/(?!decide$)[^/]+$/, '/admin/review/#batch'],
+        [/^\/admin\/review\/[^/]+\/(take|release)$/, '/admin/review/#batch/$1'],
         [/^\/admin\/markups\/\d+\/delete$/, '/admin/markups/#id/delete'],
         [/^(\/(rt|yt))?\/markups\/\d+\/delete$/, '$1/markups/#id/delete'],
         [/^(\/(rt|yt))?\/markups\/\d+$/, '$1/markups/#id'],

@@ -136,12 +136,12 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 **Files:**
 - Modify: `prv/routes/admin-review.js`, `server.js` (`normalizePath`), locale files, `test/e2e.js`
 
-- [ ] `POST …/:batch/take`, `POST …/:batch/release` (holder, or `force` with confirm in the UI)
-- [ ] batch list: sections "In work", "Available", "Locked by others", "Done", state per row; `show=all` keeps every batch
-- [ ] item page: banner with "Take it" when available, holder name + force release when locked, "Give up" for the holder; verdict controls disabled unless R may decide
-- [ ] decide: 409 unless holder or finished; clears the lock when R finishes; per-reviewer next-open / first-open / default item / pre-selected verdict
-- [ ] e2e: take → decide → finish unlocks; decide without lock 409; force release; second reviewer starts at C1 and sees the first verdict in history
-- [ ] `make test-e2e` passes
+- [x] `POST …/:batch/take`, `POST …/:batch/release` (holder, or `force` with confirm in the UI)
+- [x] batch list: sections "In work", "Available", "Locked by others", "Done", state per row; `show=all` keeps every batch
+- [x] item page: banner with "Take it" when available, holder name + force release when locked, "Give up" for the holder; verdict controls disabled unless R may decide
+- [x] decide: 409 unless holder or finished; clears the lock when R finishes; per-reviewer next-open / first-open / default item / pre-selected verdict
+- [x] e2e: take → decide → finish unlocks; decide without lock 409; force release; second reviewer starts at C1 and sees the first verdict in history
+- [x] `make test-e2e` passes
 
 ### Task 5: Create reviewer
 

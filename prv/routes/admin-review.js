@@ -1,7 +1,7 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
 const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
-const { ReviewInputError, SIGNALS_WINDOW } = require('../repository/review');
+const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, mayDecide } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
 
@@ -82,6 +82,12 @@ function authorized(req, res) {
         return false;
     }
     return true;
+}
+
+// 409 body: the reviewer's batch state, its holder and the reason in the page language.
+function sendConflict(req, res, err) {
+    const t = translator(pickLang(req));
+    res.status(409).json({ reason: err.reason, locked_by: err.locked_by, message: t.text(`conflict_${err.reason}`, { name: err.locked_by }) });
 }
 
 // Item as the page shows it: repository fields plus player times and the
@@ -168,6 +174,13 @@ const STYLE = `
         .flag-row .who { color: #64748b; font-size: 0.8rem; }
         .picker a { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 10px 18px; border-radius: 8px; margin: 0 10px 10px 0; font-size: 1rem; }
         .warn { color: #fcd34d; }
+        .lock { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 0.95rem; border: 1px solid #334155; }
+        .lock-available { border-color: #3b82f6; }
+        .lock-locked, .lock-closed { border-color: #b45309; }
+        .lock-btn { background: #1d4ed8; border: none; color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
+        .lock-mine .lock-btn, .lock-locked .lock-btn { background: #334155; color: #e2e8f0; }
+        .lock .status { margin-top: 0; }
+        button:disabled, textarea:disabled, input:disabled { opacity: 0.5; cursor: default; }
 `;
 
 function page(title, body, lang) {
@@ -197,17 +210,29 @@ function renderReviewerPicker(reviewers, token, t, langLink) {
     <div class="picker">${links || `<span class="empty">${t('picker_empty')}</span>`}</div>`, t.lang);
 }
 
+// Batch list sections in page order; `closed` rows come only with show=all.
+const LIST_SECTIONS = ['mine', 'available', 'locked', 'done', 'closed'];
+
 function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
     const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
-    const rows = batches.map(b => `
+    const row = (b) => `
             <tr>
                 <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${tok}">${escapeHtml(b.batch)}</a></td>
                 <td>${t(`state_${b.state}`, { name: b.locked_by })}</td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
-            </tr>`).join('');
+            </tr>`;
+    const sections = LIST_SECTIONS.map(state => {
+        const rows = batches.filter(b => b.state === state);
+        return rows.length === 0 ? '' : `
+    <h2 class="section-${state}">${t(`list_section_${state}`)}</h2>
+    <table>
+        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
+        <tbody>${rows.map(row).join('')}</tbody>
+    </table>`;
+    }).join('');
     return page(t.text('page_title'), `
     <h1>${t('page_title')}</h1>
     <div class="toolbar">
@@ -220,11 +245,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
         <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${tok}">${t('toolbar_json')}</a>
         ${langLink}
     </div>
-    ${batches.length > 0 ? `
-    <table>
-        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
-        <tbody>${rows}</tbody>
-    </table>` : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
+    ${batches.length > 0 ? sections : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
 <script>
     // A batch opens in a tab this page opens: the item page later turns that
     // tab into a player and the browser lets a page close only tabs a script
@@ -287,8 +308,27 @@ function renderSignals(signals, token, t) {
     </table>` : `<div class="empty">${t('signals_no_segments')}</div>`}`;
 }
 
+// Button of the lock banner per batch state: take a free batch, give up your
+// own, force-release someone else's (the page asks first, naming the holder).
+const LOCK_BUTTONS = {
+    available: { action: 'take', force: false, label: 'lock_take' },
+    mine: { action: 'release', force: false, label: 'lock_release' },
+    locked: { action: 'release', force: true, label: 'lock_release' },
+};
+
+function renderLockBanner(batch, t) {
+    const button = LOCK_BUTTONS[batch.state];
+    return `
+    <div class="card lock lock-${batch.state}">
+        <span>${t(`lock_${batch.state}`, { name: batch.locked_by })}</span>
+        ${button ? `<button type="button" class="lock-btn" id="lock-btn" onclick="lockAction('${button.action}', ${button.force})">${t(button.label)}</button>` : ''}
+        <span class="status" id="lock-status"></span>
+    </div>`;
+}
+
 function renderItemPage(payload, token, t, langLink) {
-    const { batch, item, nav, signals, reviewer, video_flags } = payload;
+    const { batch, item, nav, signals, reviewer, video_flags, can_decide } = payload;
+    const off = can_decide ? '' : ' disabled';
     const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
     const itemHref = (code) =>
@@ -319,9 +359,11 @@ function renderItemPage(payload, token, t, langLink) {
         </table>
     </div>` : '';
 
-    const currentChoice = current ? current.verdict : null;
+    // The buttons and the comment start from this reviewer's own latest verdict.
+    const own = item.own_verdict;
+    const currentChoice = own ? own.verdict : null;
     const verdictButtons = CHOICES.map((v, i) => `
-            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${t(`verdict_${v}`)}</button>`).join('');
+            <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"${off}><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${t(`verdict_${v}`)}</button>`).join('');
     const track = video_flags[TRACK_FLAG];
     const trackOn = track ? track.value === true : false;
 
@@ -336,15 +378,16 @@ function renderItemPage(payload, token, t, langLink) {
         prev_player_link: nav.prev ? nav.prev.player_link : null,
         next_player_link: nav.next ? nav.next.player_link : null,
         player_link: item.player_link,
-        verdict: current ? current.verdict : null,
-        choice: currentChoice,
-        comment: current && current.comment ? current.comment : '',
+        verdict: currentChoice,
+        comment: own && own.comment ? own.comment : '',
         reviewer,
-        verdict_reviewer: current ? current.reviewer : null,
+        can_decide,
+        locked_by: batch.locked_by,
         track_mismatch: trackOn,
         choices: CHOICES,
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
-        i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error']
+        i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
+            'js_read_only', 'js_force_confirm']
             .map(key => [key, t.text(key)])),
     };
 
@@ -353,7 +396,7 @@ function renderItemPage(payload, token, t, langLink) {
         <a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${tok}">${t('item_all_batches')}</a>
         <strong>${escapeHtml(batch.batch)}</strong>
         <span>${t('item_progress', { decided: batch.decided, total: batch.total, open: batch.open })}</span>
-        <span class="muted">${t('item_reviewer_html', { name: reviewer })}${batch.locked_by && batch.locked_by !== reviewer ? ` <span class="warn">${t('item_locked_by', { name: batch.locked_by })}</span>` : ''}</span>
+        <span class="muted">${t('item_reviewer_html', { name: reviewer })}</span>
         <span class="spacer"></span>
         ${navLink(nav.prev, `◀ ${nav.prev ? escapeHtml(nav.prev.item_code) : ''}`)}
         <strong>${escapeHtml(item.item_code)}</strong>
@@ -362,6 +405,7 @@ function renderItemPage(payload, token, t, langLink) {
         <a href="${itemHref(item.item_code)}&amp;format=json">${t('toolbar_json')}</a>
         ${langLink}
     </div>
+    ${renderLockBanner(batch, t)}
 
     <div class="card">
         <div class="item-head">${t('item_duration', { start: item.start_player, end: item.end_player, seconds: item.duration_s })}</div>
@@ -382,13 +426,13 @@ function renderItemPage(payload, token, t, langLink) {
         </div>
         <label>${t('video_label')}</label>
         <div class="flag-row">
-            <input type="checkbox" id="track-flag"${trackOn ? ' checked' : ''} onchange="setStatus('')">
+            <input type="checkbox" id="track-flag"${trackOn ? ' checked' : ''} onchange="setStatus('')"${off}>
             <label for="track-flag" style="margin:0;color:#e2e8f0;font-size:0.9rem"><kbd>${TRACK_KEY}</kbd> ${t('track_flag')}</label>
             ${track ? `<span class="who">${t(track.value ? 'track_set_on' : 'track_set_off', { name: track.reviewer, date: formatDate(track.created_at) })}</span>` : ''}
         </div>
         <label for="comment">${t('comment_label')}</label>
-        <textarea id="comment" style="width:100%">${escapeHtml(current && current.comment ? current.comment : '')}</textarea>
-        <button type="button" class="save-btn" id="save-btn" onclick="save()">${t('save_button')}</button>
+        <textarea id="comment" style="width:100%"${off}>${escapeHtml(own && own.comment ? own.comment : '')}</textarea>
+        <button type="button" class="save-btn" id="save-btn" onclick="save()"${off}>${t('save_button')}</button>
         <div class="status" id="status"></div>
     </div>
 
@@ -409,7 +453,7 @@ function renderItemPage(payload, token, t, langLink) {
 <script>
     const STATE = ${scriptJson(state)};
     const FLASH_KEY = 'adminReview.flash';
-    let picked = STATE.choice;
+    let picked = STATE.verdict;
     let saving = false;
 
     function tr(key, params) {
@@ -462,12 +506,43 @@ function renderItemPage(payload, token, t, langLink) {
         try { tab.close(); } catch (e) { /* refused */ }
         return tab.closed;
     }
-    function setStatus(text, kind) {
-        const el = document.getElementById('status');
+    function setStatus(text, kind, id) {
+        const el = document.getElementById(id || 'status');
         el.textContent = text;
         el.className = 'status' + (kind ? ' ' + kind : '');
     }
+    // A 409 carries a translated message; anything else is shown with its status.
+    async function errorText(res) {
+        const text = await res.text();
+        try {
+            const data = JSON.parse(text);
+            if (data && typeof data.message === 'string') return data.message;
+        } catch (e) { /* plain text body */ }
+        return tr('js_error_status', { status: res.status, text: text });
+    }
+    // Without the batch lock the verdict controls only explain why.
+    function readOnly() {
+        if (STATE.can_decide) return false;
+        setStatus(tr('js_read_only'), 'error');
+        return true;
+    }
+    async function lockAction(action, force) {
+        if (force && !window.confirm(tr('js_force_confirm', { name: STATE.locked_by }))) return;
+        try {
+            const res = await fetch('/admin/review/' + encodeURIComponent(STATE.batch) + '/' + action
+                + '?verifyBearerToken=' + encodeURIComponent(STATE.token), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reviewer: STATE.reviewer, force: force }),
+            });
+            if (res.ok) { window.location.href = itemUrl(STATE.item_code); return; }
+            setStatus(await errorText(res), 'error', 'lock-status');
+        } catch (err) {
+            setStatus(tr('js_error', { text: err.message }), 'error', 'lock-status');
+        }
+    }
     function pick(v) {
+        if (readOnly()) return;
         picked = v;
         document.querySelectorAll('.verdict-btn').forEach(function (b) {
             b.classList.toggle('selected', b.dataset.verdict === v);
@@ -475,21 +550,21 @@ function renderItemPage(payload, token, t, langLink) {
         setStatus('');
     }
     function toggleTrack() {
+        if (readOnly()) return;
         const box = document.getElementById('track-flag');
         box.checked = !box.checked;
         setStatus('');
     }
     async function save() {
-        if (saving) return;
+        if (saving || readOnly()) return;
         if (!picked) { setStatus(tr('js_pick_first', { n: STATE.choices.length }), 'error'); return; }
         const verdict = picked;
         const comment = document.getElementById('comment').value;
         const track = document.getElementById('track-flag').checked;
-        // A stray Enter on a decided item must not append a copy of its
-        // verdict; another reviewer saving the same verdict is a new opinion.
-        // The server skips the duplicate row too; this only spares the round trip.
-        if (verdict === STATE.verdict && comment.trim() === STATE.comment
-            && STATE.reviewer === STATE.verdict_reviewer && track === STATE.track_mismatch) {
+        // A stray Enter on an item this reviewer decided must not append a
+        // copy of their verdict. The server skips the duplicate row too; this
+        // only spares the round trip.
+        if (verdict === STATE.verdict && comment.trim() === STATE.comment && track === STATE.track_mismatch) {
             setStatus(tr('js_no_change', { item: STATE.item_code, verdict: STATE.verdict_labels[verdict] }));
             return;
         }
@@ -523,7 +598,7 @@ function renderItemPage(payload, token, t, langLink) {
                 else window.location.href = itemUrl(STATE.item_code);
                 return;
             }
-            setStatus(tr('js_error_status', { status: res.status, text: await res.text() }), 'error');
+            setStatus(await errorText(res), 'error');
         } catch (err) {
             setStatus(tr('js_error', { text: err.message }), 'error');
         }
@@ -615,8 +690,10 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
 
     // POST /admin/review/decide — append a verdict from the page, and the video
     // flag when it changed. Validation lives in the repository
-    // (ReviewInputError → 400). A verdict identical to the item's latest one by
-    // the same reviewer is not appended again (a flag-only save, a stray Enter).
+    // (ReviewInputError → 400). Only the batch holder, or a reviewer who has
+    // finished it, may decide (else 409); the last verdict releases the lock.
+    // A verdict identical to the reviewer's own latest one is not appended
+    // again (a flag-only save, a stray Enter).
     router.post('/admin/review/decide', handler(async (req, res) => {
         if (!authorized(req, res)) return;
         const body = req.body;
@@ -625,22 +702,27 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             return;
         }
         let item;
+        let reviewer;
         try {
             if (!(await reviewRepository.isReviewer(typeof body.reviewer === 'string' ? body.reviewer.trim() : ''))) {
                 throw new ReviewInputError(`unknown reviewer ${body.reviewer}`);
             }
-            const reviewer = body.reviewer.trim();
+            reviewer = body.reviewer.trim();
             if (body.track_mismatch !== undefined && typeof body.track_mismatch !== 'boolean') {
                 throw new ReviewInputError('track_mismatch must be true or false');
             }
             const before = await reviewRepository.getItemById(body.item_id);
             if (!before && !validBodyItemId(body.item_id)) throw new ReviewInputError('item_id must be a positive integer');
             if (!before) throw new ReviewInputError(`unknown review item ${body.item_id}`);
+            if (!(await reviewRepository.canDecide(before.batch, reviewer))) {
+                const progress = (await reviewRepository.getBatchProgress(before.batch, reviewer)) || { state: 'closed', locked_by: null };
+                throw new ReviewConflictError(progress.state, progress.locked_by);
+            }
             const comment = body.comment == null ? null : body.comment;
             const text = typeof comment === 'string' ? comment.trim() : comment;
-            const same = before.verdict && before.verdict.verdict === body.verdict
-                && (before.verdict.comment || null) === (text === '' ? null : text)
-                && before.verdict.reviewer === reviewer;
+            const own = before.history.find(h => h.reviewer === reviewer);
+            const same = own && own.verdict === body.verdict
+                && (own.comment || null) === (text === '' ? null : text);
             if (!same) {
                 await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page' });
             }
@@ -650,10 +732,15 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
                     await reviewRepository.setVideoFlag({ native_id: before.native_id, flag: TRACK_FLAG, value: body.track_mismatch, reviewer });
                 }
             }
+            await reviewRepository.releaseIfFinished(before.batch, reviewer);
             item = await reviewRepository.getItemById(body.item_id);
         } catch (err) {
             if (err instanceof ReviewInputError) {
                 res.status(400).send(err.message);
+                return;
+            }
+            if (err instanceof ReviewConflictError) {
+                sendConflict(req, res, err);
                 return;
             }
             throw err;
@@ -661,7 +748,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         // The verdict is the item's latest (another reviewer may have decided
         // the same item meanwhile).
         const [next, track] = await Promise.all([
-            reviewRepository.nextOpenItem(item.batch, item.position),
+            reviewRepository.nextOpenItem(item.batch, item.position, reviewer),
             reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
         ]);
         res.status(201).json({
@@ -675,9 +762,35 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         });
     }));
 
-    // GET /admin/review/:batch?item=C7 — item page; without `item` the first
-    // open item (or the last one when the batch is done). Needs a reviewer:
-    // without one the HTML goes back to the picker, JSON gets 400.
+    // POST /admin/review/:batch/take | release — body `{reviewer, force?}`.
+    // Take locks a batch available to the reviewer; release clears the lock of
+    // its holder, or anyone's with `force: true`. 200 `{batch, locked_by,
+    // locked_at}`, 400 bad input, 404 unknown batch, 409 conflict.
+    function lockRoute(action) {
+        return handler(async (req, res) => {
+            if (!authorized(req, res)) return;
+            const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+            const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : '';
+            try {
+                if (body.force !== undefined && typeof body.force !== 'boolean') throw new ReviewInputError('force must be true or false');
+                const lock = action === 'take'
+                    ? await reviewRepository.takeBatch(req.params.batch, reviewer)
+                    : await reviewRepository.releaseBatch(req.params.batch, reviewer, { force: body.force === true });
+                if (!lock) { res.status(404).send('Batch not found'); return; }
+                res.json(lock);
+            } catch (err) {
+                if (err instanceof ReviewInputError) { res.status(400).send(err.message); return; }
+                if (err instanceof ReviewConflictError) { sendConflict(req, res, err); return; }
+                throw err;
+            }
+        });
+    }
+    router.post('/admin/review/:batch/take', lockRoute('take'));
+    router.post('/admin/review/:batch/release', lockRoute('release'));
+
+    // GET /admin/review/:batch?item=C7 — item page; without `item` the
+    // reviewer's first open item (or the last one when they decided them all).
+    // Needs a reviewer: without one the HTML goes back to the picker, JSON gets 400.
     router.get('/admin/review/:batch', handler(async (req, res) => {
         if (!authorized(req, res)) return;
         const reviewer = await reviewerOf(req);
@@ -693,19 +806,20 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         const code = typeof req.query.item === 'string' ? req.query.item.trim() : '';
         const raw = code
             ? await reviewRepository.getItem(batchName, code)
-            : await reviewRepository.defaultItem(batchName);
+            : await reviewRepository.defaultItem(batchName, reviewer);
         if (!raw) { res.status(404).send('Item not found'); return; }
 
-        const item = presentItem(raw);
+        const item = { ...presentItem(raw), own_verdict: raw.history.find(h => h.reviewer === reviewer) || null };
         const [{ prev, next }, firstOpen, signals, track] = await Promise.all([
-            reviewRepository.neighbours(batchName, item.position),
-            reviewRepository.firstOpenItem(batchName),
+            reviewRepository.neighbours(batchName, item.position, reviewer),
+            reviewRepository.firstOpenItem(batchName, reviewer),
             reviewRepository.getSignals(item.native_id, item.start, item.end),
             reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
         ]);
         const payload = {
             reviewer,
             batch: progress,
+            can_decide: mayDecide(progress.state),
             item,
             video_flags: { [TRACK_FLAG]: track },
             nav: { prev: presentNav(prev), next: presentNav(next), first_open: presentNav(firstOpen) },

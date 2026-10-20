@@ -3027,18 +3027,20 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.equal(open.verdict, null);
         assert.deepEqual(open.history, []);
         assert.ok(!('flagged_by' in open), 'flagged_by hidden before a verdict');
-        assert.deepEqual(await repo.firstOpenItem(batch), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
-        assert.equal((await repo.defaultItem(batch)).item_code, 'C7');
-        assert.deepEqual(await repo.nextOpenItem(batch, 2), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
-        assert.deepEqual(await repo.nextOpenItem(batch, 7), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' }, 'wraps round to the first open item');
+        assert.deepEqual(await repo.firstOpenItem(batch, 'bayanovea'), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
+        assert.equal((await repo.defaultItem(batch, 'bayanovea')).item_code, 'C7');
+        assert.equal((await repo.defaultItem(batch, 'gkshi')).item_code, 'C2', 'open = not decided by this reviewer');
+        assert.deepEqual(await repo.nextOpenItem(batch, 2, 'bayanovea'), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
+        assert.deepEqual(await repo.nextOpenItem(batch, 7, 'bayanovea'), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' }, 'wraps round to the first open item');
         assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'), batchRow(batch, { decided: 2 }));
         const listed = (await repo.listBatches({ reviewer: 'bayanovea' })).find(b => b.batch === batch);
         assert.deepEqual(listed, batchRow(batch, { decided: 2 }));
         assert.deepEqual(await repo.getBatchProgress(batch, 'gkshi'), batchRow(batch, { decided: 0 }), 'decided counts the reviewer\'s own verdicts');
 
-        assert.deepEqual(await repo.neighbours(batch, 5),
+        assert.deepEqual(await repo.neighbours(batch, 5, 'bayanovea'),
             { prev: { item_code: 'C2', decided: true, link: 'https://example.invalid/video-1_456000901?t=4m20s' }, next: { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' } });
-        assert.equal((await repo.neighbours(batch, 2)).prev, null);
+        assert.equal((await repo.neighbours(batch, 5, 'gkshi')).prev.decided, false, 'decided by this reviewer');
+        assert.equal((await repo.neighbours(batch, 2, 'bayanovea')).prev, null);
 
         // Bad input never writes a row.
         const inputError = (re) => (e) => e instanceof ReviewInputError && re.test(e.message);
@@ -3089,12 +3091,14 @@ test('review repository: latest verdict wins, history kept, blind until decided,
             'same decided_at → higher id first; raw insert got a decided_at');
         assert.equal(tie.verdict.verdict, 'self_promotion');
 
-        assert.equal(await repo.firstOpenItem(batch), null);
-        assert.equal(await repo.nextOpenItem(batch, 2), null);
-        assert.equal((await repo.defaultItem(batch)).item_code, 'C7', 'all decided → last item');
+        assert.equal(await repo.firstOpenItem(batch, 'bayanovea'), null);
+        assert.equal(await repo.nextOpenItem(batch, 2, 'bayanovea'), null);
+        assert.equal((await repo.defaultItem(batch, 'bayanovea')).item_code, 'C7', 'all decided → last item');
+        assert.equal((await repo.firstOpenItem(batch, 'gkshi')).item_code, 'C2');
+        assert.equal((await repo.nextOpenItem(batch, 2, 'gkshi')).item_code, 'C5');
         assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'), batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' }));
         assert.equal(await repo.getItem(batch, 'C99'), null);
-        assert.equal(await repo.defaultItem('e2e-review-no-such-batch'), null);
+        assert.equal(await repo.defaultItem('e2e-review-no-such-batch', 'bayanovea'), null);
     });
 });
 
@@ -3244,6 +3248,17 @@ function decideReview(payload, token = MOD_AUTH) {
     return request('POST', `/admin/review/decide${qs}`, payload);
 }
 
+function lockReview(action, batch, body, { token = MOD_AUTH, headers } = {}) {
+    const qs = token == null ? '' : `?verifyBearerToken=${encodeURIComponent(token)}`;
+    return request('POST', `/admin/review/${encodeURIComponent(batch)}/${action}${qs}`, body, headers);
+}
+
+async function takeReview(batch, reviewer = REVIEWER) {
+    const res = await lockReview('take', batch, { reviewer });
+    assert.equal(res.status, 200, `take ${batch} as ${reviewer} → ${res.status} ${JSON.stringify(res.body)}`);
+    return res.body;
+}
+
 async function countReviewVerdicts(batch) {
     return (await reviewState(batch)).verdicts.length;
 }
@@ -3309,18 +3324,19 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.ok(c5html.body.includes(REVIEW_RUN));
     assert.ok(c5html.body.includes('Просьба покомментить есть'));
 
-    // Decide C7 → 201 with flagged_by; nothing open any more.
-    const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: 'gkshi' });
+    // Decide C7 → 201 with flagged_by; nothing open any more, the last verdict releases the lock.
+    await takeReview(batch);
+    const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: REVIEWER });
     assert.equal(d.status, 201, JSON.stringify(d.body));
     assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null });
 
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'self_promotion');
     assert.equal(r.body.item.verdict.comment, 'plug');
-    assert.equal(r.body.item.verdict.reviewer, 'gkshi');
+    assert.equal(r.body.item.verdict.reviewer, REVIEWER);
     assert.equal(r.body.item.verdict.source, 'page');
     assert.deepEqual(r.body.item.flagged_by, [REVIEW_RUN]);
-    assert.deepEqual(r.body.batch, batchRow(batch, { decided: 2 }), 'gkshi\'s verdict is not bayanovea\'s progress');
+    assert.deepEqual(r.body.batch, batchRow(batch, { decided: 3, finished: [REVIEWER], state: 'done' }));
     assert.equal(r.body.nav.first_open, null);
     // All decided → default is the last item.
     assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C7');
@@ -3331,15 +3347,27 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal(r.body.item.verdict.verdict, 'not_ad');
     assert.equal(r.body.item.verdict.comment, null);
     assert.deepEqual(r.body.item.history.map(h => h.verdict), ['not_ad', 'self_promotion']);
+    assert.equal(r.body.can_decide, true, 'a finished reviewer may fix their verdicts');
     const listAfter = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
     assert.deepEqual(listAfter.body.batches.find(b => b.batch === batch), batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' }));
 });
 
 test('review page: decide validation → 400 and no row written', async () => {
     const batch = 'e2e-review-page-bad';
+    await withReviewRepo((repo) => repo.createBatch(batch, { reviews_needed: 2 }));
     assert.equal(runImport(copyReviewFixture(batch)).status, 0);
     const c7 = (await getReview(batch, { item: 'C7', format: 'json' })).body.item;
     const before = await countReviewVerdicts(batch);
+
+    // Nobody holds the batch: 409 with the reason in the page language.
+    let conflict = await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: 'bayanovea' });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(conflict.body, { reason: 'available', locked_by: null, message: RU.text('conflict_available') });
+    await takeReview(batch);
+    conflict = await request('POST', `/admin/review/decide?verifyBearerToken=${MOD_AUTH}`,
+        { item_id: c7.id, verdict: 'sponsor', reviewer: 'gkshi' }, { Cookie: `${LANG_COOKIE}=en` });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(conflict.body, { reason: 'locked', locked_by: 'bayanovea', message: 'bayanovea holds this batch.' });
 
     for (const [payload, msg] of [
         [{ item_id: c7.id, verdict: 'maybe', reviewer: 'bayanovea' }, /verdict must be one of/],
@@ -3375,6 +3403,7 @@ test('review page: decide validation → 400 and no row written', async () => {
     // reviewer is not appended, by another reviewer it is.
     assert.equal((await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: '  bayanovea ' })).status, 201);
     assert.equal((await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: 'bayanovea' })).status, 201);
+    await takeReview(batch, 'gkshi');   // bayanovea finished, the second review is open
     assert.equal((await decideReview({ item_id: c7.id, verdict: 'sponsor', reviewer: 'gkshi' })).status, 201);
     assert.deepEqual((await getReview(batch, { item: 'C7', format: 'json' })).body.item.history.map(h => h.reviewer), ['gkshi', 'bayanovea']);
 
@@ -3406,6 +3435,7 @@ test('review page: save → next open item after the current one, wrapping round
         await c.end();
     }
     assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C1', 'first open by position');
+    await takeReview(batch);
     const id = async (code) => (await getReview(batch, { item: code, format: 'json' })).body.item.id;
 
     let d = await decideReview({ item_id: await id('C7'), verdict: 'sponsor', reviewer: 'bayanovea' });
@@ -3440,6 +3470,7 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
     } finally {
         await c.end();
     }
+    await takeReview(batch);
     const d = await decideReview({ item_id: itemId, verdict: 'sponsor', comment: evil, reviewer: 'bayanovea' });
     assert.equal(d.status, 201);
 
@@ -3527,8 +3558,13 @@ test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
     await request('GET', '/admin/review/e2e-metrics-batch-1', null);
     await request('GET', '/admin/review/e2e-metrics-batch-2', null);
     await request('POST', '/admin/review/decide', {});
+    await request('POST', '/admin/review/e2e-metrics-batch-1/take', {});
+    await request('POST', '/admin/review/e2e-metrics-batch-2/release', {});
     const text = await fetchMetrics();
     assert.ok(httpDurationHasPath(text, '/admin/review/#batch'));
+    assert.ok(httpDurationHasPath(text, '/admin/review/#batch/take'));
+    assert.ok(httpDurationHasPath(text, '/admin/review/#batch/release'));
+    assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-2/release'));
     assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-1'));
     assert.ok(httpDurationHasPath(text, '/admin/review/decide'), 'decide keeps its own label');
 });
@@ -3597,7 +3633,7 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
         assert.ok(html.includes(`id="${id}"`), `page has #${id}`);
     }
 
-    const page = { navigatedTo: null, opened: [], keydown: [] };
+    const page = { navigatedTo: null, opened: [], keydown: [], confirms: [], confirmAnswer: true };
     const body = { tagName: 'BODY', id: '' };
     const doc = { body, activeElement: body };
     const field = (tagName, id, value = '') => ({
@@ -3613,6 +3649,7 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
         'save-btn': field('BUTTON', 'save-btn'),
     };
     if (html.includes('id="player-link"')) els['player-link'] = field('A', 'player-link');
+    if (html.includes('id="lock-status"')) els['lock-status'] = field('SPAN', 'lock-status');
     const buttons = [...html.matchAll(/<button\b[^>]*\bdata-verdict="([^"]+)"[^>]*>/g)].map(m => {
         const classAttr = (m[0].match(/\bclass="([^"]*)"/) || [, ''])[1];
         const classes = new Set(classAttr.split(/\s+/).filter(Boolean));
@@ -3643,6 +3680,7 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
         localStorage: storages.local,
         sessionStorage: storages.session,
         location,
+        confirm: (message) => { page.confirms.push(message); return page.confirmAnswer; },
         // A popup blocker returns null; otherwise a window whose opener the page may clear.
         open: (url, target, features) => {
             page.opened.push({ url, target, features });
@@ -3701,8 +3739,9 @@ async function saveAndFollow(page, opts) {
     return page.reviewUrl();
 }
 
-// Items C1..Cn at 10·n s, each with the stored player link at start − 2 s.
-async function seedKeyboardBatch(batch, count) {
+// Items C1..Cn at 10·n s, each with the stored player link at start − 2 s;
+// `holder` takes the batch (null: nobody).
+async function seedKeyboardBatch(batch, count, { holder = REVIEWER } = {}) {
     const c = adminClient(TEST_DB);
     await c.connect();
     try {
@@ -3716,6 +3755,7 @@ async function seedKeyboardBatch(batch, count) {
     } finally {
         await c.end();
     }
+    if (holder) await takeReview(batch, holder);
 }
 
 test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o) decides a whole batch', async () => {
@@ -3867,11 +3907,15 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
     assert.equal(page.els['track-flag'].checked, false);
     assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor'));
 
-    // Another reviewer (other URL) agreeing with C1 adds a verdict row under their code.
+    // Another reviewer (other URL) agreeing with C1 adds a verdict row under their
+    // code, once bayanovea gives the batch up and gkshi takes it.
+    assert.equal((await lockReview('release', batch, { reviewer: REVIEWER })).status, 200);
+    await takeReview(batch, 'gkshi');
     ({ page } = await openKeyboardPage(gkshiPath('C1'), storages));
+    assert.deepEqual(page.selected(), [], 'buttons start from the reviewer\'s own verdict');
+    page.key('1');
     assert.equal(page.state().reviewer, 'gkshi');
-    page.key('Enter');
-    assert.equal(await saveAndFollow(page), gkshiPath('C3'), 'links keep the reviewer');
+    assert.equal(await saveAndFollow(page), gkshiPath('C2'), 'links keep the reviewer; next open is gkshi\'s');
 
     assert.deepEqual((await reviewState(batch)).verdicts, [
         { item_code: 'C1', verdict: 'sponsor', comment: null, reviewer: REVIEWER, source: 'page' },
@@ -3925,7 +3969,118 @@ test('review page: batch list shows the reviewer\'s state per batch; closed batc
     assert.ok(html.body.includes('show=all'));
     // Opening a batch someone else holds is allowed but says so.
     const theirsPage = await request('GET', reviewPath(`/admin/review/${theirs}`), null);
-    assert.ok(theirsPage.body.includes(RU('item_locked_by', { name: 'gkshi' })));
+    assert.ok(theirsPage.body.includes(RU('lock_locked', { name: 'gkshi' })));
+    for (const key of ['list_section_mine', 'list_section_available', 'list_section_locked']) assert.ok(html.body.includes(RU(key)), key);
+    assert.ok(!html.body.includes(RU('list_section_closed')));
+    const allHtml = await request('GET', reviewPath('/admin/review', { show: 'all' }), null);
+    assert.ok(allHtml.body.includes(RU('list_section_closed')));
+    assert.ok(allHtml.body.indexOf(RU('list_section_mine')) < allHtml.body.indexOf(RU('list_section_closed')), 'sections in order');
+});
+
+test('review page: take → decide → finish unlocks; no lock → 409 and read-only page; force release; second reviewer starts at C1', async () => {
+    const batch = 'e2e-review-take';
+    await withReviewRepo((repo) => repo.createBatch(batch, { reviews_needed: 2 }));
+    await seedKeyboardBatch(batch, 3, { holder: null });
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    const itemPath = (code, who = REVIEWER) => `/admin/review/${batch}?item=${code}&reviewer=${who}&verifyBearerToken=${MOD_AUTH}`;
+    const json = async (who = REVIEWER) => (await request('GET', reviewPath(`/admin/review/${batch}`, { reviewer: who, format: 'json' }), null)).body;
+    const decide = async (code, verdict, who = REVIEWER) => {
+        const item = (await request('GET', itemPath(code, who) + '&format=json', null)).body.item;
+        return decideReview({ item_id: item.id, verdict, reviewer: who });
+    };
+    const lockOf = async () => (await json()).batch.locked_by;
+    const runLock = async (page, action, force) => {
+        await vm.runInContext(`lockAction('${action}', ${force})`, page.ctx);
+        return page.navigatedTo;
+    };
+
+    // Free batch: banner with "Take it", controls disabled, hotkeys only explain.
+    let body = await json();
+    assert.equal(body.batch.state, 'available');
+    assert.equal(body.can_decide, false);
+    let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
+    assert.ok(html.includes('class="card lock lock-available"') && html.includes(RU('lock_available')));
+    assert.ok(html.includes(`onclick="lockAction('take', false)">${RU('lock_take')}</button>`));
+    assert.match(html, /data-verdict="sponsor" onclick="pick\('sponsor'\)" disabled>/);
+    assert.match(html, /id="save-btn" onclick="save\(\)" disabled>/);
+    page.key('1');
+    assert.deepEqual(page.selected(), []);
+    assert.equal(page.els.status.textContent, RU.text('js_read_only'));
+    page.key('Enter');
+    await sleep(20);
+    assert.equal(page.navigatedTo, null);
+    assert.equal(await countReviewVerdicts(batch), 0);
+
+    // Take it from the banner → reload as holder.
+    assert.equal(await runLock(page, 'take', false), itemPath('C1'));
+    body = await json();
+    assert.equal(body.batch.state, 'mine');
+    assert.equal(body.can_decide, true);
+    ({ html } = await openKeyboardPage(itemPath('C1'), storages));
+    assert.ok(html.includes('lock-mine') && html.includes(`onclick="lockAction('release', false)">${RU('lock_release')}</button>`));
+
+    // gkshi sees the holder: take, release and decide → 409; the page offers a force release.
+    let res = await lockReview('take', batch, { reviewer: 'gkshi' });
+    assert.equal(res.status, 409);
+    assert.deepEqual(res.body, { reason: 'locked', locked_by: REVIEWER, message: RU.text('conflict_locked', { name: REVIEWER }) });
+    res = await lockReview('release', batch, { reviewer: 'gkshi' });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.locked_by, REVIEWER);
+    assert.equal((await decide('C1', 'sponsor', 'gkshi')).status, 409);
+    ({ page, html } = await openKeyboardPage(itemPath('C1', 'gkshi'), storages));
+    assert.ok(html.includes('lock-locked') && html.includes(RU('lock_locked', { name: REVIEWER })));
+    assert.ok(html.includes(`onclick="lockAction('release', true)">${RU('lock_release')}</button>`));
+    page.confirmAnswer = false;
+    assert.equal(await runLock(page, 'release', true), null, 'cancelled confirm does nothing');
+    assert.deepEqual(page.confirms, [RU.text('js_force_confirm', { name: REVIEWER })]);
+    assert.equal(await lockOf(), REVIEWER);
+    page.confirmAnswer = true;
+    assert.equal(await runLock(page, 'release', true), itemPath('C1', 'gkshi'));
+    assert.equal(await lockOf(), null, 'force release');
+
+    // Bad lock requests.
+    assert.equal((await lockReview('take', batch, { reviewer: REVIEWER }, { token: null })).status, 401);
+    assert.equal((await lockReview('take', batch, { reviewer: 'nobody' })).status, 400);
+    assert.equal((await lockReview('release', batch, { reviewer: REVIEWER, force: 'yes' })).status, 400);
+    assert.equal((await lockReview('take', 'e2e-review-no-such-batch', { reviewer: REVIEWER })).status, 404);
+
+    // bayanovea takes it back and finishes: each save → next open, the last one unlocks.
+    const lock = await takeReview(batch);
+    assert.equal(lock.batch, batch);
+    assert.equal(lock.locked_by, REVIEWER);
+    assert.ok(lock.locked_at);
+    assert.equal((await decide('C1', 'sponsor')).body.next_item, 'C2');
+    assert.equal((await decide('C2', 'not_ad')).body.next_item, 'C3');
+    assert.equal(await lockOf(), REVIEWER);
+    assert.equal((await decide('C3', 'not_ad')).body.next_item, null);
+    body = await json();
+    assert.equal(body.batch.state, 'done');
+    assert.equal(body.batch.locked_by, null, 'last verdict releases the lock');
+    assert.deepEqual(body.batch.finished, [REVIEWER]);
+
+    // Second review: gkshi starts at C1, sees bayanovea's verdict, no button pre-selected.
+    await takeReview(batch, 'gkshi');
+    body = await json('gkshi');
+    assert.equal(body.item.item_code, 'C1');
+    assert.equal(body.item.own_verdict, null);
+    assert.equal(body.item.verdict.reviewer, REVIEWER);
+    assert.deepEqual(body.item.history.map(h => h.reviewer), [REVIEWER]);
+    assert.equal(body.batch.decided, 0);
+    assert.equal(body.nav.first_open.item_code, 'C1');
+    ({ page, html } = await openKeyboardPage(itemPath('C1', 'gkshi'), storages));
+    assert.ok(html.includes(RU('current_verdict')));
+    assert.deepEqual(page.selected(), []);
+    page.key('3');
+    assert.equal(await saveAndFollow(page), itemPath('C2', 'gkshi'), 'next open for gkshi');
+    // bayanovea (finished) may still fix their verdict while gkshi holds the batch; their buttons show their own.
+    ({ page } = await openKeyboardPage(itemPath('C1'), storages));
+    assert.deepEqual(page.selected(), ['sponsor']);
+    assert.equal((await decide('C1', 'unclear')).status, 201);
+    assert.equal(await lockOf(), 'gkshi', 'a fix by a finished reviewer keeps the holder\'s lock');
+    assert.deepEqual((await reviewState(batch)).verdicts.map(v => [v.item_code, v.verdict, v.reviewer]), [
+        ['C1', 'sponsor', REVIEWER], ['C1', 'not_ad', 'gkshi'], ['C1', 'unclear', REVIEWER],
+        ['C2', 'not_ad', REVIEWER], ['C3', 'not_ad', REVIEWER],
+    ]);
 });
 
 test('review page: a save closes only the cross-origin player tab it was switched from', async () => {
