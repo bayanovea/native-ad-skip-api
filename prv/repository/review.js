@@ -1,9 +1,9 @@
 const { QueryTypes } = require('sequelize');
 const { VERDICTS } = require('../../lib/review-sheet');
+const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
-const REVIEWER_MAX = 64;
 // Video-level flags a reviewer may set (prv_review_video_flags.flag).
 const VIDEO_FLAGS = ['track_mismatch'];
 const VALID_FLAGS = new Set(VIDEO_FLAGS);
@@ -270,6 +270,26 @@ module.exports = function createReviewRepository(models, sequelize) {
             const rows = await sequelize.query(
                 'SELECT code FROM prv_review_reviewers ORDER BY code', { type: QueryTypes.SELECT });
             return rows.map((r) => r.code);
+        },
+
+        /**
+         * Register a reviewer; returns the stored code (the cleaned name, see
+         * lib/reviewer-name.js), or null when the name is taken in any letter
+         * case. ReviewInputError when the name breaks the rules. Case is
+         * compared in JS: Postgres lower() under a C locale folds ASCII only.
+         * The table lock keeps two concurrent "Анна" / "анна" from both passing.
+         */
+        async createReviewer(raw) {
+            const code = validReviewerName(raw);
+            if (!code) throw new ReviewInputError('invalid reviewer name');
+            return sequelize.transaction(async (transaction) => {
+                await sequelize.query('LOCK TABLE prv_review_reviewers IN EXCLUSIVE MODE', { transaction });
+                const taken = (await sequelize.query('SELECT code FROM prv_review_reviewers', { type: QueryTypes.SELECT, transaction }))
+                    .some((r) => r.code.toLowerCase() === code.toLowerCase());
+                if (taken) return null;
+                await models.ReviewReviewer.create({ code }, { transaction });
+                return code;
+            });
         },
 
         /** True when `code` is a registered reviewer. */

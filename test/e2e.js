@@ -129,9 +129,10 @@ async function waitForListen() {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
+// A string body is sent as is (pass its Content-Type in `headers`).
 function request(method, path, body, headers = {}) {
     return new Promise((resolve, reject) => {
-        const data = body ? JSON.stringify(body) : null;
+        const data = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
         const req = http.request(
             {
                 hostname: 'localhost',
@@ -3560,6 +3561,7 @@ test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
     await request('POST', '/admin/review/decide', {});
     await request('POST', '/admin/review/e2e-metrics-batch-1/take', {});
     await request('POST', '/admin/review/e2e-metrics-batch-2/release', {});
+    await request('POST', '/admin/review/reviewers', {});
     const text = await fetchMetrics();
     assert.ok(httpDurationHasPath(text, '/admin/review/#batch'));
     assert.ok(httpDurationHasPath(text, '/admin/review/#batch/take'));
@@ -3567,6 +3569,7 @@ test('metrics: /admin/review/:batch normalizes to a stable label', async () => {
     assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-2/release'));
     assert.ok(!httpDurationHasPath(text, '/admin/review/e2e-metrics-batch-1'));
     assert.ok(httpDurationHasPath(text, '/admin/review/decide'), 'decide keeps its own label');
+    assert.ok(httpDurationHasPath(text, '/admin/review/reviewers'), 'reviewers keeps its own label');
 });
 
 // ── Review page: keyboard-only pass ──────────────────────────────────────────
@@ -4081,6 +4084,91 @@ test('review page: take → decide → finish unlocks; no lock → 409 and read-
         ['C1', 'sponsor', REVIEWER], ['C1', 'not_ad', 'gkshi'], ['C1', 'unclear', REVIEWER],
         ['C2', 'not_ad', REVIEWER], ['C3', 'not_ad', REVIEWER],
     ]);
+});
+
+test('review page: create reviewer (form / JSON) → picker → batch list → item page → take → decide, a Cyrillic name with a space round-trips', async () => {
+    const NAME = 'Анна Петрова-2';
+    const batch = 'e2e-review-create-reviewer';
+    const enc = encodeURIComponent(NAME);
+    const created = [NAME, 'Zoë Ng'];
+    const qs = (token) => (token == null ? '' : `?verifyBearerToken=${encodeURIComponent(token)}`);
+    const form = (name, { token = MOD_AUTH, headers = {} } = {}) => request('POST', `/admin/review/reviewers${qs(token)}`,
+        new URLSearchParams({ name }).toString(), { 'Content-Type': 'application/x-www-form-urlencoded', ...headers });
+    const create = (body, token = MOD_AUTH) => request('POST', `/admin/review/reviewers${qs(token)}`, body);
+    await seedKeyboardBatch(batch, 2, { holder: null });
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    try {
+        assert.equal((await form(NAME, { token: null })).status, 401);
+        assert.equal((await create({ name: NAME }, 'wrong')).status, 401);
+
+        // The picker offers the form; the form lands on the new reviewer's batch list.
+        let picker = await request('GET', `/admin/review?verifyBearerToken=${MOD_AUTH}`, null);
+        assert.ok(picker.body.includes(`<form class="card create-reviewer" method="post" action="/admin/review/reviewers?verifyBearerToken=${MOD_AUTH}">`));
+        assert.ok(picker.body.includes('name="name" maxlength="64" required value=""') && picker.body.includes(RU('picker_create_button')));
+        let res = await form(`  ${NAME} `);
+        assert.equal(res.status, 303);
+        const listPath = `/admin/review?reviewer=${enc}&verifyBearerToken=${MOD_AUTH}`;
+        assert.equal(res.headers.location, listPath);
+        picker = await request('GET', `/admin/review?verifyBearerToken=${MOD_AUTH}`, null);
+        assert.ok(picker.body.includes(`<a href="${listPath.replace('&', '&amp;')}">${NAME}</a>`), 'listed in the picker');
+
+        const list = await request('GET', listPath, null);
+        assert.equal(list.status, 200);
+        assert.ok(list.body.includes(RU('toolbar_reviewer_html', { name: NAME })));
+        const row = (await request('GET', `${listPath}&format=json`, null)).body;
+        assert.equal(row.reviewer, NAME);
+        assert.equal(row.batches.find(b => b.batch === batch).state, 'available');
+        const link = list.body.match(new RegExp(`<a class="batch-link" href="([^"]*/admin/review/${batch}\\?[^"]*)"`))[1];
+        assert.equal(htmlUnescape(link), `/admin/review/${batch}?reviewer=${enc}&verifyBearerToken=${MOD_AUTH}`);
+
+        // Item page → take → decide, all through the page's own URLs and fetches.
+        let { page } = await openKeyboardPage(htmlUnescape(link), storages);
+        assert.equal(page.state().reviewer, NAME);
+        await vm.runInContext("lockAction('take', false)", page.ctx);
+        const c1 = `/admin/review/${batch}?item=C1&reviewer=${enc}&verifyBearerToken=${MOD_AUTH}`;
+        assert.equal(page.navigatedTo, c1);
+        ({ page } = await openKeyboardPage(c1, storages));
+        page.key('1');
+        assert.equal(await saveAndFollow(page), `/admin/review/${batch}?item=C2&reviewer=${enc}&verifyBearerToken=${MOD_AUTH}`);
+        const c2 = (await getReview(batch, { reviewer: NAME, item: 'C2', format: 'json' })).body.item;
+        assert.equal((await decideReview({ item_id: c2.id, verdict: 'not_ad', reviewer: NAME })).status, 201);
+        assert.deepEqual((await reviewState(batch)).verdicts.map(v => [v.item_code, v.verdict, v.reviewer]),
+            [['C1', 'sponsor', NAME], ['C2', 'not_ad', NAME]]);
+        const done = (await getReview(batch, { reviewer: NAME, format: 'json' })).body.batch;
+        assert.equal(done.state, 'done');
+        assert.deepEqual(done.finished, [NAME]);
+
+        // Taken in another letter case → 400, nothing added; JSON create cleans the name.
+        res = await create({ name: 'АННА  петрова-2' });
+        assert.equal(res.status, 400);
+        assert.deepEqual(res.body, { reason: 'taken', message: RU.text('reviewer_taken', { name: 'АННА петрова-2' }) });
+        res = await form('GKSHI');
+        assert.equal(res.status, 400);
+        assert.ok(res.body.includes(RU('reviewer_taken', { name: 'GKSHI' })) && res.body.includes('value="GKSHI"'));
+        res = await create({ name: '  Zoë   Ng ' });
+        assert.equal(res.status, 201);
+        assert.deepEqual(res.body, { code: 'Zoë Ng' });
+
+        // Bad names → 400: the form keeps the (escaped) input and speaks the page language.
+        for (const body of [{}, { name: '' }, { name: 'a/b' }, { name: 'x'.repeat(65) }, { name: 42 }, []]) {
+            res = await create(body);
+            assert.equal(res.status, 400, JSON.stringify(body));
+            assert.equal(res.body.reason, 'invalid');
+        }
+        res = await form('<b>x</b>', { headers: { Cookie: 'review_lang=en' } });
+        assert.equal(res.status, 400);
+        assert.ok(res.body.includes('<html lang="en">') && res.body.includes('This name is not allowed.'));
+        assert.ok(res.body.includes('value="&lt;b&gt;x&lt;/b&gt;"') && !res.body.includes('<b>x</b>'));
+        assert.ok(res.body.includes(`href="/admin/review?verifyBearerToken=${MOD_AUTH}&amp;lang=ru"`), 'the switch points at the picker');
+        assert.deepEqual((await request('GET', `/admin/review?format=json&verifyBearerToken=${MOD_AUTH}`, null)).body.reviewers.sort(),
+            ['bayanovea', 'gkshi', 'Zoë Ng', NAME].sort());
+    } finally {
+        // Later tests list the seeded reviewers only; a boot would rewrite these verdicts to bayanovea.
+        await withReviewRepo(async (repo, sequelize) => {
+            await sequelize.query('DELETE FROM prv_review_verdicts WHERE reviewer IN (:created)', { replacements: { created } });
+            await sequelize.query('DELETE FROM prv_review_reviewers WHERE code IN (:created)', { replacements: { created } });
+        });
+    }
 });
 
 test('review page: a save closes only the cross-origin player tab it was switched from', async () => {

@@ -4,6 +4,7 @@ const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
 const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, mayDecide } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
+const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
 
 // Assessor review page (prv only). Sibling of admin-moderation.js: same
 // `?verifyBearerToken=` query auth, server-rendered HTML + AJAX decide,
@@ -104,9 +105,9 @@ function languageOf(req, res) {
 }
 
 // The toolbar switch: this page with `lang` set to the other language.
-function langSwitch(req, t, query = req.query) {
+function langSwitch(req, t, query = req.query, path = `${req.baseUrl}${req.path}`) {
     const params = new URLSearchParams({ ...query, lang: LANGS.find(l => l !== t.lang) });
-    return `<a class="lang-switch" href="${escapeHtml(`${req.baseUrl}${req.path}?${params}`)}">${t('lang_switch')}</a>`;
+    return `<a class="lang-switch" href="${escapeHtml(`${path}?${params}`)}">${t('lang_switch')}</a>`;
 }
 
 function presentItem(item) {
@@ -172,6 +173,9 @@ const STYLE = `
         .flag-row { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; font-size: 0.9rem; }
         .flag-row input { width: 18px; height: 18px; accent-color: #f59e0b; }
         .flag-row .who { color: #64748b; font-size: 0.8rem; }
+        .create-reviewer { max-width: 520px; margin-top: 8px; }
+        .create-reviewer .row { margin-bottom: 6px; }
+        .create-reviewer input { flex: 1; min-width: 200px; }
         .picker a { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 10px 18px; border-radius: 8px; margin: 0 10px 10px 0; font-size: 1rem; }
         .warn { color: #fcd34d; }
         .lock { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 0.95rem; border: 1px solid #334155; }
@@ -199,7 +203,8 @@ ${body}
 </html>`;
 }
 
-function renderReviewerPicker(reviewers, token, t, langLink) {
+// `form`: what a failed "Add yourself" sent back (`value` as typed, `error` HTML).
+function renderReviewerPicker(reviewers, token, t, langLink, form = {}) {
     const tok = escapeHtml(urlToken(token));
     const links = reviewers.map(r =>
         `<a href="/admin/review?reviewer=${escapeHtml(encodeURIComponent(r))}&amp;verifyBearerToken=${tok}">${escapeHtml(r)}</a>`).join('');
@@ -207,7 +212,16 @@ function renderReviewerPicker(reviewers, token, t, langLink) {
     <h1>${t('page_title')}</h1>
     <div class="toolbar"><span class="spacer"></span>${langLink}</div>
     <p class="muted" style="margin-bottom:14px">${t('picker_prompt')}</p>
-    <div class="picker">${links || `<span class="empty">${t('picker_empty')}</span>`}</div>`, t.lang);
+    <div class="picker">${links || `<span class="empty">${t('picker_empty')}</span>`}</div>
+    <form class="card create-reviewer" method="post" action="/admin/review/reviewers?verifyBearerToken=${tok}">
+        <label for="reviewer-name">${t('picker_create_label')}</label>
+        <div class="row">
+            <input type="text" id="reviewer-name" name="name" maxlength="${REVIEWER_MAX}" required value="${escapeHtml(form.value || '')}">
+            <button type="submit" class="lock-btn">${t('picker_create_button')}</button>
+        </div>
+        <p class="muted">${t('picker_create_hint')}</p>
+        ${form.error ? `<p class="status error">${form.error}</p>` : ''}
+    </form>`, t.lang);
 }
 
 // Batch list sections in page order; `closed` rows come only with show=all.
@@ -686,6 +700,34 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         const t = languageOf(req, res);
         res.setHeader('Content-Type', 'text/html');
         res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken, t, langSwitch(req, t)));
+    }));
+
+    // POST /admin/review/reviewers — register `{name}` (the name is the code).
+    // The picker form gets 303 to the new reviewer's batch list, or 400 with the
+    // picker and the reason; JSON gets 201 `{code}` or 400 `{reason, message}`.
+    // Reasons: `invalid` (lib/reviewer-name.js), `taken` (in any letter case).
+    router.post('/admin/review/reviewers', handler(async (req, res) => {
+        if (!authorized(req, res)) return;
+        const raw = req.body && typeof req.body.name === 'string' ? req.body.name : '';
+        const name = validReviewerName(raw);
+        const code = name && await reviewRepository.createReviewer(name);
+        const form = req.is('application/x-www-form-urlencoded');
+        const token = req.query.verifyBearerToken;
+        if (code) {
+            if (form) res.redirect(303, `/admin/review?reviewer=${encodeURIComponent(code)}&verifyBearerToken=${encodeURIComponent(token)}`);
+            else res.status(201).json({ code });
+            return;
+        }
+        const reason = name ? 'taken' : 'invalid';
+        const t = languageOf(req, res);
+        if (!form) {
+            res.status(400).json({ reason, message: t.text(`reviewer_${reason}`, { name }) });
+            return;
+        }
+        const reviewers = await reviewRepository.listReviewers();
+        res.status(400).setHeader('Content-Type', 'text/html');
+        res.send(renderReviewerPicker(reviewers, token, t, langSwitch(req, t, { verifyBearerToken: token }, '/admin/review'),
+            { value: raw, error: t(`reviewer_${reason}`, { name }) }));
     }));
 
     // POST /admin/review/decide — append a verdict from the page, and the video

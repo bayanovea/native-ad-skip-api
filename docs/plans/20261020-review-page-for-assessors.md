@@ -149,11 +149,11 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 - Modify: `prv/repository/review.js`, `prv/routes/admin-review.js`, locale files, `test/e2e.js`
 - Create: `lib/reviewer-name.js`, `test/reviewer-name.test.js`
 
-- [ ] `validReviewerName()` (rules above) + unit tests
-- [ ] `createReviewer()` with case-insensitive uniqueness; `POST /admin/review/reviewers` (form 303 / JSON 201)
-- [ ] picker form under the name list
-- [ ] e2e: create → appears in picker → lands on the batch list; duplicate (other case) 400; bad name 400; 401 without token
-- [ ] `make test-unit` and `make test-e2e` pass
+- [x] `validReviewerName()` (rules above) + unit tests
+- [x] `createReviewer()` with case-insensitive uniqueness; `POST /admin/review/reviewers` (form 303 / JSON 201)
+- [x] picker form under the name list
+- [x] e2e: create → appears in picker → lands on the batch list; duplicate (other case) 400; bad name 400; 401 without token
+- [x] `make test-unit` and `make test-e2e` pass
 
 ### Task 6: Onboarding block
 
