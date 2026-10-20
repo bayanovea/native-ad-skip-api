@@ -189,7 +189,7 @@ The 2026-10-18 one-off that inserted `assignee` rows became a plain default-row 
 
 ## Post-Completion
 
-- **Test state at completion** (2026-10-20, on the branch): `make test-unit` 66 pass, `make test-e2e` 144 pass, calculator unit subset green.
+- **Test state at completion** (2026-10-20, on the branch): `make test-unit` 68 pass, `make test-e2e` 149 pass, calculator unit subset green.
 - **Deploy** = push to GitHub (owner only). Take `make pull-dump` right before the first deploy. The one-off runs on the first prod boot; check the batch list as `bayanovea` (overlap batches absent from "Available") and as a new test reviewer (overlap batches present).
 - Give assessors the page link (with the token) and ask them to open the onboarding block first.
 - Interview material: decision entry in job-study `job-hunt/portfolio/native-ad-skip-decisions.md` (lock on the batch row vs claims table; first-come + exclusion as the overlap model).
