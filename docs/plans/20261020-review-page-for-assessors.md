@@ -177,8 +177,14 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 
 ### Task 8: Verify acceptance criteria
 
-- [ ] every Overview bullet works on a local server against the restored dump (`docker compose -f docker-compose.dev.yml`), incl. the one-off on the dump copy of `prv_review_batches`
-- [ ] `go test ./calculator -run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, `make test-unit`, `make test-e2e`
+- [x] every Overview bullet works on a local server against the restored dump (`docker compose -f docker-compose.dev.yml`), incl. the one-off on the dump copy of `prv_review_batches`
+  - [x] one-off on a copy with `assignee`: `2026-10-14-clean` (bayanovea 6/39) → locked on bayanovea; both overlap batches → `excluded {bayanovea}`, no lock; second boot changes nothing
+  - [x] picker form; create via form (303 to the new list, Cyrillic name) and JSON (201); other-case duplicate 400, bad name 400, no token 401
+  - [x] lists: bayanovea sees only her batch (no overlap, take → 409 closed); gkshi and a new reviewer see both overlap batches available
+  - [x] take → 409 for a second taker → decide → give up → force release; decide without lock 409; finishing the last item clears the lock (`done`), the finisher can still fix a verdict, a reviewer who never worked on it sees it `closed`
+  - [x] second reviewer starts at the first item and sees the earlier verdict in history; read-only banner with the holder's name and force release
+  - [x] `?lang=en` (html lang, sections, onboarding) sticks via the `review_lang` cookie; onboarding `<details>` closed with all 8 sections in ru and en
+- [x] `go test ./calculator -run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, `make test-unit`, `make test-e2e`
 
 ### Task 9: [Final] Documentation
 
