@@ -23,6 +23,18 @@ components:
       description: "AUTH_TOKEN value as query parameter. Used by Grafana-compatible GET endpoints."
 
   schemas:
+    ReviewLockRequest:
+      type: object
+      required: [reviewer]
+      properties:
+        reviewer: { type: string, description: "A registered reviewer code" }
+        force:    { type: boolean, description: "release only: clear another reviewer's lock" }
+    ReviewLock:
+      type: object
+      properties:
+        batch:     { type: string }
+        locked_by: { type: string, nullable: true }
+        locked_at: { type: string, format: date-time, nullable: true }
     Segment:
       type: object
       description: |
@@ -502,41 +514,126 @@ paths:
   /admin/review:
     get:
       tags: [Admin]
-      summary: Assessor review — batch list with progress
-      description: "Refuses every request when AUTH_TOKEN is unset."
+      summary: Assessor review — reviewer picker, then the batch list with progress and state
+      description: "Refuses every request when AUTH_TOKEN is unset. Without a registered `reviewer`: the picker with a create-reviewer form (JSON `{reviewers, reviewer: null}`, 400 for an unknown code). `decided`/`open` count the reviewer's own verdicts; `state` ∈ mine | available | locked | done | closed, and `closed` rows only come with show=all. `?lang=ru|en` sets the `review_lang` cookie (default ru)."
       security:
         - tokenQuery: []
       parameters:
-        - { name: format, in: query, required: false, schema: { type: string, enum: [json] } }
+        - { name: reviewer, in: query, required: false, schema: { type: string } }
+        - { name: show,     in: query, required: false, schema: { type: string, enum: [all] } }
+        - { name: lang,     in: query, required: false, schema: { type: string, enum: [ru, en] } }
+        - { name: format,   in: query, required: false, schema: { type: string, enum: [json] } }
       responses:
         '200':
-          description: "HTML page, or `{batches: [{batch, total, decided, open}]}` with format=json"
+          description: "HTML page, or `{reviewer, batches: [{batch, total, decided, open, reviews_needed, finished, locked_by, locked_at, state}]}` with format=json"
           content:
             text/html:
               schema: { type: string }
             application/json:
               schema: { type: object }
+        '400': { description: Unknown reviewer (format=json) }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/review/reviewers:
+    post:
+      tags: [Admin]
+      summary: Assessor review — create a reviewer (the name is the code)
+      description: "Refuses every request when AUTH_TOKEN is unset. Trimmed, NFC, inner spaces collapsed; 1–64 letters (any script), digits, space, `.`, `_`, `-`. A name taken in any letter case is refused. The picker form gets 303 to the new reviewer's batch list, or 400 with the picker and the reason."
+      security:
+        - tokenQuery: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '201':
+          description: Reviewer created (JSON)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+        '303': { description: Created (form); redirect to the new reviewer's batch list }
+        '400': { description: "`{reason: invalid | taken, message}` (JSON) or the picker with the reason (form)" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/review/{batch}/take:
+    post:
+      tags: [Admin]
+      summary: Assessor review — take a batch (lock it on the reviewer)
+      description: "Refuses every request when AUTH_TOKEN is unset. Only a batch available to the reviewer; of two concurrent takes exactly one wins. Taking a batch you already hold returns the lock."
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: batch, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewLockRequest' }
+      responses:
+        '200': { description: Locked, content: { application/json: { schema: { $ref: '#/components/schemas/ReviewLock' } } } }
+        '400': { description: Unknown reviewer or invalid force }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Batch not found }
+        '409': { description: "Not available: `{reason: locked | done | closed, locked_by, message}`" }
+
+  /admin/review/{batch}/release:
+    post:
+      tags: [Admin]
+      summary: Assessor review — give up a batch, or force-release someone else's lock
+      description: "Refuses every request when AUTH_TOKEN is unset. The holder clears their own lock; `force: true` clears anyone's. Verdicts stay."
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: batch, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewLockRequest' }
+      responses:
+        '200': { description: "Released (also when nobody held it)", content: { application/json: { schema: { $ref: '#/components/schemas/ReviewLock' } } } }
+        '400': { description: Unknown reviewer or invalid force }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Batch not found }
+        '409': { description: "Another reviewer holds it and force is not set: `{reason: locked, locked_by, message}`" }
 
   /admin/review/{batch}:
     get:
       tags: [Admin]
       summary: Assessor review — item page
-      description: "Refuses every request when AUTH_TOKEN is unset. Without `item`: the first open item by position, or the last item when the batch is done. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); nav entries are `{item_code, decided}`."
+      description: "Refuses every request when AUTH_TOKEN is unset. Needs a registered `reviewer` (HTML: 302 to the picker; JSON: 400). Without `item`: the reviewer's first open item by position, or the last item when they decided them all; open/decided and nav count the reviewer's own verdicts. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); `item.own_verdict` is the reviewer's latest verdict or null; nav entries are `{item_code, decided, player_link}`."
       security:
         - tokenQuery: []
       parameters:
-        - { name: batch,  in: path,  required: true,  schema: { type: string } }
-        - { name: item,   in: query, required: false, schema: { type: string, example: C7 } }
-        - { name: format, in: query, required: false, schema: { type: string, enum: [json] } }
+        - { name: batch,    in: path,  required: true,  schema: { type: string } }
+        - { name: reviewer, in: query, required: true,  schema: { type: string } }
+        - { name: item,     in: query, required: false, schema: { type: string, example: C7 } }
+        - { name: lang,     in: query, required: false, schema: { type: string, enum: [ru, en] } }
+        - { name: format,   in: query, required: false, schema: { type: string, enum: [json] } }
       responses:
         '200':
-          description: "HTML page, or `{batch, item, nav: {prev, next, first_open}, signals}` with format=json"
+          description: "HTML page, or `{reviewer, batch, can_decide, item, video_flags: {track_mismatch}, nav: {prev, next, first_open}, signals}` with format=json (`batch` = the reviewer's progress row, as in the list)"
           content:
             text/html:
               schema: { type: string }
             application/json:
               schema: { type: object }
+        '302': { description: No reviewer; redirect to the picker }
+        '400': { description: No reviewer (format=json) }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Batch or item not found }
 
@@ -544,7 +641,7 @@ paths:
     post:
       tags: [Admin]
       summary: Assessor review — append a verdict
-      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins."
+      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins; a verdict identical to the reviewer's own latest one is not appended again. Only the batch holder, or a reviewer who has finished the batch, may decide; the verdict on the reviewer's last open item releases their lock."
       security:
         - tokenQuery: []
       requestBody:
@@ -558,7 +655,8 @@ paths:
                 item_id:  { type: integer, minimum: 1, maximum: 2147483647, description: "JSON integer; strings are rejected" }
                 verdict:  { type: string, enum: [sponsor, self_promotion, not_ad, unclear] }
                 comment:  { type: string, nullable: true, description: "Trimmed; blank or null → no comment" }
-                reviewer: { type: string, description: "Trimmed; 1–64 characters after trimming" }
+                reviewer: { type: string, description: "A registered reviewer code" }
+                track_mismatch: { type: boolean, description: "Video flag: subtitle track does not match the player; saved only when it changes" }
       responses:
         '201':
           description: Verdict recorded
@@ -569,11 +667,14 @@ paths:
                 properties:
                   item_id:    { type: integer }
                   item_code:  { type: string }
-                  verdict:    { type: string, description: "The verdict just recorded" }
+                  verdict:    { type: string, description: "The item's latest verdict" }
+                  track_mismatch: { type: boolean }
                   flagged_by: { type: array, items: { type: string } }
-                  next_item:  { type: string, nullable: true, description: "Next open item after this one, wrapping round; null when the batch is done" }
-        '400': { description: Invalid verdict, reviewer, comment or unknown item }
+                  next_item:  { type: string, nullable: true, description: "The reviewer's next open item after this one, wrapping round; null when they are done" }
+                  next_player_link: { type: string, nullable: true }
+        '400': { description: Invalid verdict, reviewer, comment, track_mismatch or unknown item }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: "The reviewer neither holds nor has finished the batch: `{reason: available | locked | closed, locked_by, message}`" }
 
   # ── RT ──────────────────────────────────────────────────────────────────────
   /rt/video-calculated:
