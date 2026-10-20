@@ -160,10 +160,10 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 **Files:**
 - Modify: `prv/routes/admin-review.js`, locale files, `test/e2e.js`
 
-- [ ] `<details>` closed by default on the batch list and item page, sections 1–8 above, ru and en
-- [ ] hotkeys table rendered from the same list the key handler uses, so they cannot drift
-- [ ] e2e: block present and closed in both languages
-- [ ] `make test-e2e` passes
+- [x] `<details>` closed by default on the batch list and item page, sections 1–8 above, ru and en
+- [x] hotkeys table rendered from the same list the key handler uses, so they cannot drift
+- [x] e2e: block present and closed in both languages
+- [x] `make test-e2e` passes
 
 ### Task 7: Importer and export
 

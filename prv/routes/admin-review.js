@@ -35,6 +35,15 @@ const CHOICES = VERDICTS;
 // says what the text is, the flag says the video is not where the text is.
 const TRACK_FLAG = 'track_mismatch';
 const TRACK_KEY = CHOICES.length + 1;
+// Letter hotkeys: the key handler (via STATE) and the hotkey tables read this
+// list, so the help cannot drift from what the keys do.
+const LETTER_HOTKEYS = [
+    { key: 'c', action: 'comment' },
+    { key: 'j', action: 'next' },
+    { key: 'k', action: 'prev' },
+    { key: 'o', action: 'player' },
+];
+const HOTKEY_PARAMS = { flag: TRACK_KEY, ...Object.fromEntries(LETTER_HOTKEYS.map(h => [h.action, h.key])) };
 // Legacy "Wrong text" verdicts (before 2026-10-18) are `unclear` with this
 // comment in front; the page still shows them as such.
 const WRONG_TEXT_COMMENT = 'Текст в видео не совпадает с текстом из субтитров.';
@@ -185,6 +194,11 @@ const STYLE = `
         .lock-mine .lock-btn, .lock-locked .lock-btn { background: #334155; color: #e2e8f0; }
         .lock .status { margin-top: 0; }
         button:disabled, textarea:disabled, input:disabled { opacity: 0.5; cursor: default; }
+        .onboarding summary { cursor: pointer; font-weight: 600; color: #fcd34d; }
+        .onboarding h3 { font-size: 0.95rem; margin: 18px 0 6px; color: #cbd5f5; }
+        .onboarding p, .onboarding li { font-size: 0.9rem; line-height: 1.5; color: #cbd5e1; margin-bottom: 6px; }
+        .onboarding ul, .onboarding ol { padding-left: 22px; }
+        .onboarding table { max-width: 560px; background: #0f172a; margin-top: 6px; }
 `;
 
 function page(title, body, lang) {
@@ -201,6 +215,39 @@ function page(title, body, lang) {
 ${body}
 </body>
 </html>`;
+}
+
+// [key HTML, label HTML] per hotkey; `compact` folds the verdict digits into one entry.
+function hotkeyRows(t, compact = false) {
+    const verdicts = compact
+        ? [[`<kbd>1</kbd>–<kbd>${CHOICES.length}</kbd>`, t('hotkey_verdicts')]]
+        : CHOICES.map((v, i) => [`<kbd>${i + 1}</kbd>`, t('hotkey_verdict', { label: t.text(`verdict_${v}`) })]);
+    return [
+        ...verdicts,
+        [`<kbd>${TRACK_KEY}</kbd>`, t('hotkey_track')],
+        ...LETTER_HOTKEYS.map(h => [`<kbd>${h.key}</kbd>`, t(`hotkey_${h.action}`)]),
+        ['<kbd>Enter</kbd>', t('hotkey_save')],
+        ['<kbd>Ctrl/Cmd+Enter</kbd>', t('hotkey_save_comment')],
+        ['<kbd>Esc</kbd>', t('hotkey_escape')],
+    ];
+}
+
+const ONBOARDING_SECTIONS = ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'hotkeys', 'comments'];
+
+// Collapsed by default: assessors read it once, then it stays out of the way.
+function renderOnboarding(t) {
+    const table = `
+        <table>
+            <thead><tr><th>${t('hotkey_col_key')}</th><th>${t('hotkey_col_action')}</th></tr></thead>
+            <tbody>${hotkeyRows(t).map(([key, label]) => `<tr><td>${key}</td><td>${label}</td></tr>`).join('')}</tbody>
+        </table>`;
+    const sections = ONBOARDING_SECTIONS.map(s => `
+        <h3>${t(`onb_${s}_title`)}</h3>
+        ${t(`onb_${s}_html`, HOTKEY_PARAMS)}${s === 'hotkeys' ? table : ''}`).join('');
+    return `
+    <details class="card onboarding">
+        <summary>${t('onb_summary')}</summary>${sections}
+    </details>`;
 }
 
 // `form`: what a failed "Add yourself" sent back (`value` as typed, `error` HTML).
@@ -259,6 +306,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
         <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${tok}">${t('toolbar_json')}</a>
         ${langLink}
     </div>
+    ${renderOnboarding(t)}
     ${batches.length > 0 ? sections : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
 <script>
     // A batch opens in a tab this page opens: the item page later turns that
@@ -399,6 +447,7 @@ function renderItemPage(payload, token, t, langLink) {
         locked_by: batch.locked_by,
         track_mismatch: trackOn,
         choices: CHOICES,
+        letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
             'js_read_only', 'js_force_confirm']
@@ -419,6 +468,7 @@ function renderItemPage(payload, token, t, langLink) {
         <a href="${itemHref(item.item_code)}&amp;format=json">${t('toolbar_json')}</a>
         ${langLink}
     </div>
+    ${renderOnboarding(t)}
     ${renderLockBanner(batch, t)}
 
     <div class="card">
@@ -462,7 +512,7 @@ function renderItemPage(payload, token, t, langLink) {
 
     ${renderSignals(signals, token, t)}
 
-    <div class="muted hotkeys">${t('hotkeys_html', { n: CHOICES.length, flag: TRACK_KEY })}</div>
+    <div class="muted hotkeys">${t('hotkeys_label')} ${hotkeyRows(t, true).map(([key, label]) => `${key} ${label}`).join(' · ')}</div>
 
 <script>
     const STATE = ${scriptJson(state)};
@@ -621,7 +671,8 @@ function renderItemPage(payload, token, t, langLink) {
     }
     // Letter hotkeys by key, or by physical key when the layout is not Latin
     // (a Russian layout gives с/о/л/щ for c/j/k/o).
-    const LETTER_CODES = { KeyC: 'c', KeyJ: 'j', KeyK: 'k', KeyO: 'o' };
+    const LETTER_CODES = {};
+    Object.keys(STATE.letters).forEach(function (k) { LETTER_CODES['Key' + k.toUpperCase()] = k; });
     document.addEventListener('keydown', function (e) {
         const el = e.target;
         const tag = el && el.tagName;
@@ -642,11 +693,11 @@ function renderItemPage(payload, token, t, langLink) {
             e.preventDefault(); save(); return;
         }
         const letter = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : LETTER_CODES[e.code];
-        switch (letter) {
-            case 'c': e.preventDefault(); document.getElementById('comment').focus(); break;
-            case 'j': if (STATE.next) goTo(STATE.next, STATE.next_player_link); break;
-            case 'k': if (STATE.prev) goTo(STATE.prev, STATE.prev_player_link); break;
-            case 'o': openPlayer(STATE.player_link); break;
+        switch (STATE.letters[letter]) {
+            case 'comment': e.preventDefault(); document.getElementById('comment').focus(); break;
+            case 'next': if (STATE.next) goTo(STATE.next, STATE.next_player_link); break;
+            case 'prev': if (STATE.prev) goTo(STATE.prev, STATE.prev_player_link); break;
+            case 'player': openPlayer(STATE.player_link); break;
         }
     });
     // Plain clicks on ◀ / ▶ / first open switch like j / k (a modified click

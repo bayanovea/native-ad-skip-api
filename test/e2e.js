@@ -4326,3 +4326,28 @@ test('review page: Russian by default, ?lang=en switches to English and sticks v
     saved.key('Enter');
     assert.equal(saved.els.status.textContent, 'No change: C1 is already Sponsor.');
 });
+
+test('review page: onboarding block, closed by default, on the batch list and the item page in both languages', async () => {
+    const batch = 'e2e-review-onboarding';
+    await seedKeyboardBatch(batch, 1);
+    const EN = translator('en');
+    const paths = [reviewPath('/admin/review'), reviewPath(`/admin/review/${batch}`)];
+    for (const [t, headers] of [[RU, {}], [EN, { Cookie: `${LANG_COOKIE}=en` }]]) {
+        for (const path of paths) {
+            const { status, body } = await request('GET', path, null, headers);
+            assert.equal(status, 200);
+            assert.ok(body.includes(`<details class="card onboarding">\n        <summary>${t('onb_summary')}</summary>`), `${t.lang} ${path}`);
+            assert.ok(!/<details[^>]*\bopen\b/.test(body), 'closed by default');
+            for (const s of ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'hotkeys', 'comments']) {
+                assert.ok(body.includes(`<h3>${t(`onb_${s}_title`)}</h3>`), `${t.lang} section ${s}`);
+            }
+            // Hotkeys come from the list the key handler uses (STATE.letters on the item page).
+            assert.ok(body.includes(`<td><kbd>1</kbd></td><td>${t('hotkey_verdict', { label: t.text('verdict_sponsor') })}</td>`));
+            assert.ok(body.includes(`<td><kbd>5</kbd></td><td>${t('hotkey_track')}</td>`));
+            assert.ok(body.includes(`<td><kbd>o</kbd></td><td>${t('hotkey_player')}</td>`));
+            assert.ok(body.includes(t('onb_player_html', { player: 'o', next: 'j', prev: 'k' })));
+        }
+    }
+    const page = loadKeyboardPage((await request('GET', paths[1], null)).body, { local: memoryStorage(), session: memoryStorage() });
+    assert.deepEqual({ ...page.state().letters }, { c: 'comment', j: 'next', k: 'prev', o: 'player' });
+});
