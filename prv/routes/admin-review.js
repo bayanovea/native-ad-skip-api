@@ -203,7 +203,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
     const rows = batches.map(b => `
             <tr>
                 <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${tok}">${escapeHtml(b.batch)}</a></td>
-                <td>${b.assignee ? escapeHtml(b.assignee) : `<span class="muted">${t('list_anyone')}</span>`}</td>
+                <td>${t(`state_${b.state}`, { name: b.locked_by })}</td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
@@ -222,7 +222,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
     </div>
     ${batches.length > 0 ? `
     <table>
-        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_assignee')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
+        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
         <tbody>${rows}</tbody>
     </table>` : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
 <script>
@@ -353,7 +353,7 @@ function renderItemPage(payload, token, t, langLink) {
         <a href="/admin/review?reviewer=${r}&amp;verifyBearerToken=${tok}">${t('item_all_batches')}</a>
         <strong>${escapeHtml(batch.batch)}</strong>
         <span>${t('item_progress', { decided: batch.decided, total: batch.total, open: batch.open })}</span>
-        <span class="muted">${t('item_reviewer_html', { name: reviewer })}${batch.assignee && batch.assignee !== reviewer ? ` <span class="warn">${t('item_assigned_to', { name: batch.assignee })}</span>` : ''}</span>
+        <span class="muted">${t('item_reviewer_html', { name: reviewer })}${batch.locked_by && batch.locked_by !== reviewer ? ` <span class="warn">${t('item_locked_by', { name: batch.locked_by })}</span>` : ''}</span>
         <span class="spacer"></span>
         ${navLink(nav.prev, `◀ ${nav.prev ? escapeHtml(nav.prev.item_code) : ''}`)}
         <strong>${escapeHtml(item.item_code)}</strong>
@@ -587,7 +587,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     }
 
     // GET /admin/review — reviewer picker, then the batch list with progress
-    // (the reviewer's own and unassigned batches; `show=all` for every batch).
+    // and state for this reviewer (closed batches only with `show=all`).
     router.get('/admin/review', handler(async (req, res) => {
         if (!authorized(req, res)) return;
         const reviewer = await reviewerOf(req);
@@ -603,7 +603,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             return;
         }
         const showAll = req.query.show === 'all';
-        const batches = await reviewRepository.listBatches({ reviewer: showAll ? null : reviewer });
+        const batches = await reviewRepository.listBatches({ reviewer, all: showAll });
         if (req.query.format === 'json') {
             res.json({ reviewer, batches });
             return;
@@ -687,7 +687,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             return;
         }
         const batchName = req.params.batch;
-        const progress = await reviewRepository.getBatchProgress(batchName);
+        const progress = await reviewRepository.getBatchProgress(batchName, reviewer);
         if (!progress) { res.status(404).send('Batch not found'); return; }
 
         const code = typeof req.query.item === 'string' ? req.query.item.trim() : '';

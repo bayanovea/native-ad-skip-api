@@ -15,7 +15,7 @@ const { Sequelize } = require('sequelize');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
 const { COOKIE: LANG_COOKIE, translator } = require('../lib/i18n');
-const { ReviewInputError } = createReviewRepository;
+const { ReviewInputError, ReviewConflictError } = createReviewRepository;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -2611,6 +2611,16 @@ async function reviewState(batch) {
     }
 }
 
+// Batch progress row as the repository and the JSON return it (3 items).
+function batchRow(batch, { decided, finished = [], locked_by = null, state = 'available', reviews_needed = 1 }) {
+    return { batch, total: 3, decided, open: 3 - decided, reviews_needed, finished, locked_by, locked_at: null, state };
+}
+
+// Raw-SQL items need their batch row, as the importer writes it.
+function insertBatchRow(c, batch) {
+    return c.query('INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING', [batch]);
+}
+
 test('review import: items and md verdicts imported, md untouched, backup written', async () => {
     const batch = 'e2e-review-import-basic';
     const md = copyReviewFixture(batch);
@@ -2822,6 +2832,82 @@ test('review import: works on review tables created without timestamp defaults; 
     }
 });
 
+test('schema one-off: batch assignee → exclusions and locks, column dropped; a second boot changes nothing', async () => {
+    const db = `${TEST_DB}_assignee`;
+    const env = { ...process.env, DB_NAME: db, DB_HOST, DB_PORT: String(DB_PORT) };
+    const sync = () => spawnSync('node', ['scripts/sync-db.js'], { cwd: APP_DIR, env, encoding: 'utf8' });
+    const admin = adminClient();
+    await admin.connect();
+    await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+    await admin.query(`CREATE DATABASE "${db}"`);
+    const c = adminClient(db);
+    let connected = false;
+    try {
+        let r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        await c.connect();
+        connected = true;
+        // The pre-lock shape: assignee, none of the lock columns.
+        await c.query(`ALTER TABLE prv_review_batches
+            DROP COLUMN reviews_needed, DROP COLUMN excluded, DROP COLUMN locked_by, DROP COLUMN locked_at,
+            ADD COLUMN assignee VARCHAR(64)`);
+        // [batch, assignee (undefined = no batch row), verdicts by reviewer]; every batch has items C1, C2.
+        const seed = [
+            ['g-started', 'gkshi', { gkshi: ['C1'] }],
+            ['g-untouched', 'gkshi', {}],
+            ['g-finished', 'gkshi', { gkshi: ['C1', 'C2'] }],
+            ['b-partial', 'bayanovea', { owner: ['C1'] }],                  // pre-reviewer verdict, renamed first
+            ['b-finished', 'bayanovea', { bayanovea: ['C1'], owner: ['C2'] }],
+            ['b-untouched', 'bayanovea', {}],
+            ['anyone', null, { gkshi: ['C1'] }],
+            ['no-row', undefined, {}],
+        ];
+        for (const [batch, assignee, verdicts] of seed) {
+            if (assignee !== undefined) await c.query('INSERT INTO prv_review_batches (batch, assignee) VALUES ($1, $2)', [batch, assignee]);
+            const ids = {};
+            for (const [pos, code] of ['C1', 'C2'].entries()) {
+                ids[code] = (await c.query(
+                    `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed)
+                     VALUES ($1, $2, $3, '-1_1', 10, 20, 'sponsor') RETURNING id`, [batch, code, pos + 1])).rows[0].id;
+            }
+            for (const [reviewer, codes] of Object.entries(verdicts)) {
+                for (const code of codes) {
+                    await c.query(`INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source) VALUES ($1, 'sponsor', $2, 'import')`,
+                        [ids[code], reviewer]);
+                }
+            }
+        }
+
+        r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        const columns = (await c.query(
+            `SELECT column_name FROM information_schema.columns WHERE table_name = 'prv_review_batches' ORDER BY column_name`)).rows
+            .map(row => row.column_name);
+        assert.deepEqual(columns, ['batch', 'created_at', 'excluded', 'locked_at', 'locked_by', 'reviews_needed']);
+        const batches = async () => (await c.query(
+            'SELECT batch, reviews_needed, excluded, locked_by, locked_at FROM prv_review_batches ORDER BY batch')).rows;
+        const after = await batches();
+        assert.deepEqual(after.map(b => [b.batch, b.reviews_needed, b.excluded, b.locked_by, b.locked_at != null]), [
+            ['anyone', 1, [], null, false],
+            ['b-finished', 1, [], null, false],
+            ['b-partial', 1, [], 'bayanovea', true],
+            ['b-untouched', 1, [], 'bayanovea', true],
+            ['g-finished', 1, ['bayanovea'], null, false],
+            ['g-started', 1, ['bayanovea'], 'gkshi', true],
+            ['g-untouched', 1, ['bayanovea'], null, false],
+            ['no-row', 1, [], null, false],
+        ]);
+
+        r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        assert.deepEqual(await batches(), after, 'second boot is a no-op');
+    } finally {
+        if (connected) await c.end();
+        await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+        await admin.end();
+    }
+});
+
 // ── Review repository (prv/repository/review.js) ──────────────────────────────
 
 // The repository is exercised in-process against the e2e DB (no route yet).
@@ -2945,9 +3031,10 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.equal((await repo.defaultItem(batch)).item_code, 'C7');
         assert.deepEqual(await repo.nextOpenItem(batch, 2), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' });
         assert.deepEqual(await repo.nextOpenItem(batch, 7), { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' }, 'wraps round to the first open item');
-        assert.deepEqual(await repo.getBatchProgress(batch), { batch, assignee: null, total: 3, decided: 2, open: 1 });
-        const listed = (await repo.listBatches()).find(b => b.batch === batch);
-        assert.deepEqual(listed, { batch, assignee: null, total: 3, decided: 2, open: 1 });
+        assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'), batchRow(batch, { decided: 2 }));
+        const listed = (await repo.listBatches({ reviewer: 'bayanovea' })).find(b => b.batch === batch);
+        assert.deepEqual(listed, batchRow(batch, { decided: 2 }));
+        assert.deepEqual(await repo.getBatchProgress(batch, 'gkshi'), batchRow(batch, { decided: 0 }), 'decided counts the reviewer\'s own verdicts');
 
         assert.deepEqual(await repo.neighbours(batch, 5),
             { prev: { item_code: 'C2', decided: true, link: 'https://example.invalid/video-1_456000901?t=4m20s' }, next: { item_code: 'C7', decided: false, link: 'https://example.invalid/video-1_456000903?t=1m0s' } });
@@ -3005,10 +3092,125 @@ test('review repository: latest verdict wins, history kept, blind until decided,
         assert.equal(await repo.firstOpenItem(batch), null);
         assert.equal(await repo.nextOpenItem(batch, 2), null);
         assert.equal((await repo.defaultItem(batch)).item_code, 'C7', 'all decided → last item');
-        assert.deepEqual(await repo.getBatchProgress(batch), { batch, assignee: null, total: 3, decided: 3, open: 0 });
+        assert.deepEqual(await repo.getBatchProgress(batch, 'bayanovea'), batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' }));
         assert.equal(await repo.getItem(batch, 'C99'), null);
         assert.equal(await repo.defaultItem('e2e-review-no-such-batch'), null);
     });
+});
+
+test('review repository: take / give up / finish, availability per reviewer, one of two concurrent takes wins', async () => {
+    const one = 'e2e-review-lock-one';
+    const two = 'e2e-review-lock-two';
+    const excl = 'e2e-review-lock-excluded';
+    const NEWCOMER = 'e2e-newcomer';
+    await withReviewRepo(async (repo, sequelize) => {
+        await sequelize.query('INSERT INTO prv_review_reviewers (code) VALUES (:code)', { replacements: { code: NEWCOMER } });
+        await repo.createBatch(two, { reviews_needed: 2 });
+        await repo.createBatch(excl, { excluded: ['bayanovea'] });
+    });
+    try {
+        for (const b of [one, two]) assert.equal(runImport(copyReviewFixture(b)).status, 0);   // bayanovea: C2, C5; C7 open
+        assert.equal(runImport(copyReviewFixture(excl), ['--reviewer', 'gkshi']).status, 0);
+
+        await withReviewRepo(async (repo) => {
+            const state = async (batch, who) => (await repo.getBatchProgress(batch, who)).state;
+            const conflict = (reason, locked_by = null) => (e) =>
+                e instanceof ReviewConflictError && e.reason === reason && e.locked_by === locked_by;
+            const inputError = (re) => (e) => e instanceof ReviewInputError && re.test(e.message);
+            const decide = async (batch, codes, who) => {
+                for (const code of codes) {
+                    const item = await repo.getItem(batch, code);
+                    await repo.recordVerdict({ item_id: item.id, verdict: 'not_ad', reviewer: who, source: 'page' });
+                }
+            };
+            const unlocked = (batch) => ({ batch, locked_by: null, locked_at: null });
+
+            // One review needed: bayanovea may come back to their half-done batch, gkshi may take it fresh.
+            assert.equal(await state(one, 'bayanovea'), 'available');
+            assert.equal(await state(one, 'gkshi'), 'available');
+            const lock = await repo.takeBatch(one, 'gkshi');
+            assert.equal(lock.batch, one);
+            assert.equal(lock.locked_by, 'gkshi');
+            assert.ok(lock.locked_at instanceof Date);
+            assert.deepEqual(await repo.takeBatch(one, 'gkshi'), lock, 'taking a batch you hold is a no-op');
+            assert.equal(await state(one, 'gkshi'), 'mine');
+            assert.equal(await state(one, 'bayanovea'), 'locked');
+            await assert.rejects(repo.takeBatch(one, 'bayanovea'), conflict('locked', 'gkshi'));
+            assert.equal(await repo.canDecide(one, 'gkshi'), true);
+            assert.equal(await repo.canDecide(one, 'bayanovea'), false);
+            await assert.rejects(repo.releaseBatch(one, 'bayanovea'), conflict('locked', 'gkshi'), 'not the holder, no force');
+
+            // gkshi decides C2 and gives up: the verdict stays, the lock goes.
+            await decide(one, ['C2'], 'gkshi');
+            assert.equal(await repo.releaseIfFinished(one, 'gkshi'), false, 'unfinished → lock kept');
+            assert.deepEqual(await repo.releaseBatch(one, 'gkshi'), unlocked(one));
+            assert.deepEqual(await repo.releaseBatch(one, 'gkshi'), unlocked(one), 'releasing a free batch is a no-op');
+            assert.equal((await repo.getItem(one, 'C2')).verdict.reviewer, 'gkshi');
+
+            // bayanovea takes it and finishes: lock cleared, the one review is done.
+            await repo.takeBatch(one, 'bayanovea');
+            await decide(one, ['C7'], 'bayanovea');
+            assert.equal(await repo.releaseIfFinished(one, 'bayanovea'), true);
+            assert.deepEqual(await repo.getBatchProgress(one, 'bayanovea'),
+                batchRow(one, { decided: 3, finished: ['bayanovea'], state: 'done' }));
+            assert.equal(await repo.canDecide(one, 'bayanovea'), true, 'may fix their own finished batch');
+            await assert.rejects(repo.takeBatch(one, 'bayanovea'), conflict('done'));
+            assert.equal(await state(one, NEWCOMER), 'closed', 'review count met → closed to newcomers');
+            await assert.rejects(repo.takeBatch(one, NEWCOMER), conflict('closed'));
+            // gkshi gave up halfway: the batch stays theirs to come back to.
+            assert.equal(await state(one, 'gkshi'), 'available');
+            await repo.takeBatch(one, 'gkshi');
+            assert.deepEqual(await repo.releaseBatch(one, 'bayanovea', { force: true }), unlocked(one), 'force release');
+            assert.equal(await state(one, 'gkshi'), 'available');
+
+            // Two reviews needed: after bayanovea finishes, others may still take it; after the second, nobody new.
+            await repo.takeBatch(two, 'bayanovea');
+            await decide(two, ['C7'], 'bayanovea');
+            assert.equal(await repo.releaseIfFinished(two, 'bayanovea'), true);
+            assert.equal(await state(two, 'bayanovea'), 'done');
+            assert.equal(await state(two, NEWCOMER), 'available');
+            await repo.takeBatch(two, 'gkshi');
+            await decide(two, ['C2', 'C5', 'C7'], 'gkshi');
+            assert.equal(await repo.releaseIfFinished(two, 'gkshi'), true);
+            assert.deepEqual(await repo.getBatchProgress(two, NEWCOMER),
+                batchRow(two, { decided: 0, finished: ['bayanovea', 'gkshi'], state: 'closed', reviews_needed: 2 }));
+
+            // Excluded reviewer: never available, and a holder does not make it "locked" for them.
+            assert.equal(await state(excl, 'bayanovea'), 'closed');
+            await assert.rejects(repo.takeBatch(excl, 'bayanovea'), conflict('closed'));
+            await repo.takeBatch(excl, NEWCOMER);
+            assert.equal(await state(excl, 'bayanovea'), 'closed');
+            assert.equal(await state(excl, 'gkshi'), 'locked');
+            assert.ok(!(await repo.listBatches({ reviewer: 'bayanovea' })).some(b => b.batch === excl));
+            assert.equal((await repo.listBatches({ reviewer: 'bayanovea', all: true })).find(b => b.batch === excl).state, 'closed');
+            await repo.releaseBatch(excl, NEWCOMER);
+
+            // Concurrent takes: exactly one wins, the other gets the winner's name.
+            for (let i = 0; i < 5; i++) {
+                const results = await Promise.allSettled([repo.takeBatch(excl, 'gkshi'), repo.takeBatch(excl, NEWCOMER)]);
+                const won = results.filter(r => r.status === 'fulfilled');
+                assert.equal(won.length, 1, JSON.stringify(results));
+                const lost = results.find(r => r.status === 'rejected').reason;
+                assert.ok(conflict('locked', won[0].value.locked_by)(lost), String(lost));
+                await repo.releaseBatch(excl, won[0].value.locked_by);
+            }
+
+            // createBatch never silently re-routes an existing batch.
+            await assert.rejects(repo.createBatch(two, { reviews_needed: 1 }), inputError(/needs 2 review\(s\), not 1/));
+            await assert.rejects(repo.createBatch(excl, { excluded: [] }), inputError(/excludes \{bayanovea\}, not \{\}/));
+            assert.equal((await repo.createBatch(excl, { excluded: ['bayanovea', 'bayanovea'] })).batch, excl);
+            assert.equal((await repo.createBatch(two)).reviews_needed, 2, 'nothing asked → stored row kept');
+            await assert.rejects(repo.createBatch('e2e-review-lock-bad', { excluded: ['nobody'] }), inputError(/unknown reviewer nobody/));
+            await assert.rejects(repo.createBatch('e2e-review-lock-bad', { reviews_needed: 0 }), inputError(/positive integer/));
+            await assert.rejects(repo.takeBatch(one, 'nobody'), inputError(/unknown reviewer nobody/));
+            assert.equal(await repo.takeBatch('e2e-review-no-such-batch', 'gkshi'), null);
+            assert.equal(await repo.releaseBatch('e2e-review-no-such-batch', 'gkshi'), null);
+        });
+    } finally {
+        // Later tests list the seeded reviewers only.
+        await withReviewRepo((repo, sequelize) =>
+            sequelize.query('DELETE FROM prv_review_reviewers WHERE code = :code', { replacements: { code: NEWCOMER } }));
+    }
 });
 
 // ── Review page (prv/routes/admin-review.js) ──────────────────────────────────
@@ -3061,12 +3263,12 @@ test('review page: default item is the first open one, blind until decided, deci
     // Batch list carries the progress.
     const list = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
     assert.equal(list.status, 200);
-    assert.deepEqual(list.body.batches.find(b => b.batch === batch), { batch, assignee: null, total: 3, decided: 2, open: 1 });
+    assert.deepEqual(list.body.batches.find(b => b.batch === batch), batchRow(batch, { decided: 2 }));
 
     // No ?item → first open (C7).
     let r = await getReview(batch, { format: 'json' });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body.batch, { batch, assignee: null, total: 3, decided: 2, open: 1 });
+    assert.deepEqual(r.body.batch, batchRow(batch, { decided: 2 }));
     const item = r.body.item;
     assert.equal(item.item_code, 'C7');
     assert.equal(item.verdict, null);
@@ -3118,7 +3320,7 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal(r.body.item.verdict.reviewer, 'gkshi');
     assert.equal(r.body.item.verdict.source, 'page');
     assert.deepEqual(r.body.item.flagged_by, [REVIEW_RUN]);
-    assert.deepEqual(r.body.batch, { batch, assignee: null, total: 3, decided: 3, open: 0 });
+    assert.deepEqual(r.body.batch, batchRow(batch, { decided: 2 }), 'gkshi\'s verdict is not bayanovea\'s progress');
     assert.equal(r.body.nav.first_open, null);
     // All decided → default is the last item.
     assert.equal((await getReview(batch, { format: 'json' })).body.item.item_code, 'C7');
@@ -3130,7 +3332,7 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal(r.body.item.verdict.comment, null);
     assert.deepEqual(r.body.item.history.map(h => h.verdict), ['not_ad', 'self_promotion']);
     const listAfter = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
-    assert.deepEqual(listAfter.body.batches.find(b => b.batch === batch), { batch, assignee: null, total: 3, decided: 3, open: 0 });
+    assert.deepEqual(listAfter.body.batches.find(b => b.batch === batch), batchRow(batch, { decided: 3, finished: ['bayanovea'], state: 'done' }));
 });
 
 test('review page: decide validation → 400 and no row written', async () => {
@@ -3234,6 +3436,7 @@ test('review page: user-controlled text is escaped in HTML and inline JSON', asy
             `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by)
              VALUES ($1, 'C1', 1, '-1_2', 30, 40, 'sponsor', $2, 'javascript:alert(3)', $3) RETURNING id`,
             [batch, evil, JSON.stringify([evil])])).rows[0].id;
+        await insertBatchRow(c, batch);
     } finally {
         await c.end();
     }
@@ -3276,6 +3479,7 @@ test('review page: signals panel renders markups, segments, votes and links for 
         await c.query(
             `INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, link, flagged_by)
              VALUES ($1, 'C1', 1, $2, 200, 230, 'sponsor', 'https://example.invalid/video-1_9?t=3m18s', '["run-sig"]')`, [batch, nid]);
+        await insertBatchRow(c, batch);
         ids.video = (await one(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 900, NOW(), NOW()) RETURNING id`, [nid])).id;
         ids.user = (await one(
             `INSERT INTO users (generated_user_id, rating, banned_at, "createdAt", "updatedAt") VALUES ('e2e-review-page-banned', -120, NOW(), NOW(), NOW()) RETURNING id`)).id;
@@ -3508,6 +3712,7 @@ async function seedKeyboardBatch(batch, count) {
                  VALUES ($1, $2, $3, '-1_3', $4, $5, 'sponsor', 'cue', $6, '["run-kbd"]')`,
                 [batch, `C${pos}`, pos, 10 * pos, 10 * pos + 5, `https://example.invalid/video-1_3?t=${10 * pos - 2}s`]);
         }
+        await insertBatchRow(c, batch);
     } finally {
         await c.end();
     }
@@ -3675,41 +3880,52 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
     ]);
 });
 
-test('review page: batch list shows the reviewer\'s own and unassigned batches; show=all shows every batch', async () => {
-    const mine = 'e2e-review-assigned-mine';
-    const theirs = 'e2e-review-assigned-theirs';
-    const anyone = 'e2e-review-assigned-anyone';
-    assert.equal(runImport(copyReviewFixture(mine), ['--assignee', REVIEWER]).status, 0);
-    const r = runImport(copyReviewFixture(theirs), ['--assignee=gkshi', '--reviewer', 'gkshi']);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /assignee: gkshi/);
-    assert.equal(runImport(copyReviewFixture(anyone)).status, 0);
-    // Re-import under another assignee is refused.
-    const bad = runImport(copyReviewFixture(theirs), ['--batch', theirs, '--assignee', REVIEWER]);
-    assert.equal(bad.status, 1);
-    assert.match(bad.stderr, /assigned to gkshi, not bayanovea/);
-    assert.equal(runImport(copyReviewFixture(theirs), ['--batch', theirs]).status, 0, 'no assignee asked → fine');
-    assert.equal(runImport(copyReviewFixture(anyone), ['--batch', anyone, '--assignee', 'nobody']).status, 1, 'unknown reviewer');
+test('review page: batch list shows the reviewer\'s state per batch; closed batches only with show=all', async () => {
+    const mine = 'e2e-review-state-mine';
+    const theirs = 'e2e-review-state-theirs';
+    const anyone = 'e2e-review-state-anyone';
+    const excluded = 'e2e-review-state-excluded';
+    await withReviewRepo((repo) => repo.createBatch(excluded, { excluded: [REVIEWER] }));
+    assert.equal(runImport(copyReviewFixture(mine)).status, 0);
+    for (const b of [theirs, anyone, excluded]) {
+        const r = runImport(copyReviewFixture(b), ['--reviewer', 'gkshi']);
+        assert.equal(r.status, 0, r.stderr);
+    }
     assert.deepEqual((await reviewState(theirs)).verdicts.map(v => v.reviewer), ['gkshi', 'gkshi'], '--reviewer names the md verdicts');
+    const gone = runImport(copyReviewFixture(anyone), ['--batch', anyone, '--assignee', 'gkshi']);
+    assert.equal(gone.status, 2);
+    assert.match(gone.stderr, /--assignee is gone/);
+    await withReviewRepo(async (repo) => {
+        await repo.takeBatch(mine, REVIEWER);
+        await repo.takeBatch(theirs, 'gkshi');
+    });
 
-    const names = (res) => res.body.batches.map(b => b.batch).filter(b => b.startsWith('e2e-review-assigned-')).sort();
+    const states = (res) => Object.fromEntries(res.body.batches
+        .filter(b => b.batch.startsWith('e2e-review-state-')).map(b => [b.batch, [b.state, b.locked_by]]));
     const asMe = await request('GET', reviewPath('/admin/review', { format: 'json' }), null);
     assert.equal(asMe.body.reviewer, REVIEWER);
-    assert.deepEqual(names(asMe), [anyone, mine]);
-    assert.deepEqual(asMe.body.batches.find(b => b.batch === mine), { batch: mine, assignee: REVIEWER, total: 3, decided: 2, open: 1 });
+    assert.deepEqual(states(asMe), { [mine]: ['mine', REVIEWER], [theirs]: ['locked', 'gkshi'], [anyone]: ['available', null] });
+    const row = asMe.body.batches.find(b => b.batch === mine);
+    assert.ok(row.locked_at);
+    assert.deepEqual({ ...row, locked_at: null }, batchRow(mine, { decided: 2, locked_by: REVIEWER, state: 'mine' }));
+    assert.ok(!('assignee' in row));
     const asGkshi = await request('GET', reviewPath('/admin/review', { format: 'json', reviewer: 'gkshi' }), null);
-    assert.deepEqual(names(asGkshi), [anyone, theirs]);
+    assert.deepEqual(states(asGkshi), {
+        [mine]: ['locked', REVIEWER], [theirs]: ['mine', 'gkshi'], [anyone]: ['available', null], [excluded]: ['available', null],
+    });
     const all = await request('GET', reviewPath('/admin/review', { format: 'json', show: 'all' }), null);
-    assert.deepEqual(names(all), [anyone, mine, theirs]);
+    assert.deepEqual(states(all)[excluded], ['closed', null]);
 
     const html = await request('GET', reviewPath('/admin/review'), null);
     assert.ok(html.body.includes(RU('toolbar_reviewer_html', { name: REVIEWER })));
     assert.ok(html.body.includes(`/admin/review/${mine}?reviewer=${REVIEWER}&amp;verifyBearerToken=`));
-    assert.ok(!html.body.includes(`/admin/review/${theirs}?`), 'other reviewer\'s batch hidden by default');
+    assert.ok(html.body.includes(RU('state_mine')));
+    assert.ok(html.body.includes(RU('state_locked', { name: 'gkshi' })));
+    assert.ok(!html.body.includes(`/admin/review/${excluded}?`), 'closed batch hidden by default');
     assert.ok(html.body.includes('show=all'));
-    // Opening another reviewer's batch is allowed but says so.
+    // Opening a batch someone else holds is allowed but says so.
     const theirsPage = await request('GET', reviewPath(`/admin/review/${theirs}`), null);
-    assert.ok(theirsPage.body.includes(RU('item_assigned_to', { name: 'gkshi' })));
+    assert.ok(theirsPage.body.includes(RU('item_locked_by', { name: 'gkshi' })));
 });
 
 test('review page: a save closes only the cross-origin player tab it was switched from', async () => {

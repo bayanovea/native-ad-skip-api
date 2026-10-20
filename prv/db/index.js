@@ -175,11 +175,15 @@ module.exports = function(sequelize) {
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_review_reviewers', timestamps: false });
 
-    // One row per batch; `assignee` null = any reviewer may take it (first come).
-    // Items reference the batch by name; a batch without a row counts as unassigned.
+    // One row per batch: how many reviewers must finish it, who may never take
+    // it, and its current holder (first come; see prv/repository/review.js).
+    // Items reference the batch by name.
     const ReviewBatch = sequelize.define('review_batch', {
         batch: { type: DataTypes.STRING(64), primaryKey: true },
-        assignee: { type: DataTypes.STRING(64), allowNull: true },
+        reviews_needed: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+        excluded: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false, defaultValue: [] },
+        locked_by: { type: DataTypes.STRING(64), allowNull: true },
+        locked_at: { type: DataTypes.DATE, allowNull: true },
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_review_batches', timestamps: false });
 

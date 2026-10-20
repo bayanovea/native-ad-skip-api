@@ -125,11 +125,11 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 **Files:**
 - Modify: `prv/db/index.js`, `lib/schema.js`, `prv/repository/review.js`, `test/e2e.js`
 
-- [ ] model columns `reviews_needed`, `excluded`, `locked_by`, `locked_at`; remove `assignee`
-- [ ] `lib/schema.js`: ADD COLUMN IF NOT EXISTS + the guarded one-off (gkshi → excluded bayanovea; unfinished assignee → lock; DROP `assignee`); drop the 2026-10-18 one-off that inserted `assignee` rows (replace with a plain batch-row insert)
-- [ ] repository: per-reviewer `batchProgress` with `state`, `takeBatch`, `releaseBatch({force})`, `canDecide`, finish-on-last-verdict helper; `createBatch(batch, {reviews_needed, excluded})`
-- [ ] e2e (repository level): availability rules (first take, second review excludes workers, excluded list, come-back after give-up), concurrent take → one wins, one-off on a DB seeded with an `assignee` column (gkshi and partial-bayanovea cases), idempotent second boot
-- [ ] `make test-e2e` passes
+- [x] model columns `reviews_needed`, `excluded`, `locked_by`, `locked_at`; remove `assignee`
+- [x] `lib/schema.js`: ADD COLUMN IF NOT EXISTS + the guarded one-off (gkshi → excluded bayanovea; unfinished assignee → lock; DROP `assignee`); drop the 2026-10-18 one-off that inserted `assignee` rows (replace with a plain batch-row insert)
+- [x] repository: per-reviewer `batchProgress` with `state`, `takeBatch`, `releaseBatch({force})`, `canDecide`, finish-on-last-verdict helper; `createBatch(batch, {reviews_needed, excluded})`
+- [x] e2e (repository level): availability rules (first take, second review excludes workers, excluded list, come-back after give-up), concurrent take → one wins, one-off on a DB seeded with an `assignee` column (gkshi and partial-bayanovea cases), idempotent second boot
+- [x] `make test-e2e` passes
 
 ### Task 4: Take / give up / decide guard on the page
 
