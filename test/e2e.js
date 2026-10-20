@@ -3060,6 +3060,97 @@ test('review import: rows of an older image (no sheet) are found by sheet, and i
     assert.equal(sync.status, 0, sync.stderr);
 });
 
+function runSplit(...args) {
+    const r = spawnSync('node', ['scripts/split-review-batch.js', ...args], {
+        cwd: APP_DIR,
+        env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) },
+        encoding: 'utf8',
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+test('review split: a batch over the limit becomes balanced parts; verdicts, settings and per-part states carry over; refusals', async () => {
+    const sheet = 'e2e-review-split';
+    const excl = 'e2e-split-excluded';
+    await withReviewRepo((repo) => repo.createReviewer(excl));
+    try {
+        const imp = runImport(writeReviewSheet(sheet, 64, firstVerdicts(64)), ['--max-items', '64', '--reviews', '2', '--exclude', excl]);
+        assert.equal(imp.status, 0, imp.stderr);
+        const whole = [[sheet, 64, 1, 64, 2, [excl], null]];
+        assert.deepEqual(await sheetParts(sheet), whole);
+
+        const ids = Object.fromEntries((await dbQuery('SELECT item_code, id FROM prv_review_items WHERE batch = $1', [sheet]))
+            .map((r) => [r.item_code, r.id]));
+        await withReviewRepo(async (repo) => {
+            await repo.takeBatch(sheet, 'gkshi');
+            for (let k = 1; k <= 30; k++) {
+                await repo.recordVerdict({ item_id: ids[`C${k}`], verdict: 'not_ad', reviewer: 'gkshi', source: 'page' });
+            }
+        });
+        const verdicts = () => dbQuery('SELECT id, item_id, reviewer, verdict FROM prv_review_verdicts WHERE item_id = ANY($1) ORDER BY id',
+            [Object.values(ids)]);
+        const before = await verdicts();
+        assert.equal(before.length, 94);
+
+        const locked = runSplit(sheet);
+        assert.equal(locked.status, 1, locked.stdout);
+        assert.match(locked.stderr, new RegExp(`split failed: batch ${sheet} is locked by gkshi: release it on the page first`));
+        await withReviewRepo((repo) => repo.releaseBatch(sheet, 'gkshi'));
+        const within = runSplit(sheet, '--max-items', '64');
+        assert.equal(within.status, 1, within.stdout);
+        assert.match(within.stderr, new RegExp(`batch ${sheet} has 64 items, within the limit of 64`));
+        assert.deepEqual(await sheetParts(sheet), whole);
+
+        const r = runSplit(sheet);
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.stdout.trim(), `batch ${sheet} (64 items, sheet ${sheet}) split into `
+            + `${sheet}-p1 (22 items), ${sheet}-p2 (21 items), ${sheet}-p3 (21 items)`);
+        assert.deepEqual(await sheetParts(sheet), [
+            [`${sheet}-p1`, 22, 1, 22, 2, [excl], null],
+            [`${sheet}-p2`, 21, 23, 43, 2, [excl], null],
+            [`${sheet}-p3`, 21, 44, 64, 2, [excl], null],
+        ]);
+        assert.deepEqual(await dbQuery('SELECT batch FROM prv_review_batches WHERE batch = $1', [sheet]), [], 'old batch row gone');
+        assert.deepEqual(await verdicts(), before, 'verdicts stay on their items');
+        const parts = [1, 2, 3].map((k) => `${sheet}-p${k}`);
+        await withReviewRepo(async (repo) => {
+            const states = async (reviewer) => (await repo.listBatches({ reviewer, all: true }))
+                .filter((b) => parts.includes(b.batch)).map((b) => [b.batch, b.state, b.decided]);
+            assert.deepEqual(await states('gkshi'), [[parts[0], 'done', 22], [parts[1], 'available', 8], [parts[2], 'available', 0]]);
+            assert.deepEqual(await states('bayanovea'), [[parts[0], 'done', 22], [parts[1], 'done', 21], [parts[2], 'done', 21]]);
+            assert.deepEqual((await states(excl)).map((s) => s[1]), ['closed', 'closed', 'closed']);
+        });
+
+        const again = runImport(writeReviewSheet(sheet, 64, firstVerdicts(64)));
+        assert.equal(again.status, 0, again.stderr);
+        assert.match(again.stdout, /items inserted: 0\nitems already present: 64 /);
+
+        const twice = runSplit(sheet);
+        assert.equal(twice.status, 1, twice.stdout);
+        assert.match(twice.stderr, new RegExp(`batch ${sheet} is gone: already split into ${parts.join(', ')}`));
+        assert.equal((await sheetParts(sheet)).length, 3);
+
+        const clash = 'e2e-review-clash';
+        assert.equal(runImport(writeReviewSheet(clash, 40), ['--max-items', '40']).status, 0);
+        await withReviewRepo((repo) => repo.createBatch(`${clash}-p2`));
+        const refused = runSplit(clash);
+        assert.equal(refused.status, 1, refused.stdout);
+        assert.match(refused.stderr, new RegExp(`batch ${clash}-p2 already exists; nothing split`));
+        assert.deepEqual(await sheetParts(clash), [[clash, 40, 1, 40, 1, [], null]]);
+
+        const unknown = runSplit('e2e-review-no-such-batch');
+        assert.equal(unknown.status, 1);
+        assert.match(unknown.stderr, /unknown batch e2e-review-no-such-batch/);
+        for (const args of [[], ['x', '--max-items', '0'], ['x', 'y'], ['x', '--bogus']]) {
+            assert.equal(runSplit(...args).status, 2, args.join(' '));
+        }
+    } finally {
+        // Later tests list the seeded reviewers only.
+        await withReviewRepo((repo, sequelize) =>
+            sequelize.query('DELETE FROM prv_review_reviewers WHERE code = :code', { replacements: { code: excl } }));
+    }
+});
+
 test('review import: works on review tables created without timestamp defaults; sync-db.js adds them', async () => {
     // The local dump's review tables were created by sync() from the first
     // model (JS-only DataTypes.NOW): created_at / decided_at NOT NULL with no

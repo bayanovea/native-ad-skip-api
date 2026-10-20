@@ -1,5 +1,5 @@
 const { QueryTypes } = require('sequelize');
-const { VERDICTS } = require('../../lib/review-sheet');
+const { VERDICTS, splitSheet } = require('../../lib/review-sheet');
 const { REVIEWER_MAX } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
@@ -480,6 +480,56 @@ module.exports = function createReviewRepository(models, sequelize) {
                   ORDER BY i.position, i.id`,
                 { replacements: { sheet }, type: QueryTypes.SELECT, transaction }
             );
+        },
+
+        /**
+         * Split `batch` into balanced parts `<batch>-p1`, … of at most `maxItems`
+         * items (splitSheet), in one transaction under the batch row lock: the
+         * parts get its `reviews_needed` / `excluded`, its items keep their sheet
+         * and move, then its row is deleted. Verdicts stay on the items. Refuses
+         * (ReviewInputError) an unknown or locked batch, one within the limit and
+         * one whose part names exist. Returns `{ sheet, total, parts: [{ batch, total }] }`.
+         * Used by scripts/split-review-batch.js.
+         */
+        async splitBatch(batch, maxItems) {
+            return sequelize.transaction(async (transaction) => {
+                const holder = await this.lockBatchRow(batch, { transaction });
+                const row = await models.ReviewBatch.findByPk(batch, { transaction });
+                if (!row) {
+                    const parts = await sequelize.query('SELECT DISTINCT batch FROM prv_review_items WHERE sheet = :batch ORDER BY batch',
+                        { replacements: { batch }, type: QueryTypes.SELECT, transaction });
+                    throw new ReviewInputError(parts.length
+                        ? `batch ${batch} is gone: already split into ${parts.map((p) => p.batch).join(', ')}`
+                        : `unknown batch ${batch}`);
+                }
+                if (holder != null) throw new ReviewInputError(`batch ${batch} is locked by ${holder}: release it on the page first`);
+                const items = await sequelize.query(
+                    'SELECT id, position, COALESCE(sheet, batch) AS sheet FROM prv_review_items WHERE batch = :batch',
+                    { replacements: { batch }, type: QueryTypes.SELECT, transaction });
+                if (items.length <= maxItems) {
+                    throw new ReviewInputError(`batch ${batch} has ${items.length} items, within the limit of ${maxItems}`);
+                }
+                const parts = splitSheet(batch, items, maxItems);
+                for (const part of parts) {
+                    if (await models.ReviewBatch.findByPk(part.batch, { transaction }) || await this.batchHasItems(part.batch, { transaction })) {
+                        throw new ReviewInputError(`batch ${part.batch} already exists; nothing split`);
+                    }
+                }
+                // A pre-sheet row's sheet is its batch: set it before the move so the items stay findable by sheet.
+                await sequelize.query('UPDATE prv_review_items SET sheet = COALESCE(sheet, batch) WHERE batch = :batch',
+                    { replacements: { batch }, transaction });
+                for (const part of parts) {
+                    await models.ReviewBatch.create({ batch: part.batch, reviews_needed: row.reviews_needed, excluded: row.excluded }, { transaction });
+                    await sequelize.query('UPDATE prv_review_items SET batch = :part WHERE id IN (:ids)',
+                        { replacements: { part: part.batch, ids: part.items.map((it) => it.id) }, transaction });
+                }
+                await row.destroy({ transaction });
+                return {
+                    sheet: items[0].sheet,
+                    total: items.length,
+                    parts: parts.map((p) => ({ batch: p.batch, total: p.items.length })),
+                };
+            });
         },
 
         /** True when `batch` has items (of any sheet). */

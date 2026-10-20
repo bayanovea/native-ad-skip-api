@@ -224,9 +224,52 @@ test('review export: the .sh wrapper writes the same TSV through psql, a reviewe
 
         const bad = run('export-no-such-batch');
         assert.equal(bad.status, 1);
-        assert.match(bad.stderr, /unknown batch export-no-such-batch/);
+        assert.match(bad.stderr, /unknown sheet or batch export-no-such-batch/);
         assert.equal(run('a', 'b', 'c').status, 2);
         assert.deepEqual(files(), written, 'nothing written');
+    } finally {
+        fs.rmSync(data, { recursive: true, force: true });
+    }
+});
+
+test('review export: a split sheet exports the same TSV under its name; a part exports its own items', async () => {
+    const b = 'export-split';
+    await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi') ON CONFLICT DO NOTHING");
+    await q(`INSERT INTO prv_review_batches (batch) VALUES ('${b}')`);
+    // No sheet column value, as on rows imported before sheets existed.
+    for (let k = 1; k <= 64; k++) {
+        const id = await addItem(b, `C${k}`, k, `-1_${k}`, 10 * k, 10 * k + 5, 'sponsor');
+        if (k % 2 === 0) await addVerdict(id, 'not_ad', `owner ${k}`, '2026-10-15T10:00:00Z');
+        if (k <= 30) await addVerdict(id, 'sponsor', null, '2026-10-15T11:00:00Z', 'gkshi');
+    }
+    const whole = await exportTsv(b);
+    const gkshi = await exportTsv(b, 'gkshi');
+    assert.equal(whole.split('\n').length - 2, 47);
+
+    const split = spawnSync('node', [path.join(__dirname, '..', 'scripts', 'split-review-batch.js'), b], {
+        encoding: 'utf8', env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) } });
+    assert.equal(split.status, 0, split.stderr);
+    assert.deepEqual((await q('SELECT DISTINCT batch, sheet FROM prv_review_items WHERE sheet = $1 ORDER BY batch', [b]))
+        .map((r) => r.batch), [`${b}-p1`, `${b}-p2`, `${b}-p3`]);
+
+    assert.equal(await exportTsv(b), whole);
+    assert.equal(await exportTsv(b, 'gkshi'), gkshi);
+    const lines = whole.split('\n');
+    assert.equal(await exportTsv(`${b}-p1`), [lines[0], ...lines.slice(1).filter((l) => /\tC([1-9]|1\d|2[0-2])\t/.test(l)), ''].join('\n'));
+
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'review-export-split-'));
+    try {
+        const r = spawnSync('sh', [SH_FILE, b], {
+            encoding: 'utf8',
+            env: {
+                ...process.env, ADSKIP_DATA: data,
+                PGHOST: DB_HOST, PGPORT: String(DB_PORT), PGUSER: DB_USER, PGPASSWORD: DB_PASSWORD, PGDATABASE: TEST_DB,
+            },
+        });
+        assert.equal(r.status, 0, r.stderr);
+        const out = path.join(data, 'review', `${b}.verdicts.tsv`);
+        assert.equal(r.stdout.trim(), `wrote ${out}: 47 verdicts of 64 items`);
+        assert.equal(fs.readFileSync(out, 'utf8'), whole);
     } finally {
         fs.rmSync(data, { recursive: true, force: true });
     }

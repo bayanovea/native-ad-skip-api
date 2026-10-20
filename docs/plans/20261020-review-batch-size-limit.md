@@ -49,9 +49,9 @@ Why a `sheet` column and not a name pattern (`<sheet>-pN` parsed back): a sheet 
 - Create: `scripts/split-review-batch.js`
 - Modify: `scripts/export-review-verdicts.sh`, `scripts/export-review-verdicts.sql`, `test/e2e.js`, `test/review-export.test.js`, `Makefile` if needed
 
-- [ ] split script with the rules above; prints the parts and their sizes
-- [ ] export: `<sheet|batch> [reviewer]` → items where `sheet = name OR batch = name`; output file name unchanged
-- [ ] tests: split a 64-item batch with verdicts from two reviewers → 3 parts, verdicts and per-part states correct, locked batch refused, ≤ 30 refused, idempotent second run refused cleanly; export of a split sheet equals the export before the split
+- [x] split script with the rules above; prints the parts and their sizes
+- [x] export: `<sheet|batch> [reviewer]` → items where `sheet = name OR batch = name`; output file name unchanged
+- [x] tests: split a 64-item batch with verdicts from two reviewers → 3 parts, verdicts and per-part states correct, locked batch refused, ≤ 30 refused, idempotent second run refused cleanly; export of a split sheet equals the export before the split
 
 ### Task 3: Docs
 
