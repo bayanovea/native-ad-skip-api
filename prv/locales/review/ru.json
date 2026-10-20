@@ -1,0 +1,11 @@
+{
+  "page_title": "Проверка",
+  "lang_switch": "English",
+  "picker_prompt": "Кто вы? Все вердикты сохраняются под этим именем.",
+  "picker_empty": "Нет ни одного проверяющего (prv_review_reviewers).",
+  "toolbar_reviewer_html": "Проверяющий: <strong>{name}</strong>",
+  "toolbar_switch": "сменить",
+  "toolbar_my_batches": "мои пачки",
+  "toolbar_all_batches": "все пачки",
+  "toolbar_json": "JSON"
+}

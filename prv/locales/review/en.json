@@ -1,0 +1,11 @@
+{
+  "page_title": "Review",
+  "lang_switch": "Русский",
+  "picker_prompt": "Who are you? Every verdict is saved under this name.",
+  "picker_empty": "No reviewers registered (prv_review_reviewers).",
+  "toolbar_reviewer_html": "Reviewer: <strong>{name}</strong>",
+  "toolbar_switch": "switch",
+  "toolbar_my_batches": "my batches",
+  "toolbar_all_batches": "all batches",
+  "toolbar_json": "JSON"
+}

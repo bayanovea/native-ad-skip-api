@@ -104,10 +104,10 @@ Derived, per batch: `workers` = distinct reviewers with a verdict on any item; `
 - Create: `lib/i18n.js`, `prv/locales/review/ru.json`, `prv/locales/review/en.json`, `test/i18n.test.js`
 - Modify: `Makefile` (add the test to `test-unit`)
 
-- [ ] `lib/i18n.js`: load both files once, `translator(lang)` with `{name}` interpolation, `pickLang(req)` (query → cookie header → `ru`)
-- [ ] seed locale files with the keys the next tasks need (start with toolbar/picker strings)
-- [ ] unit tests: interpolation, unknown lang → ru, missing key, ru/en key parity, `_html` rule
-- [ ] `make test-unit` passes
+- [x] `lib/i18n.js`: load both files once, `translator(lang)` with `{name}` interpolation, `pickLang(req)` (query → cookie header → `ru`)
+- [x] seed locale files with the keys the next tasks need (start with toolbar/picker strings)
+- [x] unit tests: interpolation, unknown lang → ru, missing key, ru/en key parity, `_html` rule
+- [x] `make test-unit` passes
 
 ### Task 2: Translate the existing pages
 

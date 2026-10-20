@@ -51,7 +51,7 @@ make test-e2e                                   # Full Docker e2e: spins up Post
 make test-unit                                  # DB-free Node unit tests (no Docker)
 ```
 
-`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL in its own DB, plus `scripts/export-review-verdicts.sh` through psql: the e2e compose file builds the image with `EXTRA_PACKAGES=postgresql-client`, the prod image has no psql). `make test-unit` runs the DB-free unit tests: `test/review-sheet.test.js`, `test/find-video-for-read.test.js`, `test/prometheus-wrapper.test.js`, `test/redact-request.test.js`, `test/validate-intervals.test.js`.
+`make test-e2e` runs `test/e2e.js` (Node `node:test`) and is the canonical end-to-end suite. It also runs `test/moderation-resolver.test.js` and `test/review-export.test.js` (the review export SQL in its own DB, plus `scripts/export-review-verdicts.sh` through psql: the e2e compose file builds the image with `EXTRA_PACKAGES=postgresql-client`, the prod image has no psql). `make test-unit` runs the DB-free unit tests: `test/review-sheet.test.js`, `test/find-video-for-read.test.js`, `test/prometheus-wrapper.test.js`, `test/redact-request.test.js`, `test/validate-intervals.test.js`, `test/i18n.test.js`.
 
 ### Ops
 
