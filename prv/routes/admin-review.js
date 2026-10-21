@@ -142,6 +142,16 @@ function presentItem(item) {
     };
 }
 
+// The longest known duration of the item's video when the item starts after
+// it (the subtitle track is from a longer cut, so the player opens at 0),
+// else null. Shown as a warning so the assessor does not take it for a bug.
+function beyondVideo(item, videos) {
+    const durations = (videos || []).map(v => Number(v.duration)).filter(d => d > 0);
+    if (!durations.length) return null;
+    const longest = Math.max(...durations);
+    return Number(item.start) > longest ? longest : null;
+}
+
 // `reviewer`'s latest verdict on a repository item (its history is newest first), or null.
 function ownVerdict(item, reviewer) {
     return item.history.find(h => h.reviewer === reviewer) || null;
@@ -198,6 +208,7 @@ const STYLE = `
         .signals-line { font-size: 0.85rem; margin-bottom: 8px; }
         .rules { font-size: 0.85rem; color: #cbd5e1; line-height: 1.5; }
         .rules li { margin-left: 18px; }
+        .flags-hint { font-size: 0.8rem; margin: -4px 0 6px; }
         .flag-row { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; font-size: 0.9rem; }
         .flag-row input { width: 18px; height: 18px; accent-color: #f59e0b; }
         .flag-row .who { color: #64748b; font-size: 0.8rem; }
@@ -497,6 +508,7 @@ function renderItemPage(payload, token, t, langLink) {
         ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">${t('item_open_player')}</a>
         <span class="muted">${t('item_player_offset')}</span>`
         : `<span class="muted">${t('item_no_player')}</span>`}
+        ${item.beyond_video_s != null ? `<div class="warn">${t('item_beyond_video_warn', { seconds: item.beyond_video_s })}</div>` : ''}
         ${item.cues ? `<div class="cues">${icon(QUOTE_ICON, 'quote-icon')}<div class="cues-text">${escapeHtml(item.cues)}</div></div>` : ''}
         <div class="muted item-id">${escapeHtml(item.item_code)} · ${escapeHtml(item.native_id)}</div>
     </div>
@@ -508,7 +520,8 @@ function renderItemPage(payload, token, t, langLink) {
         <label>${t('verdict_prompt_html')}</label>
         <div class="verdicts">${verdictButtons}
         </div>
-        <label>${t('video_label')}</label>
+        <label title="${t('flags_hint')}">${t('flags_label')}</label>
+        <div class="muted flags-hint">${t('flags_hint')}</div>
         <div class="flag-row">
             <input type="checkbox" id="track-flag"${trackOn ? ' checked' : ''} onchange="setStatus('')"${off}>
             <label for="track-flag" style="margin:0;color:#e2e8f0;font-size:0.9rem"><kbd>${TRACK_KEY}</kbd> ${t('track_flag')}</label>
@@ -935,6 +948,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             reviewRepository.getSignals(item.native_id, item.start, item.end),
             reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
         ]);
+        item.beyond_video_s = beyondVideo(item, signals.videos);
         const payload = {
             reviewer,
             batch: progress,

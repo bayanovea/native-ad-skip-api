@@ -4264,11 +4264,23 @@ test('review page: track flag (5) is saved per video next to the verdict; a flag
     const storages = { local: memoryStorage(), session: memoryStorage() };
     const itemPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
     const gkshiPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=gkshi&verifyBearerToken=${MOD_AUTH}`;
-    await (async () => { const c = adminClient(TEST_DB); await c.connect(); await c.query(`DELETE FROM prv_review_video_flags WHERE native_id = '-1_3'`); await c.end(); })();
+    // A videos row shorter than C3's start (30 s): the page warns on C3 only.
+    await (async () => {
+        const c = adminClient(TEST_DB); await c.connect();
+        await c.query(`DELETE FROM prv_review_video_flags WHERE native_id = '-1_3'`);
+        await c.query(`DELETE FROM videos WHERE native_id = '-1_3'`);
+        await c.query(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ('-1_3', 25, NOW(), NOW())`);
+        await c.end();
+    })();
 
     // 5 toggles the box; the flag is not a verdict (Enter still asks for one).
     let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
     assert.ok(html.includes(RU('track_flag')));
+    assert.ok(html.includes(RU('flags_hint')));
+    assert.ok(!html.includes(RU('item_beyond_video_warn', { seconds: 25 })), 'C1 (10 s) is inside the video');
+    const c3 = (await request('GET', itemPath('C3') + '&format=json', null)).body;
+    assert.equal(c3.item.beyond_video_s, 25);
+    assert.ok((await request('GET', itemPath('C3'), null)).body.includes(RU('item_beyond_video_warn', { seconds: 25 })));
     assert.equal(page.els['track-flag'].checked, false);
     page.key('5');
     assert.equal(page.els['track-flag'].checked, true);
