@@ -775,6 +775,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     // and state for this reviewer (closed batches only with `show=all`).
     router.get('/admin/review', handler(async (req, res) => {
         if (!authorized(req, res)) return;
+        await reviewRepository.releaseIdleLocks();
         const reviewer = await reviewerOf(req);
         if (!reviewer) {
             const reviewers = await reviewRepository.listReviewers();
@@ -836,6 +837,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     // again (a flag-only save, a stray Enter).
     router.post('/admin/review/decide', handler(async (req, res) => {
         if (!authorized(req, res)) return;
+        await reviewRepository.releaseIdleLocks();
         const body = req.body;
         if (!body || typeof body !== 'object' || Array.isArray(body)) {
             res.status(400).send('request body must be a JSON object');
@@ -902,6 +904,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     function lockRoute(action) {
         return handler(async (req, res) => {
             if (!authorized(req, res)) return;
+            await reviewRepository.releaseIdleLocks();
             const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
             const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : '';
             try {
@@ -925,6 +928,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     // Needs a reviewer: without one the HTML goes back to the picker, JSON gets 400.
     router.get('/admin/review/:batch', handler(async (req, res) => {
         if (!authorized(req, res)) return;
+        await reviewRepository.releaseIdleLocks();
         const reviewer = await reviewerOf(req);
         if (!reviewer) {
             if (req.query.format === 'json') { res.status(400).send('reviewer required'); return; }

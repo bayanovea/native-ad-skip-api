@@ -8,6 +8,7 @@ const VALID_SOURCES = new Set(['page', 'import']);
 const VIDEO_FLAGS = ['track_mismatch'];
 const VALID_FLAGS = new Set(VIDEO_FLAGS);
 const SIGNALS_WINDOW = 30;
+const LOCK_IDLE_HOURS = 12;
 // item_id is a Postgres INTEGER; anything larger fails in the DB (500), not as input.
 const MAX_ITEM_ID = 2147483647;
 
@@ -266,6 +267,34 @@ module.exports = function createReviewRepository(models, sequelize) {
                 { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
             );
             return rows.length > 0;
+        },
+
+        /**
+         * Clear every lock whose holder has saved no verdict in the batch for
+         * LOCK_IDLE_HOURS (since taking it or their last verdict there), so a
+         * reviewer who disappeared does not block it. Run outside any
+         * transaction before reading lock state; SKIP LOCKED leaves a batch
+         * alone while a save holds its row. Returns the released `{ batch, locked_by }`.
+         */
+        async releaseIdleLocks() {
+            const rows = await sequelize.query(
+                `WITH idle AS (
+                    SELECT b.batch, b.locked_by FROM prv_review_batches b
+                     WHERE b.locked_by IS NOT NULL
+                       AND GREATEST(b.locked_at, (
+                           SELECT MAX(v.decided_at) FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id
+                            WHERE i.batch = b.batch AND v.reviewer = b.locked_by
+                       )) < NOW() - make_interval(hours => :hours)
+                     ORDER BY b.batch
+                       FOR UPDATE SKIP LOCKED
+                 )
+                 UPDATE prv_review_batches b SET locked_by = NULL, locked_at = NULL
+                   FROM idle WHERE b.batch = idle.batch
+                 RETURNING idle.batch, idle.locked_by`,
+                { replacements: { hours: LOCK_IDLE_HOURS }, type: QueryTypes.SELECT }
+            );
+            for (const row of rows) console.log('Review lock expired', row);
+            return rows;
         },
 
         /**
@@ -674,4 +703,5 @@ module.exports.ReviewInputError = ReviewInputError;
 module.exports.ReviewConflictError = ReviewConflictError;
 module.exports.mayDecide = mayDecide;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
+module.exports.LOCK_IDLE_HOURS = LOCK_IDLE_HOURS;
 module.exports.VIDEO_FLAGS = VIDEO_FLAGS;

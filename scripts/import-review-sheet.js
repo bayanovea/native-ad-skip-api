@@ -94,6 +94,7 @@ function backupMd(mdPath) {
 
 async function importItems(sequelize, review, sheet, items, { reviewer, reviews, exclude, maxItems }) {
     const summary = { parts: [], inserted: [], present: [], imported: [], skipped: [], locked: [], released: [] };
+    await review.releaseIdleLocks();
     await sequelize.transaction(async (transaction) => {
         const existing = await review.itemsInSheet(sheet, { transaction });
         const known = new Set(existing.map((r) => r.item_code));

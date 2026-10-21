@@ -4513,6 +4513,42 @@ test('review page: take → decide → finish unlocks; no lock → 409 and read-
     ]);
 });
 
+test('review page: a lock idle for 12 h (no verdict from its holder) is released on the next request; a recent verdict keeps it', async () => {
+    const idle = 'e2e-review-idle';
+    const busy = 'e2e-review-idle-busy';
+    await seedKeyboardBatch(idle, 3);
+    await seedKeyboardBatch(busy, 3);
+    const json = async (batch, who) => (await request('GET', reviewPath(`/admin/review/${batch}`, { reviewer: who, format: 'json' }), null)).body;
+    const decide = async (batch, who = REVIEWER) =>
+        decideReview({ item_id: (await json(batch, who)).item.id, verdict: 'not_ad', reviewer: who });
+    const age = async (sql, params) => {
+        const c = adminClient(TEST_DB);
+        await c.connect();
+        try { await c.query(sql, params); } finally { await c.end(); }
+    };
+    assert.equal((await decide(busy)).status, 201);
+    await age(`UPDATE prv_review_batches SET locked_at = NOW() - INTERVAL '13 hours' WHERE batch = ANY($1)`, [[idle, busy]]);
+    await age(`UPDATE prv_review_verdicts v SET decided_at = NOW() - INTERVAL '11 hours'
+                 FROM prv_review_items i WHERE i.id = v.item_id AND i.batch = $1`, [busy]);
+
+    let row = (await json(idle, 'gkshi')).batch;
+    assert.equal(row.state, 'available', 'taken 13 h ago, no verdict since → free for anyone');
+    assert.equal(row.locked_by, null);
+    assert.equal((await json(busy, 'gkshi')).batch.state, 'locked', 'a verdict 11 h ago keeps the lock');
+
+    const late = await decide(idle);
+    assert.equal(late.status, 409, 'the former holder must take it again');
+    assert.equal(late.body.reason, 'available');
+    await takeReview(idle);
+    assert.equal((await decide(idle)).status, 201);
+
+    await age(`UPDATE prv_review_verdicts v SET decided_at = NOW() - INTERVAL '13 hours'
+                 FROM prv_review_items i WHERE i.id = v.item_id AND i.batch = $1`, [busy]);
+    row = (await json(busy, REVIEWER)).batch;
+    assert.equal(row.state, 'available', 'last verdict 13 h ago → released');
+    assert.equal(row.decided, 1, 'verdicts stay');
+});
+
 test('review page: closed and done over HTTP (409 with the translated reason, banner without a button)', async () => {
     const batch = 'e2e-review-closed';
     await withReviewRepo((repo) => repo.createBatch(batch, { excluded: [REVIEWER] }));
