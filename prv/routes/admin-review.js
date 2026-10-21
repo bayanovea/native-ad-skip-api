@@ -193,6 +193,7 @@ const STYLE = `
         .status.ok { color: #86efac; }
         .current { font-size: 0.95rem; margin-bottom: 8px; }
         .hotkeys { margin-top: 18px; }
+        .auto-advance { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #64748b; cursor: pointer; }
         .empty { color: #64748b; font-size: 0.85rem; }
         .signals-line { font-size: 0.85rem; margin-bottom: 8px; }
         .rules { font-size: 0.85rem; color: #cbd5e1; line-height: 1.5; }
@@ -532,10 +533,13 @@ function renderItemPage(payload, token, t, langLink) {
     ${renderSignals(signals, token, t)}
 
     <div class="muted hotkeys">${t('hotkeys_label')} ${hotkeyRows(t, true).map(([key, label]) => `${key} ${label}`).join(' · ')}</div>
+    <label class="auto-advance"><input type="checkbox" id="auto-advance" checked onchange="setAutoAdvance(this.checked)"> ${t('auto_advance')}</label>
 
 <script>
     const STATE = ${scriptJson(state)};
     const FLASH_KEY = 'adminReview.flash';
+    // Absent = on (the default); only "off" is stored.
+    const AUTO_ADVANCE_KEY = 'adminReview.autoAdvance';
     let picked = STATE.verdict;
     let saving = false;
 
@@ -552,6 +556,12 @@ function renderItemPage(payload, token, t, langLink) {
         try {
             if (value == null) window[store].removeItem(key); else window[store].setItem(key, value);
         } catch (e) { /* storage unavailable: per-viewer convenience only */ }
+    }
+    function autoAdvance() {
+        return storageGet('localStorage', AUTO_ADVANCE_KEY) !== 'off';
+    }
+    function setAutoAdvance(on) {
+        storageSet('localStorage', AUTO_ADVANCE_KEY, on ? null : 'off');
     }
     function itemUrl(code) {
         return '/admin/review/' + encodeURIComponent(STATE.batch) + '?item=' + encodeURIComponent(code)
@@ -675,9 +685,11 @@ function renderItemPage(payload, token, t, langLink) {
                     track: data.track_mismatch ? tr('js_saved_track') : '',
                     flagged: flagged,
                 });
-                if (closePlayerTab() === false) flash += '. ' + tr('js_close_by_hand');
+                // Staying on the item keeps its player tab: the reviewer may still be watching.
+                const advance = autoAdvance();
+                if (advance && closePlayerTab() === false) flash += '. ' + tr('js_close_by_hand');
                 storageSet('sessionStorage', FLASH_KEY, flash);
-                if (data.next_item) goTo(data.next_item, data.next_player_link);
+                if (advance && data.next_item) goTo(data.next_item, data.next_player_link);
                 else window.location.href = itemUrl(STATE.item_code);
                 return;
             }
@@ -728,6 +740,7 @@ function renderItemPage(payload, token, t, langLink) {
         goTo(a.dataset.itemCode, a.dataset.playerLink);
     });
     (function init() {
+        document.getElementById('auto-advance').checked = autoAdvance();
         const flash = storageGet('sessionStorage', FLASH_KEY);
         if (flash) { setStatus(flash, 'ok'); storageSet('sessionStorage', FLASH_KEY, null); }
     })();

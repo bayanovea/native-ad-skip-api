@@ -4055,6 +4055,7 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
     };
     if (html.includes('id="player-link"')) els['player-link'] = field('A', 'player-link');
     if (html.includes('id="lock-status"')) els['lock-status'] = field('SPAN', 'lock-status');
+    if (html.includes('id="auto-advance"')) els['auto-advance'] = Object.assign(field('INPUT', 'auto-advance'), { checked: true });
     const buttons = [...html.matchAll(/<button\b[^>]*\bdata-verdict="([^"]+)"[^>]*>/g)].map(m => {
         const classAttr = (m[0].match(/\bclass="([^"]*)"/) || [, ''])[1];
         const classes = new Set(classAttr.split(/\s+/).filter(Boolean));
@@ -4672,6 +4673,43 @@ test('review page: create reviewer (form / JSON) → picker → batch list → i
             await sequelize.query('DELETE FROM prv_review_reviewers WHERE code IN (:created)', { replacements: { created } });
         });
     }
+});
+
+test('review page: with auto-advance off a save stays on the item; the choice is kept in localStorage', async () => {
+    const batch = 'e2e-review-auto-advance';
+    await seedKeyboardBatch(batch, 3);
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
+
+    let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
+    assert.ok(html.includes(RU('auto_advance')));
+    assert.equal(page.els['auto-advance'].checked, true, 'on by default');
+    vm.runInContext('setAutoAdvance(false)', page.ctx);
+    assert.equal(storages.local.getItem('adminReview.autoAdvance'), 'off');
+    page.key('1');
+    page.opened.length = 0;
+    assert.equal(await saveAndFollow(page), itemPath('C1'), 'reloads the saved item');
+    assert.deepEqual(page.opened, [], 'no new tab, no player');
+    assert.equal(page.opener.closed, false, 'the item\'s player tab stays');
+
+    // The next page load (and the next item) keeps the choice; j / k still switch.
+    ({ page } = await openKeyboardPage(itemPath('C1'), storages));
+    assert.equal(page.els['auto-advance'].checked, false);
+    assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor'));
+    page.key('j');
+    assert.equal(page.reviewUrl(), itemPath('C2'));
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    page.key('2');
+    assert.equal(await saveAndFollow(page), itemPath('C2'));
+
+    // Back on: a save moves on again.
+    vm.runInContext('setAutoAdvance(true)', page.ctx);
+    assert.equal(storages.local.getItem('adminReview.autoAdvance'), null);
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    assert.equal(page.els['auto-advance'].checked, true);
+    page.key('3');
+    assert.equal(await saveAndFollow(page), itemPath('C3'));
+    assert.equal(page.opener.closed, true);
 });
 
 test('review page: a save closes only the cross-origin player tab it was switched from', async () => {
