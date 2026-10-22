@@ -1667,11 +1667,10 @@ test('ai review: not_ad removes the entry, the last one withdraws the row (human
     assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]]);
 });
 
-test('ai review: keep verdicts restore a judge-withdrawn row once every entry is kept, never a row withdrawn by duration or admin', async () => {
+test('ai review: keep verdicts restore a judge-withdrawn row once every entry is kept, never a row withdrawn by admin', async () => {
     await aiFirstServer();
     const batch = 'e2e-ai-restore';
     const judge = await aiReviewSeed('-1_456000502', batch, [[30, 70], [200, 230]], { withdrawnBy: 'judge', firstPos: 1 });
-    const duration = await aiReviewSeed('-1_456000503', batch, [[30, 70]], { withdrawnBy: 'duration', firstPos: 3 });
     const admin = await aiReviewSeed('-1_456000504', batch, [[30, 70]], { withdrawnBy: 'admin', firstPos: 4 });
     const early = await aiReviewSeed('-1_456000505', batch, [[30, 70], [200, 230]], { firstPos: 5 });
     await takeReview(batch);
@@ -1685,14 +1684,12 @@ test('ai review: keep verdicts restore a judge-withdrawn row once every entry is
     const sp = cats.prv.sponsor;
     assert.deepEqual(await servedBounds('-1_456000502'), [[sp, 30, 70], [sp, 200, 230]], 'served again');
 
-    for (const [vid, seed, by] of [['-1_456000503', duration, 'duration'], ['-1_456000504', admin, 'admin']]) {
-        assert.equal((await decideAi(seed.items[0], 'sponsor')).ai_applied, false, by);
-        const r = await aiCalculated(vid);
-        assert.ok(r.withdrawn_at, `withdrawn by ${by} stays withdrawn`);
-        assert.equal(r.withdrawn_by, by);
-        assert.equal((await aiVideo(vid)).status, 'withdrawn');
-        assert.equal((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).status, 204, `${by}: no AI row served`);
-    }
+    assert.equal((await decideAi(admin.items[0], 'sponsor')).ai_applied, false);
+    const r = await aiCalculated('-1_456000504');
+    assert.ok(r.withdrawn_at, 'withdrawn by admin stays withdrawn');
+    assert.equal(r.withdrawn_by, 'admin');
+    assert.equal((await aiVideo('-1_456000504')).status, 'withdrawn');
+    assert.equal((await getCalculatedOn(AI_PORT, '-1_456000504', { v: '1', duration: 600 })).status, 204, 'no AI row served');
 
     // A keep verdict from before the withdraw does not count: the judge withdrew after it.
     assert.equal((await decideAi(early.items[0], 'sponsor')).ai_applied, false, 'served, same category: no change');

@@ -5,7 +5,7 @@ const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
 // A prv video id (`<owner>_<id>`, owner negative for a community); anything else is never queued for `ai detect`
 // (ai/pipeline/queue.go nativeIDRegex is the same pattern).
 const PRV_NATIVE_ID = /^-?\d+_\d+$/;
-// A keep verdict never restores a row withdrawn by `duration` (timed for the old cut; the judge now sends a re-cut to review) or `admin` (the operator's switch).
+// A keep verdict never restores a row withdrawn by `admin` (the operator's switch).
 const RESTORABLE_BY = new Set(['judge', 'review']);
 
 module.exports = function createAiRepository(models, sequelize) {
@@ -35,7 +35,7 @@ module.exports = function createAiRepository(models, sequelize) {
                 { replacements: { nativeId, views: views ?? null } });
         },
 
-        // Unpublish the video's AI row (`by`: judge | review | admin | duration); `data` stays for the record.
+        // Unpublish the video's AI row (`by`: judge | review | admin); `data` stays for the record.
         // Returns false when there is no row or it is already withdrawn. ai/judge/judge.go record mirrors both writes.
         async withdraw(videoId, by, reason, { transaction } = {}) {
             const run = async (t) => {
