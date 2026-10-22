@@ -26,24 +26,30 @@ func (f *fakeLLM) Judge(_ context.Context, req detector.Request) (llmResult, err
 	return llmResult{Raw: f.raw, Usage: detector.Usage{InputTokens: 10000, OutputTokens: 100}}, f.err
 }
 
-// A video judged 7 h ago whose undo counter moved from 1 to 2: the rules want the LLM.
+var judgeNow = published.Add(32 * time.Hour)
+
+// A video judged 7 h ago (at `since`), with no expectations set yet.
 func llmCase(t *testing.T, raw string, autoWithdraw bool) (*run, sqlmock.Sqlmock, Video, *fakeLLM) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{raw: raw}
 	r := &run{cfg: Config{AutoWithdraw: autoWithdraw, MinInterval: 6 * time.Hour}, db: db, categories: testCategories,
-		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: published.Add(32 * time.Hour)}
+		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: judgeNow}
 	v := testVideo
-	v.JudgedAt = sql.NullTime{Time: published.Add(25 * time.Hour), Valid: true}
-	v.JudgeCounters = []byte(`{"undo":1}`)
-	expectSignals(mock, 2, 0)
+	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
 	return r, mock, v, llm
 }
 
-// llmCaseNotKept is llmCase for a video no human has kept since its last judgement.
+// llmCaseNotKept is llmCase for a video no human has kept since its last judgement, with two
+// undo events, one of them after it: the rules want the LLM.
 func llmCaseNotKept(t *testing.T, raw string, autoWithdraw bool) (*run, sqlmock.Sqlmock, Video, *fakeLLM) {
 	r, mock, v, llm := llmCase(t, raw, autoWithdraw)
-	expectKept(mock, v.JudgedAt.Time, nil)
+	expectNotKept(mock, r.now)
 	return r, mock, v, llm
+}
+
+func expectNotKept(mock sqlmock.Sqlmock, now time.Time) {
+	expectKept(mock, since, nil)
+	expectSignals(mock, since, now, [2]int{}, [2]int{2, 1}, 0)
 }
 
 // expectKept: keptSince's answer for testVideo judged at `judged`, the latest verdict's time or nil.
@@ -79,26 +85,45 @@ func expectNewItems(mock sqlmock.Sqlmock, flagged string) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
-func expectCounters(mock sqlmock.Sqlmock) {
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET judged_at = NOW(), judge_counters = $2")).
-		WithArgs("-1_456000001", []byte(`{"votes_up":0,"votes_down":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":0,"duration_recut":0}`)).
+// expectCounters: judged_at moves to the tick's start, the counters (two undo events) are recorded.
+func expectCounters(mock sqlmock.Sqlmock, now time.Time) {
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET judged_at = $3, judge_counters = $2")).
+		WithArgs("-1_456000001", []byte(`{"votes_up":0,"votes_down":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":0,"duration_recut":0}`), now).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 }
 
 const cost = 10000*2.0/1e6 + 100*10.0/1e6
 
-func TestJudgeVideoSkipsAJudgedVideoWhoseNegativeCountersDidNotGrow(t *testing.T) {
-	r, _, v, llm := llmCaseNotKept(t, "", true)
-	v.JudgeCounters = []byte(`{"undo":2,"clicks":7}`) // clicks went down to 0: no matter
+func TestJudgeVideoSkipsAJudgedVideoWithNoNewEvidence(t *testing.T) {
+	r, mock, v, llm := llmCase(t, "", true)
+	v.JudgeCounters = []byte(`{"duration_recut":1}`)
+	expectKept(mock, since, nil)
+	expectSignals(mock, since, r.now, [2]int{3, 0}, [2]int{2, 0}, 1) // old negatives and an old re-cut
 	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
 		t.Fatal(err, llm.calls)
 	}
 }
 
+// Entry A's three dislikes went with A (removed on review) and B got two new ones: the total
+// fell from 3 to 2, the two are new all the same.
+func TestJudgeVideoNewDownVotesReachTheLLMWhenTheTotalShrank(t *testing.T) {
+	r, mock, v, llm := llmCase(t, `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`, true)
+	expectKept(mock, since, nil)
+	expectSignals(mock, since, r.now, [2]int{2, 2}, [2]int{}, 0)
+	expectTranscript(mock)
+	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
+	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
 func TestJudgeVideoCallsTheLLMAtMostOncePerMinInterval(t *testing.T) {
-	r, _, v, llm := llmCaseNotKept(t, "", true)
+	r, mock, v, llm := llmCase(t, "", true)
 	r.now = published.Add(30 * time.Hour) // 5 h after the last judgement
+	expectNotKept(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
 		t.Fatal(err, llm.calls)
 	}
@@ -109,7 +134,7 @@ func TestJudgeVideoLLMReviewKeepsTheRowAndCreatesItems(t *testing.T) {
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "review", "llm", "undo on the entry", "claude-sonnet-5-5", cost)
 	expectNewItems(mock, `["judge review by llm: undo on the entry","signals: undo=2","keep: true"]`)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
 	}
@@ -127,7 +152,7 @@ func TestJudgeVideoLLMWithdraw(t *testing.T) {
 				WillReturnResult(sqlmock.NewResult(0, 1))
 		}
 		expectNewItems(mock, `["judge withdraw by llm: not an ad","signals: undo=2","keep: false"]`)
-		expectCounters(mock)
+		expectCounters(mock, r.now)
 		if err := r.judgeVideo(v); err != nil {
 			t.Fatalf("auto withdraw %v: %v", auto, err)
 		}
@@ -138,7 +163,7 @@ func TestJudgeVideoLLMOkRecordsOnly(t *testing.T) {
 	r, mock, v, _ := llmCaseNotKept(t, `{"decision":"ok","reason":"one undo of many views","segments":[{"index":0,"keep":true}]}`, true)
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "ok", "llm", "one undo of many views", "claude-sonnet-5-5", cost)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +174,7 @@ func TestJudgeVideoInvalidAnswerGoesToAHuman(t *testing.T) {
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "review", "rules", `judge_invalid: unknown decision "maybe"`, "claude-sonnet-5-5", cost)
 	expectNewItems(mock, `["judge review by rules: judge_invalid: unknown decision \"maybe\"","signals: undo=2"]`)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil {
 		t.Fatal(err)
 	}
@@ -164,15 +189,15 @@ func TestJudgeVideoFailedCallRecordsNothing(t *testing.T) {
 	}
 }
 
-// Judged 25 h after publish, every entry kept at 28 h with the undo counter at 2 by then:
-// the tick records ok, so judged_at moves past the verdicts and the counters are the new baseline.
+// Judged 25 h after publish, every entry kept at 28 h, nothing created after the verdicts (a
+// user repeating their dislike keeps their vote row): the tick records ok, so judged_at moves past the verdicts.
 func TestJudgeVideoOkWhenEveryEntryWasKeptOnReviewSinceTheLastJudgement(t *testing.T) {
 	r, mock, v, llm := llmCase(t, "", true)
 	keptAt := published.Add(28 * time.Hour)
-	expectKept(mock, v.JudgedAt.Time, keptAt)
-	expectSignalsAsOf(mock, keptAt, 2, 0)
+	expectKept(mock, since, keptAt)
+	expectSignals(mock, keptAt, r.now, [2]int{}, [2]int{2, 0}, 0)
 	expectLockAndJudgement(mock, "ok", "rules", "every entry kept on review since the last judgement", nil, nil)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
 		t.Fatal(err, llm.calls)
 	}
@@ -182,12 +207,12 @@ func TestJudgeVideoOkWhenEveryEntryWasKeptOnReviewSinceTheLastJudgement(t *testi
 func TestJudgeVideoCountsTheSignalsAfterAKeep(t *testing.T) {
 	r, mock, v, llm := llmCase(t, `{"decision":"review","reason":"undo on the entry","segments":[{"index":0,"keep":true}]}`, true)
 	keptAt := published.Add(28 * time.Hour)
-	expectKept(mock, v.JudgedAt.Time, keptAt)
-	expectSignalsAsOf(mock, keptAt, 1, 0)
+	expectKept(mock, since, keptAt)
+	expectSignals(mock, keptAt, r.now, [2]int{}, [2]int{2, 1}, 0)
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "review", "llm", "undo on the entry", "claude-sonnet-5-5", cost)
 	expectNewItems(mock, `["judge review by llm: undo on the entry","signals: undo=2","keep: true"]`)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
 	}
@@ -197,12 +222,12 @@ func TestJudgeVideoSendsARecutToReviewWithoutTheLLMOrAWithdraw(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{}
 	r := &run{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories, llm: llm, now: reviewNow}
-	expectSignals(mock, 0, 1)
+	expectSignals(mock, time.Time{}, reviewNow, [2]int{}, [2]int{}, 1)
 	expectTranscript(mock)
 	reason := "duration: 1 videos rows of another cut requested after publish"
 	expectLockAndJudgement(mock, "review", "rules", reason, nil, nil)
 	expectNewItems(mock, `["judge review by rules: `+reason+`","signals: duration_recut=1"]`)
-	mock.ExpectExec("judged_at = NOW()").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("judged_at = \\$3").WithArgs("-1_456000001", sqlmock.AnyArg(), reviewNow).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := r.judgeVideo(testVideo); err != nil || llm.calls != 0 {
 		t.Fatal(err, llm.calls)
@@ -214,12 +239,12 @@ func TestJudgeVideoNewNegativeSignalsAfterAnOldRecutReachTheLLM(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{raw: `{"decision":"withdraw","reason":"not an ad","segments":[{"index":0,"keep":false}]}`}
 	r := &run{cfg: Config{AutoWithdraw: true, MinInterval: 6 * time.Hour}, db: db, categories: testCategories,
-		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: published.Add(32 * time.Hour)}
+		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: judgeNow}
 	v := testVideo
-	v.JudgedAt = sql.NullTime{Time: published.Add(25 * time.Hour), Valid: true}
+	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
 	v.JudgeCounters = []byte(`{"undo":1,"duration_variants":1,"duration_recut":1}`)
-	expectSignals(mock, 2, 1)
-	expectKept(mock, v.JudgedAt.Time, nil)
+	expectKept(mock, since, nil)
+	expectSignals(mock, since, judgeNow, [2]int{}, [2]int{2, 1}, 1)
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "withdraw", "llm", "not an ad", "claude-sonnet-5-5", cost)
 	mock.ExpectExec(regexp.QuoteMeta("SET withdrawn_at = NOW(), withdrawn_by = $2, withdrawn_reason = $3")).WithArgs(7, "judge", "not an ad").
@@ -227,7 +252,7 @@ func TestJudgeVideoNewNegativeSignalsAfterAnOldRecutReachTheLLM(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn' WHERE native_id = $1")).WithArgs("-1_456000001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNewItems(mock, `["judge withdraw by llm: not an ad","signals: undo=2 duration_recut=1","keep: false"]`)
-	mock.ExpectExec("judged_at = NOW()").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
@@ -240,11 +265,11 @@ func TestJudgeVideoNewRecutWithNegativeSignalsGoesToTheLLMAndAHuman(t *testing.T
 	llm := &fakeLLM{raw: `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`}
 	r := &run{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories,
 		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: reviewNow}
-	expectSignals(mock, 2, 1)
+	expectSignals(mock, time.Time{}, reviewNow, [2]int{}, [2]int{2, 2}, 1)
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
 	expectNewItems(mock, `["judge ok by llm: fine","signals: undo=2 duration_recut=1","keep: true"]`)
-	mock.ExpectExec("judged_at = NOW()").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := r.judgeVideo(testVideo); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
@@ -289,11 +314,12 @@ func TestNewLLMClient(t *testing.T) {
 }
 
 func TestJudgeVideoCallsTheLLMOnceTheMinIntervalHasPassed(t *testing.T) {
-	r, mock, v, llm := llmCaseNotKept(t, `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`, true)
+	r, mock, v, llm := llmCase(t, `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`, true)
 	r.now = v.JudgedAt.Time.Add(r.cfg.MinInterval) // exactly the interval
+	expectNotKept(mock, r.now)
 	expectTranscript(mock)
 	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
-	expectCounters(mock)
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
 	}
@@ -314,14 +340,14 @@ func TestRecordLeavesARowWithdrawnMeanwhile(t *testing.T) {
 
 func TestTickJudgesTheOtherVideosAfterAFailure(t *testing.T) {
 	db, mock := newMock(t)
-	r := &run{db: db, categories: testCategories, now: published.Add(32 * time.Hour)}
+	r := &run{db: db, categories: testCategories, now: judgeNow}
 	cols := []string{"video_id", "native_id", "data", "published_at", "duration", "judged_at", "judge_counters", "views_max", "requests", "last_seen_at"}
 	mock.ExpectQuery("FROM prv_ai_video_calculateds a").WillReturnRows(sqlmock.NewRows(cols).
 		AddRow(6, "-1_456000000", []byte(`not json`), published, 600, nil, nil, nil, 3, published).
-		AddRow(7, "-1_456000001", testVideo.Data, published, 600, nil, nil, 25000, 12, published))
-	expectSignals(mock, 0, 0)
+		AddRow(7, "-1_456000001", testVideo.Data, published, 600, nil, nil, 25000, 12, testVideo.LastSeenAt))
+	expectSignals(mock, time.Time{}, judgeNow, [2]int{}, [2]int{}, 0)
 	expectLockAndJudgement(mock, "ok", "rules", "no negative signal", nil, nil)
-	mock.ExpectExec("judged_at = NOW()").WithArgs("-1_456000001", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("judged_at = \\$3").WithArgs("-1_456000001", sqlmock.AnyArg(), judgeNow).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if failed, err := r.tick(); failed != 1 || err != nil {
 		t.Fatalf("got %d %v", failed, err)

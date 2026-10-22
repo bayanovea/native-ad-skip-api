@@ -43,9 +43,9 @@ func TestParseOutput(t *testing.T) {
 func TestDisagreementWindows(t *testing.T) {
 	entries := []Entry{{CategoryID: 2, Start: 30, End: 70}, {CategoryID: 2, Start: 150, End: 160}, {CategoryID: 2, Start: 400, End: 420}}
 	humans := []humanNote{
-		{humanInterval{2, 100, 120, 0}, true},  // overlaps the first two windows: one window
-		{humanInterval{2, 405, 418, 0}, false}, // agrees: no window of its own
-		{humanInterval{2, 900, 930, 0}, true},
+		{humanInterval: humanInterval{2, 100, 120, 0}, Conflicting: true},  // overlaps the first two windows: one window
+		{humanInterval: humanInterval{2, 405, 418, 0}, Conflicting: false}, // agrees: no window of its own
+		{humanInterval: humanInterval{2, 900, 930, 0}, Conflicting: true},
 	}
 	got := disagreementWindows(entries, humans)
 	want := []window{{0, 220}, {340, 480}, {840, 990}}
@@ -69,7 +69,7 @@ func TestRenderRequest(t *testing.T) {
 	}
 	s := Signals{Counters: Counters{Undo: 5, HumanMarkups: 1, ConflictingMarkups: 1}, ViewsMax: new(int64), Requests: 12, AgeH: 30}
 	*s.ViewsMax = 25000
-	s.humans = []humanNote{{humanInterval{3, 495, 510, 4}, true}}
+	s.humans = []humanNote{{humanInterval: humanInterval{3, 495, 510, 4}, Conflicting: true}}
 	req := renderRequest(detector.Prompt{Text: "PROMPT"}, testVideo, s, testCategories, cues)
 	if req.System != "PROMPT" || req.Key != "-1_456000001" || req.Schema != llmSchema {
 		t.Fatalf("got %+v", req)

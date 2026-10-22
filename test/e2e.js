@@ -717,9 +717,9 @@ function runRecomputeRatings(provider) {
         env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000,
     });
     assert.equal(r.status, 0, `--recompute-ratings failed: ${r.error || ''} ${r.stdout}${r.stderr}`);
-    const m = r.stdout.match(/Recompute ratings finish: (\d+) videos processed, (\d+) segments changed, (\d+) video_calculateds rewritten/);
+    const m = r.stdout.match(/Recompute ratings finish: (\d+) videos processed, (\d+) segments changed, (\d+) video_calculateds rewritten(?:, (\d+) prv_ai_video_calculateds rewritten)?/);
     assert.ok(m, `no summary line in: ${r.stdout}`);
-    return { videos: Number(m[1]), segments: Number(m[2]), rewritten: Number(m[3]) };
+    return { videos: Number(m[1]), segments: Number(m[2]), rewritten: Number(m[3]), ai: m[4] === undefined ? undefined : Number(m[4]) };
 }
 
 // Video with one intro segment {start:1, end:11} (bucket 0: starts 0,1,2; ends 10,12,11).
@@ -1024,6 +1024,10 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES
         ('-1_456000201', 601, NOW(), NOW()), ('-1_456000201', 900, NOW(), NOW()), ('-1_456000208', 900, NOW(), NOW())`);
     const [{ id: videoId }] = await dbQuery(`SELECT id FROM videos WHERE native_id = '-1_456000201' AND duration = 601`);
+    // Votes already on the bounds the detector publishes (one interval, one vote): the entry starts rated.
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt") VALUES
+        ('detect-voter-1', $1, $2, 30, 70, 1, NOW(), NOW()), ('detect-voter-2', $1, $2, 30, 70, 1, NOW(), NOW()),
+        ('detect-voter-3', $1, $2, 30, 71, 1, NOW(), NOW())`, [videoId, cats.prv.sponsor]);
     const before = Date.now() - 1000;
 
     const r = runAi(['detect']);
@@ -1036,7 +1040,7 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.equal(v.judge_counters, null, 'the judge owns judge_counters');
     const ai = await aiCalculated('-1_456000201');
     assert.equal(ai.video_id, videoId, 'keyed by the videos row within ±2 s of yt-dlp’s 600.4 s');
-    assert.deepEqual(ai.data, [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }]);
+    assert.deepEqual(ai.data, [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai', rating: 2 }]);
     assert.equal(ai.withdrawn_at, null);
     const [run] = await dbQuery(`SELECT * FROM prv_ai_runs WHERE native_id = '-1_456000201'`);
     assert.equal(ai.run_id, run.id);
@@ -1284,6 +1288,23 @@ test('ai-first: one interval, one vote: an AI-path vote on the bounds of a human
     assert.equal(await userRating('', twin), before + 1);
 });
 
+test('ai-first: --recompute-ratings rewrites the ratings of AI rows, withdrawn ones too, from the votes (prv only)', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000306';
+    const { videoId } = await aiFirstVideo(vid);
+    const res = await requestOn(AI_PORT, 'POST', '/vote', { video_id: vid, user_id: 'recompute-ai-voter', category_id: cats.prv.sponsor,
+        start: 30, end: 70, vote: 1, duration: 600 });
+    assert.equal(res.status, 204);
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = jsonb_set(data, '{0,rating}', '5'), withdrawn_at = NOW(), withdrawn_by = 'admin'
+        WHERE video_id = $1`, [videoId]);
+
+    const first = runRecomputeRatings('prv');
+    assert.ok(first.ai >= 1, `AI rows rewritten: ${first.ai}`);
+    assert.deepEqual((await aiData(videoId)).map(e => e.rating), [1]);
+    assert.equal(runRecomputeRatings('prv').ai, 0, 'a second run changes nothing');
+    assert.equal(runRecomputeRatings('rt').ai, undefined, 'AI rows are prv only');
+});
+
 test('ai-first: a videos row without a duration is backfilled by the player’s and its AI row served', async () => {
     await aiFirstServer();
     const vid = '-1_456000305';
@@ -1345,14 +1366,15 @@ const AI_TRANSCRIPT = { meta: {}, cues: [
     { start: 300, end: 305, text: 'далее по теме' },
 ] };
 
-// A published AI row (sponsor 30–70) on a 600-s videos row, published `hoursAgo` (the judge waits 24 h for a first judgement).
-async function aiPublished(nativeId, hoursAgo = 25) {
+// A published AI row (sponsor 30–70 unless `data` says otherwise) on a 600-s videos row, published `hoursAgo`
+// (the judge waits 24 h for a first judgement).
+async function aiPublished(nativeId, hoursAgo = 25,
+    data = [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }]) {
     const [{ id: videoId }] = await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt")
         VALUES ($1, 600, NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days') RETURNING id`, [nativeId]);
     const [run] = await dbQuery(
         `INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
          VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', $3, 0, 600) RETURNING id`, [nativeId, videoId, JSON.stringify(AI_TRANSCRIPT)]);
-    const data = [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }];
     await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at)
         VALUES ($1, $2, $3, $4, NOW() - make_interval(hours => $5))`, [videoId, nativeId, run.id, JSON.stringify(data), hoursAgo]);
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, status, requests) VALUES ($1, 'published', 1)`, [nativeId]);
@@ -1795,6 +1817,59 @@ test('ai judge: a human keep is a new baseline: only later signals count, a re-c
     const items = await aiItems(videoId);
     assert.equal(items.length, 2, 'a new item: the first one has its verdict');
     assert.deepEqual(items[1].flagged_by, [`judge withdraw by llm: ${j.reason}`, 'signals: undo=2 duration_recut=1', 'keep: false']);
+});
+
+// Each case slipped through the count comparison the judge used before (a total that shrank, one user's
+// dislike on a second entry, a repeated vote read as new after a keep).
+test('ai judge: new evidence is what was created after the baseline: dislikes after the total fell, a user’s dislike on another entry, never a repeated vote', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const vote = (vid, userId, start, end, value) => requestOn(AI_PORT, 'POST', '/vote', {
+        video_id: vid, user_id: userId, category_id: sp, start, end, vote: value, duration: 600 });
+    const judge = () => {
+        const r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+    };
+    const votesDown = async videoId => (await judgements(videoId)).map(j => [j.decision, j.by, j.signals.votes_down, j.signals.new.votes_down]);
+
+    const shrank = await aiPublished('-1_456000407');
+    for (const u of ['shrink-1', 'shrink-2', 'shrink-3']) assert.equal((await vote('-1_456000407', u, 30, 70, -1)).status, 204);
+    const two = await aiPublished('-1_456000408', 25, [
+        { category_id: sp, start: 30, end: 70, confidence: 'high', source: 'ai' },
+        { category_id: sp, start: 200, end: 230, confidence: 'high', source: 'ai' }]);
+    assert.equal((await vote('-1_456000408', 'two-u', 30, 70, -1)).status, 204);
+    const kept = await aiPublished('-1_456000409');
+    assert.equal((await vote('-1_456000409', 'kept-u', 30, 70, -1)).status, 204);
+    judge();
+    assert.deepEqual(await votesDown(shrank.videoId), [['ok', 'llm', 3, 3]]);
+    assert.deepEqual(await votesDown(two.videoId), [['ok', 'llm', 1, 1]]);
+    assert.deepEqual(await votesDown(kept.videoId), [['review', 'llm', 1, 1]]);
+
+    for (const u of ['shrink-1', 'shrink-2', 'shrink-3']) assert.equal((await vote('-1_456000407', u, 30, 70, 1)).status, 204);
+    for (const u of ['shrink-4', 'shrink-5']) assert.equal((await vote('-1_456000407', u, 30, 70, -1)).status, 204);
+    assert.equal((await vote('-1_456000408', 'two-u', 200, 230, -1)).status, 204);
+    const [it] = await aiItems(kept.videoId);
+    await takeReview(it.batch);
+    await decideAi(it, 'sponsor');
+    assert.equal((await lockReview('release', it.batch, { reviewer: REVIEWER })).status, 200);
+    judge();
+    assert.deepEqual(await votesDown(shrank.videoId), [['ok', 'llm', 3, 3], ['ok', 'llm', 2, 2]], 'two new dislikes, fewer than before');
+    assert.deepEqual(await votesDown(two.videoId), [['ok', 'llm', 1, 1], ['ok', 'llm', 2, 1]], 'the same user on the other entry');
+    assert.deepEqual((await votesDown(kept.videoId)).at(-1), ['ok', 'rules', 1, 0]);
+
+    const voteRows = () => dbQuery(`SELECT id, "createdAt" FROM votes WHERE user_id = 'kept-u'`);
+    const rows = await voteRows();
+    assert.equal((await vote('-1_456000409', 'kept-u', 30, 70, -1)).status, 204);
+    assert.deepEqual(await voteRows(), rows, 'a repeated vote keeps its row and time');
+    assert.equal((await aiData(kept.videoId))[0].rating, -1);
+    judge();
+    assert.equal((await judgements(kept.videoId)).length, 2, 'the repeated dislike is no new evidence');
+    assert.equal((await judgements(shrank.videoId)).length, 2);
+    assert.equal((await judgements(two.videoId)).length, 2);
+
+    assert.equal((await vote('-1_456000409', 'kept-v', 30, 70, -1)).status, 204);
+    judge();
+    assert.deepEqual((await votesDown(kept.videoId)).at(-1), ['review', 'llm', 2, 1], 'another user’s dislike after the keep is');
 });
 
 test('ai judge: review items go to the day’s newest part that nobody holds or has started, within 30 items', async () => {

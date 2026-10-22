@@ -121,8 +121,8 @@ func (r *run) tick() (failed int, err error) {
 }
 
 // dueVideos lists the published non-empty rows that were judged before (judgeVideo
-// skips them unless a negative or the re-cut counter grew, or humans kept every entry since) or were published 24 h ago, so a first
-// judgement sees a day of signals.
+// skips them unless there is new evidence, or humans kept every entry since) or were
+// published 24 h ago, so a first judgement sees a day of signals.
 func dueVideos(db *sql.DB) ([]Video, error) {
 	rows, err := db.Query(`SELECT a.video_id, a.native_id, a.data, a.published_at, v.duration,
 			av.judged_at, av.judge_counters, av.views_max, av.requests, av.last_seen_at
@@ -163,40 +163,34 @@ func (r *run) judgeVideo(v Video) error {
 	if v.Entries, err = parseEntries(v.Data); err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
-	s, err := collectSignals(r.db, v, r.categories, r.now)
-	if err != nil {
-		return err
-	}
-	var prev Counters // what the signals are compared against; zero for a first judgement
+	var since time.Time // the baseline: evidence created after it is new; zero for a first judgement
+	var keptAt sql.NullTime
 	if v.JudgedAt.Valid {
-		keptAt, err := keptSince(r.db, v)
-		if err != nil {
+		since = v.JudgedAt.Time
+		if keptAt, err = keptSince(r.db, v); err != nil {
 			return err
 		}
 		if keptAt.Valid {
-			// Humans have the last word: the signals up to their verdicts are taken as seen, only later ones count.
-			seen, err := collectSignals(r.db, v, r.categories, keptAt.Time)
-			if err != nil {
-				return err
-			}
-			prev = seen.Counters
-		} else {
-			prev = storedCounters(v.JudgeCounters)
-		}
-		if !worsened(prev, s.Counters) {
-			if !keptAt.Valid {
-				return nil
-			}
-			// Recording it moves judged_at past the verdicts and stores the baseline later signals are compared against.
-			return r.record(v, s, judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}, nil)
+			since = keptAt.Time // humans have the last word: what they saw before their verdicts is not new
 		}
 	}
-	decision, reason := rules(s, prev)
+	s, err := collectSignals(r.db, v, r.categories, since, r.now)
+	if err != nil {
+		return err
+	}
+	if v.JudgedAt.Valid && !s.New.negative() && s.New.DurationRecut == 0 {
+		if !keptAt.Valid {
+			return nil
+		}
+		// Recording it moves judged_at past the verdicts, so the next tick skips the video.
+		return r.record(v, s, judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}, nil)
+	}
+	decision, reason := rules(s)
 	j := judgement{Decision: decision, By: "rules", Reason: reason, Review: decision == decisionReview}
 	var cues []vtt.Cue
 	if decision == needsLLM {
 		if v.JudgedAt.Valid && r.now.Sub(v.JudgedAt.Time) < r.cfg.MinInterval {
-			return nil // the stored counters stay, so the video is due again after the interval
+			return nil // judged_at stays, so the evidence is still new after the interval
 		}
 		if cues, err = runCues(r.db, v.VideoID); err != nil {
 			return err
@@ -205,7 +199,7 @@ func (r *run) judgeVideo(v Video) error {
 			return err
 		}
 		// A re-cut that came with the negative signals still reaches a human, whatever the LLM says.
-		j.Review = j.Review || s.DurationRecut > prev.DurationRecut
+		j.Review = j.Review || s.New.DurationRecut > 0
 	}
 	if j.Review && cues == nil {
 		if cues, err = runCues(r.db, v.VideoID); err != nil {
@@ -241,9 +235,10 @@ func (r *run) askLLM(v Video, s Signals, cues []vtt.Cue) (judgement, error) {
 	return j, nil
 }
 
-// record writes the judgement under the AI row's lock (the vote handler's order:
-// AI row first), withdraws, creates the review items, and stores the counters the
-// next tick compares against. A row withdrawn meanwhile is left alone.
+// record writes the judgement under the AI row's lock, withdraws, creates the
+// review items, and moves judged_at to the tick's start (what the signals were
+// counted up to, so evidence created during the tick is new next time) with the
+// counters for the record. A row withdrawn meanwhile is left alone.
 func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 	signals, err := json.Marshal(s)
 	if err != nil {
@@ -293,8 +288,8 @@ func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 			log.Printf("ai judge: %d sent %d items to review batch %s", v.VideoID, n, batch)
 		}
 	}
-	if _, err := tx.Exec(`UPDATE prv_ai_videos SET judged_at = NOW(), judge_counters = $2, updated_at = NOW() WHERE native_id = $1`,
-		v.NativeID, counters); err != nil {
+	if _, err := tx.Exec(`UPDATE prv_ai_videos SET judged_at = $3, judge_counters = $2, updated_at = NOW() WHERE native_id = $1`,
+		v.NativeID, counters, r.now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

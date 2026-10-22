@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 )
 
 // RecomputeRatings sets every calculated segment's rating from the votes table
-// (voteRatings), in the segments table and in video_calculateds.data. It never
-// touches segment boundaries, markups or is_new. Each video runs in its own
-// transaction; a failing one is logged and the others go on, and the error
-// returned makes the binary exit non-zero. A second run changes nothing.
+// (voteRatings), in the segments table and in video_calculateds.data, and for
+// prv also in every prv_ai_video_calculateds.data. It never touches segment
+// boundaries, markups or is_new. Each video runs in its own transaction; a
+// failing one is logged and the others go on, and the error returned makes the
+// binary exit non-zero. A second run changes nothing.
 func RecomputeRatings(tablePrefix string) error {
 	db := ConnectDb()
 	defer db.Close()
@@ -22,11 +24,17 @@ func RecomputeRatings(tablePrefix string) error {
 	if err != nil {
 		return fmt.Errorf("list calculated videos: %w", err)
 	}
+	var aiIds []string
+	if tablePrefix == "" {
+		if aiIds, err = getAiVideoIds(db); err != nil {
+			return fmt.Errorf("list AI rows: %w", err)
+		}
+	}
 
 	pool := NewGoroutinePool(10)
 
 	var mu sync.Mutex
-	failed, segmentsChanged, jsonChanged := 0, 0, 0
+	failed, failedAi, segmentsChanged, jsonChanged, aiChanged := 0, 0, 0, 0, 0
 
 	for _, id := range ids {
 		id := id
@@ -46,15 +54,95 @@ func RecomputeRatings(tablePrefix string) error {
 		})
 	}
 
+	for _, id := range aiIds {
+		id := id
+		pool.Execute(func() {
+			rewritten, err := recomputeAiRatings(id, db)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				log.Printf("Recompute ratings failed: AI row %s: %v", id, err)
+				failedAi++
+				return
+			}
+			if rewritten {
+				aiChanged++
+			}
+		})
+	}
+
 	pool.Close()
 
-	fmt.Printf("Recompute ratings finish: %d videos processed, %d segments changed, %d video_calculateds rewritten\n",
+	summary := fmt.Sprintf("Recompute ratings finish: %d videos processed, %d segments changed, %d video_calculateds rewritten",
 		len(ids)-failed, segmentsChanged, jsonChanged)
+	if tablePrefix == "" {
+		summary += fmt.Sprintf(", %d prv_ai_video_calculateds rewritten", aiChanged)
+	}
+	fmt.Println(summary)
 
-	if failed > 0 {
-		return fmt.Errorf("%d of %d videos failed", failed, len(ids))
+	if failed+failedAi > 0 {
+		return fmt.Errorf("%d of %d videos failed", failed+failedAi, len(ids)+len(aiIds))
 	}
 	return nil
+}
+
+func getAiVideoIds(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT video_id FROM prv_ai_video_calculateds ORDER BY video_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// recomputeAiRatings rewrites the ratings in a prv AI row's data (any state, so a
+// restored or re-enabled row is right too) under the row's lock, which the vote
+// handlers and the review / withdraw writers also take.
+func recomputeAiRatings(videoId string, db *sql.DB) (bool, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+	var data []byte
+	err = tx.QueryRow(`SELECT data FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE`, videoId).Scan(&data)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock AI row: %w", err)
+	}
+	ratings, err := voteRatings(tx, videoId, "")
+	if err != nil {
+		return false, err
+	}
+	newData, changed, err := applyRatings(data, ratings)
+	if err != nil || !changed {
+		return false, err
+	}
+	if _, err := tx.Exec(`UPDATE prv_ai_video_calculateds SET data = $1, updated_at = NOW() WHERE video_id = $2`, newData, videoId); err != nil {
+		return false, fmt.Errorf("update AI row: %w", err)
+	}
+	return true, tx.Commit()
+}
+
+// WithVoteRatings is a prv data array (video_calculateds.data shape) with every
+// entry's rating set from the votes table, for an AI row being published.
+func WithVoteRatings(tx *sql.Tx, videoId int, data []byte) ([]byte, error) {
+	ratings, err := voteRatings(tx, strconv.Itoa(videoId), "")
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := applyRatings(data, ratings)
+	return out, err
 }
 
 func getCalculatedVideoIds(db *sql.DB, tablePrefix string) ([]string, error) {

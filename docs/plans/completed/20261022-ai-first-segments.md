@@ -159,7 +159,7 @@ Key decisions:
   `last_seen_at`, `status` TEXT (`seen` | `queued` | `fetching` | `detecting` | `published` |
   `withdrawn` | `no_track` | `timeline_unreliable` | `failed`), `attempts` INT, `next_attempt_at`,
   `batch_id` TEXT NULL, `last_error` TEXT NULL, `judged_at`, `judge_counters` JSONB (the signal
-  counters at the last judgement, to detect movement), `updated_at`.
+  counters at the last judgement; its `duration_recut` is the re-cut watermark), `updated_at`.
 - `prv_ai_runs` — one row per detector call, the audit trail (what the eval stores in `calls`):
   `id`, `native_id`, `video_id`, `prompt_sha`, `prompt_version`, `model`, `transcript` JSONB
   (meta + cues; ~150 KB per video, needed by the judge and the review cues), `track_overrun_s`,
@@ -216,7 +216,9 @@ Key decisions:
 - Transcript rendering, request and thresholds exactly as the eval (`detector.NewRequestFormat`
   with the format the held-out run used, cue timestamps dropped); publish filter: `sponsor` with
   confidence ≥ `medium`, `self_promotion` only `high`, `end − start ≥ 5`; categories mapped to
-  `markup_categories` ids by name at startup.
+  `markup_categories` ids by name at startup. Each entry starts with the rating of the votes
+  already on its exact bounds (one interval, one vote), read in the publish transaction while
+  holding the `video_calculateds` row lock, which the vote handlers take before the AI row.
 - Model / prompt: `AI_MODEL` (default `claude-sonnet-5-5`, the held-out run's model),
   `ai/prompts/v2.2.md`; the prompt sha goes into every run row, so a prompt change is visible per
   video.
@@ -244,11 +246,12 @@ Key decisions:
 - Votes: the vote handler resolves the segment the same way (AI row active and the vote carries a
   `duration` → its `data`, else `video_calculateds`; without a duration GET serves the human row),
   under the AI row's lock (`SELECT … FOR UPDATE` on `prv_ai_video_calculateds`, taken in any state
-  before `video_calculateds`), and recomputes the AI entry's `rating` with the calculator's rule on
+  after `video_calculateds`, so a publish holding the latter misses no vote), and recomputes the AI entry's `rating` with the calculator's rule on
   every vote and vote delete, whichever path the vote took (sum of each user's latest vote;
   `lib/segment-rating.js` has a variant that updates only the JSON, there are no
   `calculated_segments` rows for AI), so the ratings stay right through a withdraw / restore or an
-  `AI_FIRST` flip. **One interval, one vote** (owner's decision, 2026-10-22): a vote belongs to
+  `AI_FIRST` flip; `calculate --recompute-ratings` (prv) rewrites every AI row's ratings too.
+  A repeated identical vote is a no-op (the row and its time kept). **One interval, one vote** (owner's decision, 2026-10-22): a vote belongs to
   the `(category_id, start, end)` whatever source served it, so every vote and vote delete also
   recomputes the human `video_calculateds` entry and `calculated_segments` row with those bounds
   (when they exist) and adjusts the markup authors' rating exactly as a human-path vote does; a
@@ -260,24 +263,29 @@ Key decisions:
 
 - Signals per published video, all cheap SQL over existing tables, restricted to the AI
   entries' exact `(category_id, start, end)` where the signal carries bounds:
-  `votes_up`, `votes_down` (distinct users, latest vote), `undo` (`prv_events_interval_undo`),
+  `votes_up`, `votes_down` (each user's latest vote on each entry), `undo` (`prv_events_interval_undo`),
   `clicks`, `human_markups` (live markups since `published_at`: intervals, author rating, IoU
   with every AI entry), `duration_variants`, `duration_recut`, `views_max`, `requests`, `age_h`
   (`time_saved` events carry no video, so they are not a per-video signal).
-- Due: a judged video only when a negative counter (`votes_down`, `undo`, conflicting markups) or
-  `duration_recut` grew since its baseline: `judge_counters`, or, when every entry's latest ai-item
-  verdict keeps it and came after the last judgement, the counters as of the latest of those
-  verdicts (signals counted up to that time; humans have the last word, only later signals count).
-  A video kept that way with nothing newer is recorded `ok` by `rules` once, which moves
-  `judged_at` past the verdicts and makes the current counters its baseline.
-- Rules (no call): `duration_recut` grew and no negative counter did (a `videos` row with a
+- Due: a judged video only on new evidence since its baseline, a time watermark: the baseline is
+  `judged_at` (the tick's start, what the signals were counted up to) or, when every entry's
+  latest ai-item verdict keeps it and came after the last judgement, the latest of those verdicts
+  (humans have the last word). New evidence = rows created after the baseline: a user's latest
+  vote on an entry that is down, an undo, a conflicting human markup; plus re-cuts beyond the
+  recorded `judge_counters.duration_recut` (a row becomes a re-cut with a later request, which has
+  no time of its own; that count only grows). Not a comparison of counts: totals shrink (an entry
+  removed on review, votes changed back) and would hide new evidence, and a repeated identical
+  vote keeps its row, so it is never new. A video kept with nothing newer is recorded `ok` by
+  `rules` once, which moves `judged_at` past the verdicts.
+- Rules (no call), on the new evidence: a new re-cut and no new negative (a `videos` row with a
   duration that differs by > 2 s appeared after publish and now receives requests) → `review` by
   `rules` (the row stays served: anyone can create such a row with one request, and the AI row
-  reaches only players of its own cut anyway); all of `votes_down`, `undo`, conflicting
-  `human_markups` (IoU < 0.5 with every AI entry of the same category, author rating ≥ 0) are 0 →
-  `ok`; everything else → LLM judge, once `judged_at` is older than `AI_JUDGE_MIN_INTERVAL`, re-cut
-  or not (a bogus duration never keeps a row from the judge and its withdraw); a re-cut that grew
-  with the negative counters still sends the entries to review whatever the LLM decides.
+  reaches only players of its own cut anyway); no new `votes_down`, `undo` or conflicting
+  `human_markups` (IoU < 0.5 with every AI entry of the same category, author rating ≥ 0) → `ok`
+  (only a first judgement, whose baseline is the start, gets here); everything else → LLM judge
+  with the totals, once `judged_at` is older than `AI_JUDGE_MIN_INTERVAL`, re-cut or not (a bogus
+  duration never keeps a row from the judge and its withdraw); a new re-cut with new negatives
+  still sends the entries to review whatever the LLM decides.
 - LLM judge: one Messages call (`AI_JUDGE_MODEL`, default `claude-sonnet-5-5`; `AI_CLIENT=anthropic`
   and `messages` both use the Messages API here, `fixture` reads `<native_id>.judge.json`), schema
   `{decision: ok|withdraw|review, reason, segments: [{index, keep: bool}]}`, prompt
@@ -424,7 +432,7 @@ Key decisions:
 
 - [x] `findAiCalculated`: `AI_FIRST` on, row for `video.id` with `withdrawn_at IS NULL` and non-empty `data` → `{data}`; else null (returns the model row; `{ transaction, lock }` pass through, so the vote handler locks with the same rule)
 - [x] `GET /video-calculated`: AI row first; `video_calculated_lookup_total` gets `source` (`human` by default, also for `not_found` / `not_calculated` and rt/yt; legacy `!v` branch untouched)
-- [x] votes: segment resolution by the same rule; AI path locks the AI row and recomputes the entry's `rating` from `votes` (same SUM rule); vote delete symmetric; 404 unchanged when the segment is in neither (a segment only in `video_calculateds` of an AI-first video is 404 too; delete recomputes both tables, since the vote may predate the AI row, locking the AI row before `VideoCalculated`)
+- [x] votes: segment resolution by the same rule; AI path locks the AI row and recomputes the entry's `rating` from `votes` (same SUM rule); vote delete symmetric; 404 unchanged when the segment is in neither (a segment only in `video_calculateds` of an AI-first video is 404 too; delete recomputes both tables, since the vote may predate the AI row, locking `VideoCalculated`, then the AI row)
 - [x] `prv/repository/ai.js`: `withdraw(video_id, by, reason)` (used by the admin link now, the judge later) (also sets `prv_ai_videos.status = 'withdrawn'`; false when no row or already withdrawn; optional `{ transaction }`)
 - [x] `/admin/video/:video_id`: AI block (status, entries, judgements) + withdraw link (`?verifyBearerToken=`) (`GET /admin/video/:id/ai/withdraw`, numeric `videos.id`, from a confirm button as the markup delete; judgements wait for their table, ➕ in Task 5)
 - [x] unit tests: `find-ai-calculated` (flag off, withdrawn, empty data), `prometheus-wrapper` label
@@ -514,7 +522,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] manual `ai detect <native_id>` always synchronous, exit 1 unless `published`; a switched-off tick still expires stale runs; a native_id with an AI row is refused (re-detect: `docs/backlog/ai-redetect.md`); `publish` no longer clears `withdrawn_*`
 - [x] duration gate as Technical Details say (`timeline_unreliable` when players reported only other cuts); detect no longer writes `judge_counters`
 - [x] run rows before the batch submit, a rejected submit counts an attempt; heartbeats count infrastructure failures only (`calculator.WriteHeartbeatStatus`), a yt-dlp that cannot start spends no attempt; the shared `attempts` budget documented
-- [x] judge: due again only when a negative counter grows; `ok` by rules when every entry was kept on review since the last judgement; a re-cut → `review` by rules instead of a `duration` withdraw; `parseOutput` requires one keep per entry and no `ok` with `keep: false`
+- [x] judge: due again only on new negative evidence; `ok` by rules when every entry was kept on review since the last judgement; a re-cut → `review` by rules instead of a `duration` withdraw; `parseOutput` requires one keep per entry and no `ok` with `keep: false`
 - [x] fixture clients report usage (detect cost × 0.5 for a batch checked in e2e); tests: poll not ended / poll error / failed result, expiry, submit order and rejection, `anthropicJudge` over httptest, review parts (held, started, full), the restore rule's `decided_at ≥ withdrawn_at`, a category change with votes, the manual run's failed answer
 - [x] votes: the AI path needs a `duration` on the vote, as GET's `match` / `backfilled`; the AI row is locked in any state and its entry's rating recomputed on every vote and delete
 - [x] only prv video ids (`^-?\d+_\d+$`) reach `prv_ai_videos` (`seen()`) and the claim (query filter, `claimOne`); a fallback without `view_count` is logged
@@ -524,8 +532,10 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] simplification: the batch client interface lives in `ai/pipeline` (Submit / Poll; `FixtureClient.Wait` dropped), `ai/pipeline/gate.go` without the dead guard and wrapper
 - [x] tests: `backfilled` AI serving, withdraw 400 / escaping / unset token, `applyVerdict` (not_ad on a judge-withdrawn row, re-added entry order, no AI row), `views` upper bound, non-prv id; the AI e2e tests run alone (no order dependence, no UTC-date item codes); Go: gate `overrun == 3.0`, missing `.vtt` / no cues, row withdrawn before the judge's lock, min-interval boundary, one failing video in a tick, `renderRequest` without views
 - [x] docs: CLAUDE.md (kill switch, rollback heartbeat cleanup, heartbeat providers, status writers, `AI_JUDGE_MIN_INTERVAL`, v2.2 precondition), `api/doc/openapi.yaml` (AI withdraw, `ai_applied`, ai items, vote delete), this plan's template residue
-- [x] judge baseline after a human keep: signals counted up to the latest keep verdict, so negative signals after it make the video due (a kept video with nothing newer gets one `ok` by rules that re-baselines `judged_at` / `judge_counters`); a re-cut goes to `review` by rules only when no negative counter grew, else the LLM judges (auto withdraw reachable) and the re-cut still gets review items; `duration_recut` in the items' `flagged_by`
-- [x] one interval, one vote (owner, 2026-10-22): an AI-path vote rates the authors of a human interval with the same bounds like a human-path vote, and every vote / delete recomputes both the AI entry and the human segment of the interval (AI row → `VideoCalculated` → users lock order); e2e `one interval, one vote`
+- [x] judge baseline after a human keep: only evidence after the latest keep verdict counts (a kept video with nothing newer gets one `ok` by rules that moves `judged_at` past the verdicts); a re-cut goes to `review` by rules only without new negatives, else the LLM judges (auto withdraw reachable) and the re-cut still gets review items; `duration_recut` in the items' `flagged_by`
+- [x] one interval, one vote (owner, 2026-10-22): an AI-path vote rates the authors of a human interval with the same bounds like a human-path vote, and every vote / delete recomputes both the AI entry and the human segment of the interval; e2e `one interval, one vote`
+- [x] judge due on a time watermark instead of stored counts (`signals.New`, stored as `signals.new`): new = down votes / undo / conflicting markups created after the baseline, re-cuts beyond the recorded count; `votes_down` per user and entry; `judged_at` = the tick's start; a repeated identical vote is a no-op in `POST /vote` (row and `createdAt` kept); unit tests and e2e for a total that fell, one user on a second entry, a repeated vote after a keep
+- [x] AI ratings from publish on: publish rates the entries from `votes` under the `video_calculateds` lock (`calculator.WithVoteRatings`), the vote handlers lock `VideoCalculated` → AI row → users (was AI row first), `--recompute-ratings` (prv) rewrites every AI row
 - [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion

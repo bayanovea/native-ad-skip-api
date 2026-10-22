@@ -7,10 +7,11 @@ import (
 	"math"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/calculator"
 )
 
 // Entry is one published segment, the shape of a video_calculateds.data entry
-// plus confidence and source; rating is added by votes later.
+// plus confidence and source; publish adds the rating from the votes.
 type Entry struct {
 	CategoryID int    `json:"category_id"`
 	Start      int    `json:"start"`
@@ -79,10 +80,20 @@ func loadCategories(db *sql.DB) (map[string]int, error) {
 // publish writes the video's AI row; an empty data still marks the video done
 // (serving treats it as no AI row). claimOne refuses a native_id that has one, so
 // the conflict branch is a safety net, and it never serves a withdrawn row again.
+// Each entry starts with the rating of the votes already on its exact bounds
+// (one interval, one vote), read under the video_calculateds lock: the vote
+// handlers take it before the AI row, so no vote on the video commits between
+// this read and the row becoming visible.
 func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry) error {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err
+	}
+	if err := lockVideoCalculated(tx, videoID); err != nil {
+		return err
+	}
+	if b, err = calculator.WithVoteRatings(tx, videoID, b); err != nil {
+		return fmt.Errorf("publish ratings: %w", err)
 	}
 	_, err = tx.Exec(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at, updated_at)
 		VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -91,6 +102,21 @@ func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry
 		videoID, nativeID, runID, b)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
+	}
+	return nil
+}
+
+// lockVideoCalculated is lib/segment-rating.js lockVideoCalculated: a recalculation
+// replaces the row, so a lock that waited for one finds none and reads once more.
+func lockVideoCalculated(tx *sql.Tx, videoID int) error {
+	for i := 0; i < 2; i++ {
+		res, err := tx.Exec(`SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE`, videoID)
+		if err != nil {
+			return fmt.Errorf("lock video calculated: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n > 0 {
+			return err
+		}
 	}
 	return nil
 }

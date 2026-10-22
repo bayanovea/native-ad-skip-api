@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -69,5 +70,38 @@ func TestRawJSON(t *testing.T) {
 	}
 	if got := rawJSON("cut off {"); got != `"cut off {"` {
 		t.Fatalf("text stored as a JSON string, got %v", got)
+	}
+}
+
+func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	// A recalculation replaced the row while the lock waited: read once more.
+	mock.ExpectExec(regexp.QuoteMeta("SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)DISTINCT ON \(user_id, category_id, start, "end"\).*FROM votes`).WithArgs("7").
+		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating"}).AddRow(2, 11.0, 40.0, -2).AddRow(2, 50.0, 60.0, 0))
+	mock.ExpectExec("INSERT INTO prv_ai_video_calculateds").
+		WithArgs(7, "-1_456000001", int64(3), []byte(`[{"category_id":2,"confidence":"high","end":40,"rating":-2,"source":"ai","start":11},{"category_id":2,"confidence":"medium","end":60,"source":"ai","start":50}]`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai"}, {2, 50, 60, "medium", "ai"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

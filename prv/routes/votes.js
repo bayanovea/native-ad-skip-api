@@ -32,13 +32,14 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // then lands within ±2 s, as a served `match` / `backfilled` does), else
         // VideoCalculated. A vote belongs to the interval whatever source served
         // it, so every rating of these bounds is recomputed and the authors of
-        // the interval are rated as on the human path. The row locks (AI row
-        // first) serialise votes on the video with each other, with a
-        // recalculation (`calculate`, `--recompute-ratings`) and with a
-        // withdraw / review change of the AI row.
+        // the interval are rated as on the human path. The row locks serialise
+        // votes on the video with each other, with a recalculation
+        // (`calculate`, `--recompute-ratings`), with a withdraw / review change
+        // of the AI row and with its publish, which reads the votes holding
+        // VideoCalculated: hence VideoCalculated first, then the AI row.
         const found = await sequelize.transaction(async (transaction) => {
-            const aiRow = await lockAiCalculated(models, video.id, { transaction });
             const calculatedVideo = await lockVideoCalculated(models, video.id, { transaction });
+            const aiRow = await lockAiCalculated(models, video.id, { transaction });
             const served = duration != null && servesAi(aiRow) ? aiRow : calculatedVideo;
             if (!served) return false;
 
@@ -50,6 +51,9 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                 where: { user_id: userId, video_id: video.id, category_id: categoryId, start, end },
                 transaction,
             });
+            // The same vote again changes no rating; keeping the row keeps its time, which the AI
+            // judge reads as when the user said it (a repeat is no new evidence).
+            if (prevVote && prevVote.vote === Number(vote)) return true;
 
             const voteObj = await models.Vote.create({
                 user_id: userId,
@@ -82,11 +86,10 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // Undo what POST /vote did: the segment rating is recomputed without the
         // vote, and the authors' rating change is reversed (the voter's own
         // rating was never touched, so it is left alone). Every rating of the
-        // interval is recomputed, as on POST; the AI row is locked before
-        // VideoCalculated (no writer takes them the other way round).
+        // interval is recomputed, as on POST, in POST's lock order.
         const deleted = await sequelize.transaction(async (transaction) => {
-            const aiRow = await lockAiCalculated(models, vote.video_id, { transaction });
             const calculatedVideo = await lockVideoCalculated(models, vote.video_id, { transaction });
+            const aiRow = await lockAiCalculated(models, vote.video_id, { transaction });
 
             const count = await models.Vote.destroy({ where: { id: vote.id }, transaction });
             if (!count) return false; // deleted concurrently: nothing left to undo

@@ -386,7 +386,8 @@ paths:
       tags: [prv]
       summary: Submit a vote on a calculated segment
       description: |
-        Replaces the user's previous vote on the segment and recomputes the segment's
+        Replaces the user's previous vote on the segment (the same value again changes nothing)
+        and recomputes the segment's
         `rating` (in `prv_calculated_segments` and the matching `video_calculateds.data` entry,
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. With `AI_FIRST=on`, an active AI row and a `duration`
@@ -812,7 +813,8 @@ paths:
       tags: [RT]
       summary: Submit a vote on a calculated segment
       description: |
-        Replaces the user's previous vote on the segment and recomputes the segment's
+        Replaces the user's previous vote on the segment (the same value again changes nothing)
+        and recomputes the segment's
         `rating` (in `rt_calculated_segments` and the matching `rt_video_calculateds.data` entry,
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
@@ -995,7 +997,8 @@ paths:
       tags: [YT]
       summary: Submit a vote on a calculated segment
       description: |
-        Replaces the user's previous vote on the segment and recomputes the segment's
+        Replaces the user's previous vote on the segment (the same value again changes nothing)
+        and recomputes the segment's
         `rating` (in `yt_calculated_segments` and the matching `yt_video_calculateds.data` entry,
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
