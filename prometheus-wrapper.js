@@ -55,16 +55,73 @@ function registerCalculatorHeartbeat(sequelize) {
             failedVideos.set({ provider }, Number(failed_videos));
         }
     }
-    // The registry collects every metric in parallel, so all three gauges await
-    // the same query of the scrape instead of each running it.
+    shareCollect(refresh, [lastRun, lastSuccess, failedVideos]);
+}
+
+// The registry collects every metric in parallel, so the gauges of one query
+// await the same refresh of the scrape instead of each running it.
+function shareCollect(refresh, gauges) {
     let inFlight = null;
     const collect = () => {
         if (!inFlight) inFlight = refresh().finally(() => { inFlight = null; });
         return inFlight;
     };
-    lastRun.collect = collect;
-    lastSuccess.collect = collect;
-    failedVideos.collect = collect;
+    for (const g of gauges) g.collect = collect;
+}
+
+// AI-first state (prv tables), one query per scrape; registered like the
+// heartbeat. A failing query is logged once and leaves the gauges empty
+// (ai_review_open reads 0: prom-client always exposes a label-less gauge).
+function registerAiMetrics(sequelize) {
+    const videos = new client.Gauge({
+        name: 'ai_videos',
+        help: 'prv_ai_videos rows per status',
+        labelNames: ['status'],
+    });
+    const cost = new client.Gauge({
+        name: 'ai_cost_usd_total',
+        help: 'Model cost in USD so far: detect (prv_ai_runs) and judge (prv_ai_judgements)',
+        labelNames: ['kind'],
+    });
+    const judgements = new client.Gauge({
+        name: 'ai_judgements_total',
+        help: 'prv_ai_judgements rows per decision and judge',
+        labelNames: ['decision', 'by'],
+    });
+    const reviewOpen = new client.Gauge({
+        name: 'ai_review_open',
+        help: 'AI review items without a verdict',
+    });
+    let logged = false;
+    async function refresh() {
+        let rows;
+        try {
+            [rows] = await sequelize.query(
+                `SELECT 'videos' AS metric, status AS a, NULL AS b, COUNT(*) AS value FROM prv_ai_videos GROUP BY status
+                 UNION ALL SELECT 'cost', 'detect', NULL, COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs
+                 UNION ALL SELECT 'cost', 'judge', NULL, COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements
+                 UNION ALL SELECT 'judgements', decision, "by", COUNT(*) FROM prv_ai_judgements GROUP BY decision, "by"
+                 UNION ALL SELECT 'review_open', NULL, NULL, COUNT(*) FROM prv_review_items i
+                     WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)`);
+            logged = false;
+        } catch (err) {
+            if (!logged) console.error('AI metrics query failed:', err.message);
+            logged = true;
+            rows = [];
+        }
+        videos.reset();
+        cost.reset();
+        judgements.reset();
+        reviewOpen.reset();
+        for (const { metric, a, b, value } of rows) {
+            const v = Number(value);
+            if (metric === 'videos') videos.set({ status: a }, v);
+            else if (metric === 'cost') cost.set({ kind: a }, v);
+            else if (metric === 'judgements') judgements.set({ decision: a, by: b }, v);
+            else if (metric === 'review_open') reviewOpen.set(v);
+        }
+    }
+    shareCollect(refresh, [videos, cost, judgements, reviewOpen]);
 }
 
 function incrementVideoCalculatedLookup(outcome, provider, source = 'human') {
@@ -77,6 +134,7 @@ function incrementRequestWithoutVersion(method, provider) {
 
 module.exports = {
     registerCalculatorHeartbeat,
+    registerAiMetrics,
     incrementVideoCalculatedLookup,
     incrementRequestWithoutVersion,
 };

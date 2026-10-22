@@ -111,10 +111,13 @@ type pending struct {
 // Detect runs one cron tick: claim → fetch → gate → submit, then resolve the
 // batches that have ended. With a nativeID it is the manual run for that video
 // only: no views or budget check, no heartbeat (the cron's alert must not see a
-// manual run), and it runs whatever AI_DETECT_ENABLED says.
+// manual run), and it runs whatever AI_DETECT_ENABLED says. A switched-off cron
+// tick only clears the ai_detect heartbeat.
 func Detect(cfg Config, nativeID string) error {
 	if nativeID == "" && !cfg.DetectEnabled {
-		return nil
+		db := calculator.ConnectDb()
+		defer db.Close()
+		return calculator.ClearHeartbeat(db, "ai_detect")
 	}
 	prompt, err := detector.LoadPrompt(cfg.PromptPath)
 	if err != nil {

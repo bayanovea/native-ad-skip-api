@@ -96,6 +96,13 @@ func WriteHeartbeat(db *sql.DB, provider string, failed int) error {
 	return err
 }
 
+// ClearHeartbeat drops the row of a cron command that is switched off, so its
+// last success never ages into a CalculatorStale alert; no row means no series.
+func ClearHeartbeat(db *sql.DB, provider string) error {
+	_, err := db.Exec(`DELETE FROM calculator_heartbeats WHERE provider = $1`, provider)
+	return err
+}
+
 func getVideoIdsWithNewMarkups(db *sql.DB, tablePrefix string) ([]string, error) {
 	sql := fmt.Sprintf(`
 		SELECT DISTINCT video_id FROM %smarkups

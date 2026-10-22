@@ -18,7 +18,10 @@ groups:
     interval: 1m
     rules:
       # No series at all means the calculator never ran (or /metrics has no
-      # heartbeat): that is the alert, hence noDataState Alerting.
+      # heartbeat): that is the alert, hence noDataState Alerting. A is the age of
+      # the last success over the provider's limit (prv/rt/yt 10 min, ai_detect
+      # 15 min, ai_judge 2 h), so one threshold of 1 serves all; a switched-off AI
+      # command deletes its row, so it has no series here.
       - uid: calculator-stale
         title: CalculatorStale
         condition: B
@@ -26,7 +29,7 @@ groups:
         noDataState: Alerting
         execErrState: Error
         annotations:
-          summary: 'calculator {{ $labels.provider }}: no successful run for over 10 min'
+          summary: 'calculator {{ $labels.provider }}: no successful run within its limit (prv/rt/yt 10 min, ai_detect 15 min, ai_judge 2 h)'
         data:
           - refId: A
             relativeTimeRange:
@@ -35,7 +38,10 @@ groups:
             datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
             model:
               refId: A
-              expr: time() - max by (provider) (calculator_last_success_timestamp_seconds)
+              expr: >-
+                (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider!~"ai_.*"})) / 600
+                or (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider="ai_detect"})) / 900
+                or (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider="ai_judge"})) / 7200
               instant: true
               range: false
               intervalMs: 1000
@@ -49,7 +55,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [600]
+                    params: [1]
       - uid: http-5xx
         title: Http5xx
         condition: B
@@ -216,3 +222,36 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0]
+      # 10 = AI_DAILY_BUDGET_VIDEOS (default 200) × $0.05: the daily budget's cost
+      # ($0.025 a video) twice over. Grafana cannot read the env: change it with the budget.
+      - uid: ai-cost-daily
+        title: AiCostDaily
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'AI spent {{ $values.A }} USD in 24 h, over twice the daily budget: check prv_ai_runs / prv_ai_judgements, AI_DETECT_ENABLED=off stops it'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: sum(increase(ai_cost_usd_total[24h]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]

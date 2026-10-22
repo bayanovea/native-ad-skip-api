@@ -7,7 +7,7 @@ const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
 const { sequelize, bootstrap } = require('./db');
 const { redactRequest } = require('./lib/redact-request');
-const { registerCalculatorHeartbeat } = require('./prometheus-wrapper');
+const { registerCalculatorHeartbeat, registerAiMetrics } = require('./prometheus-wrapper');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -91,6 +91,7 @@ app.use((error, req, res, next) => {
 // exist` for the brief window between listen() and the ALTER completing).
 bootstrap().then(() => {
     registerCalculatorHeartbeat(sequelize);
+    registerAiMetrics(sequelize);
     app.listen(port, () => {
         console.log(`I am alive, http://localhost:${port}`);
     });

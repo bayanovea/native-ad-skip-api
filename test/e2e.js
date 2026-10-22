@@ -976,9 +976,12 @@ async function aiCalculated(nativeId) {
     return (await dbQuery('SELECT * FROM prv_ai_video_calculateds WHERE native_id = $1', [nativeId]))[0] || null;
 }
 
-test('ai detect: off by default; AI_CLIENT=anthropic without a key is a startup error', async () => {
+test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic without a key is a startup error', async () => {
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 50000, 1)`);
+    // A command switched off after it ran must not leave a last success that ages into CalculatorStale.
+    await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
+        VALUES ('ai_detect', NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day', 0)`);
 
     let r = runAi(['detect'], { AI_DETECT_ENABLED: undefined });
     assert.equal(r.status, 0, r.stderr);
@@ -1257,10 +1260,13 @@ test('ai judge: off by default; no signal → ok by rules, an undo → the LLM s
     await postUndo('-1_456000402', 'judge-u1', 100, 120); // not an AI entry's bounds
     await postUndo('-1_456000403', 'judge-u1', 30, 70);
 
+    await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
+        VALUES ('ai_judge', NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day', 0)`);
     let r = runAi(['judge']);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout + r.stderr, '', 'silent when off');
-    assert.equal(await heartbeat('ai_judge'), null);
+    assert.equal(await heartbeat('ai_judge'), null, 'off clears the heartbeat');
+    assert.doesNotMatch(await fetchMetrics(), /provider="ai_judge"/);
     assert.deepEqual(await judgements(undone.videoId), []);
 
     const before = Date.now() - 1000;
@@ -1525,6 +1531,32 @@ test('ai review: keep verdicts restore a judge-withdrawn row once every entry is
         assert.equal((await aiVideo(vid)).status, 'withdrawn');
         assert.equal((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).status, 204, `${by}: no AI row served`);
     }
+});
+
+// The detect / judge / review scenarios above leave rows in every AI table; the gauges must mirror them.
+test('ai metrics: /metrics exposes the AI gauges from the tables', async () => {
+    const text = await fetchMetrics();
+    const statuses = await dbQuery(`SELECT status, COUNT(*)::int AS n FROM prv_ai_videos GROUP BY status`);
+    assert.ok(statuses.some(r => r.status === 'published' && r.n > 0), 'earlier scenarios published videos');
+    for (const { status, n } of statuses) assert.equal(parseCounter(text, 'ai_videos', { status }), n, `ai_videos{status="${status}"}`);
+
+    const [{ detect, judge }] = await dbQuery(`SELECT
+        (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) AS detect,
+        (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) AS judge`);
+    assert.match(text, new RegExp(`^ai_cost_usd_total\\{kind="detect"\\} ${Number(detect)}$`, 'm'));
+    assert.match(text, new RegExp(`^ai_cost_usd_total\\{kind="judge"\\} ${Number(judge)}$`, 'm'));
+
+    const judged = await dbQuery(`SELECT decision, "by", COUNT(*)::int AS n FROM prv_ai_judgements GROUP BY decision, "by"`);
+    assert.ok(judged.some(r => r.decision === 'review' && r.by === 'llm'), 'earlier scenarios judged by the LLM');
+    for (const { decision, by, n } of judged) {
+        assert.equal(parseCounter(text, 'ai_judgements_total', { decision, by }), n, `ai_judgements_total{${decision},${by}}`);
+    }
+
+    const [{ open }] = await dbQuery(`SELECT COUNT(*)::int AS open FROM prv_review_items i
+        WHERE kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)`);
+    const [{ ai }] = await dbQuery(`SELECT COUNT(*)::int AS ai FROM prv_review_items WHERE kind = 'ai'`);
+    assert.ok(open > 0 && open < ai, `some ai items decided, some open (${open} of ${ai})`);
+    assert.match(text, new RegExp(`^ai_review_open ${open}$`, 'm'));
 });
 
 // RT: GET must not create a Video row when the video doesn't exist

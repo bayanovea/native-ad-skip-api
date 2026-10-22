@@ -66,10 +66,12 @@ type run struct {
 
 // Run is one cron tick: every due published row through signals, rules and,
 // when the rules do not decide, the LLM judge; one prv_ai_judgements row each,
-// then the ai_judge heartbeat.
+// then the ai_judge heartbeat. Switched off, it only clears that heartbeat.
 func Run(cfg Config) error {
 	if !cfg.Enabled {
-		return nil
+		db := calculator.ConnectDb()
+		defer db.Close()
+		return calculator.ClearHeartbeat(db, "ai_judge")
 	}
 	r := &run{cfg: cfg, now: time.Now()}
 	var err error

@@ -311,7 +311,8 @@ Key decisions:
 ### Metrics, alerts, ops
 
 - Heartbeat rows `ai_detect` / `ai_judge` → `calculator_*` gauges already exposed per provider;
-  `CalculatorStale` threshold per provider (detect 15 min, judge 2 h) — one rule change.
+  `CalculatorStale` threshold per provider (detect 15 min, judge 2 h) — one rule change. A tick
+  with its flag off deletes its row, so a switched-off command never ages into the alert.
 - New gauges from one `collect()`: `ai_videos{status}`, `ai_cost_usd_total{kind=detect|judge}`,
   `ai_judgements_total{decision,by}`, `ai_review_open`. Grafana: an "AI" row on
   `infrastructure.json`.
@@ -470,12 +471,12 @@ Key decisions:
 **Files:**
 - Modify: `prometheus-wrapper.js` (`registerAiMetrics`), `server.js`, `grafana/provisioning/alerting/rules.yml`, `grafana/dashboards/infrastructure.json`, `test/prometheus-wrapper.test.js`, `test/e2e.js`
 
-- [ ] gauges `ai_videos{status}`, `ai_cost_usd_total{kind}`, `ai_judgements_total{decision,by}`, `ai_review_open` from one `collect()`; a failing query logs once and leaves them empty
-- [ ] `CalculatorStale`: per-provider threshold (`ai_detect` 15 min, `ai_judge` 2 h) — one rule with a label-based threshold or two rules; `deleteRules` not needed
-- [ ] `AiCostDaily` alert: `increase(ai_cost_usd_total[24h]) > AI_DAILY_BUDGET_VIDEOS × 0.05` (budget breached twice over)
-- [ ] dashboard row: videos by status, cost per day, judgements by decision, open review items
-- [ ] unit test for the collector (DB-free, injected query); e2e asserts the gauges on `/metrics` after the Task 3/6 scenarios
-- [ ] run tests — must pass before task 9
+- [x] gauges `ai_videos{status}`, `ai_cost_usd_total{kind}`, `ai_judgements_total{decision,by}`, `ai_review_open` from one `collect()`; a failing query logs once and leaves them empty (`registerAiMetrics`, one `UNION ALL` query per scrape; open = an ai item with no verdict; `ai_review_open` has no labels, so prom-client shows 0 rather than nothing after a failed query)
+- [x] `CalculatorStale`: per-provider threshold (`ai_detect` 15 min, `ai_judge` 2 h) — one rule with a label-based threshold or two rules; `deleteRules` not needed (one rule: A = age of the last success divided by the provider's limit, three selectors joined by `or`, threshold 1; `noDataState: Alerting` kept. A switched-off `ai detect` / `ai judge` tick deletes its heartbeat row (`calculator.ClearHeartbeat`), so a command turned off after it ran has no series instead of an aging one)
+- [x] `AiCostDaily` alert: `increase(ai_cost_usd_total[24h]) > AI_DAILY_BUDGET_VIDEOS × 0.05` (budget breached twice over) (`sum` over both kinds; Grafana cannot read the env, so the threshold is 10 = the default budget 200 × 0.05, to change with the budget)
+- [x] dashboard row: videos by status, cost per day, judgements by decision, open review items (row "AI" on `infrastructure.json`; the "seconds since last success" stat gets ai_detect / ai_judge threshold overrides)
+- [x] unit test for the collector (DB-free, injected query); e2e asserts the gauges on `/metrics` after the Task 3/6 scenarios (e2e compares every gauge with the tables after the Task 3–7 scenarios; the off tests insert a stale heartbeat and check it is gone)
+- [x] run tests — must pass before task 9
 
 ### Task 9: Phase-3 spike and design note (audio drift)
 
@@ -553,5 +554,8 @@ Key decisions:
   already have ≥ 2 human markups with authors of rating ≥ 0) saves money and respects proven
   human work — decide after week 1's comparison.
 - Timing gate threshold: 3 s (eval) vs 2 s; the spike's readiness data and week 1 counts decide.
+- `CalculatorFailedVideos` (`for: 3m`, sized for the one-minute calculator) fires on a single
+  failed `ai detect` tick (every 5 min; one yt-dlp error counts as a failed video): keep it, or
+  give the ai providers a longer `for` once week 1 shows how often yt-dlp fails.
 - Judge model: Sonnet 5.5 is the default; if the review verdicts show it withdraws good segments,
   try Opus 5.5 on the judge only (small context, few calls).
