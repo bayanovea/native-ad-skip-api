@@ -103,7 +103,7 @@ cron (every 5 min, flock)  prv/commands/ai/ai detect
    → Validate + Resolve + thresholds   → prv_ai_runs (raw) + prv_ai_video_calculateds (published)
 
 cron (hourly, flock)  prv/commands/ai/ai judge
-   due: published rows whose negative counters grew since the last judgement (or never judged, ≥ 24 h old)
+   due: published rows with new negative evidence since the last judgement (or never judged, ≥ 24 h old)
    → signals (votes, undo, clicks, human markups, duration variants, views, age)
    → rules: nothing negative → ok (no call); a re-cut requested after publish → review (no call)
    → LLM judge (fixture in tests) → ok | withdraw | review, reason
@@ -138,7 +138,7 @@ Key decisions:
   The detect cron submits one batch per tick and resolves finished batches on the next ticks.
 - **Judge: rules first, LLM second, humans last.** Most videos have no negative signal and
   cost nothing. The LLM judge runs at most once per video per `AI_JUDGE_MIN_INTERVAL` (6 h)
-  and only when a negative signal counter grew since the last judgement; it gets the AI segments
+  and only on new negative evidence since the last judgement; it gets the AI segments
   with their quotes, the counters normalised by views when known, the human intervals with the
   transcript around every disagreement, and answers with a schema. Phase 2a (this plan): every
   `withdraw` and `review` goes to a human; `withdraw` also unpublishes at once
@@ -166,8 +166,7 @@ Key decisions:
   `yt_duration_s`, `raw_output` JSONB, `usage` JSONB, `cost_usd`, `created_at`.
 - `prv_ai_video_calculateds` — the final table. `video_id` PK (FK `videos`), `native_id`,
   `run_id` FK, `data` JSONB (entries `{category_id, start, end, confidence, source:"ai",
-  rating?}`), `published_at`, `withdrawn_at` NULL, `withdrawn_by` (`judge` | `review` | `admin` |
-  `duration`), `withdrawn_reason` TEXT, `updated_at`. Withdrawn rows keep `data` for the record;
+  rating?}`), `published_at`, `withdrawn_at` NULL, `withdrawn_by` (`judge` | `review` | `admin`), `withdrawn_reason` TEXT, `updated_at`. Withdrawn rows keep `data` for the record;
   serving checks `withdrawn_at IS NULL`.
 - `prv_ai_judgements` — append-only: `id`, `video_id`, `decision` (`ok` | `withdraw` | `review`),
   `by` (`rules` | `llm`), `reason`, `signals` JSONB, `model`, `cost_usd`, `created_at`.
@@ -331,8 +330,8 @@ Key decisions:
 - Restore: a withdrawn row is served again (`withdrawn_at/by/reason = NULL`, `prv_ai_videos.status
   = 'published'`) only when it was withdrawn by `judge` or `review` and every entry left in `data`
   has a keep verdict as its latest one, decided after `withdrawn_at` (so a keep verdict from an
-  earlier judge round does not count). A row withdrawn by `duration` (a re-cut: the timing is for
-  the old cut) or `admin` (the operator's manual switch) is never restored by a verdict.
+  earlier judge round does not count). A row withdrawn by `admin` (the operator's manual switch) is
+  never restored by a verdict.
 - The hook runs only when the decide route appends a verdict row (a same-verdict re-save appends
   nothing), and is idempotent; the response's `ai_applied` says whether the AI row changed.
   Import of md sheets never produces ai items.
@@ -410,7 +409,7 @@ Key decisions:
 - [x] `scripts/sync-detector.sh <eval checkout>`: copies the five packages and the prompt, rewrites the import path to `odedohbest/video-calculate/ai/…`, drops `apiKeyPath` (env only) and `claudecli.go` (not for the product), writes the eval commit sha to `ai/SOURCE`; refuses on a dirty eval checkout (also drops the eval's `anthropic_test.go`, which tests only the key file; product-owned files `detector/fixture.go`, `fixture_test.go`, `apikey_test.go` survive a sync; ends with `go build ./ai/...` and a warning when the eval's SDK version differs; eval side: `internal/policy/product_imports_test.go`, eval `9393890`)
 - [x] `go.mod`: `go 1.27`, `anthropic-sdk-go` at the eval's version; `go mod vendor` (v1.80.0)
 - [x] Dockerfile: `yt-dlp` static binary (pinned release, sha256 checked) into the runtime stage; `ai/` copied into the `go-build` stage (own `ytdlp` stage, release `2026.10.21`, `yt-dlp_linux` / `_aarch64` by `TARGETARCH`; e2e checks `yt-dlp --version` in the image)
-- [x] `ai/detector`: `FixtureClient` (`AI_CLIENT=fixture`) reading `test/fixtures/ai/<native_id>.detect.json`, implementing `Client` and the batch interface (so e2e drives the batch path too) (`NewFixtureClient(dir, model)`; `BatchClient` interface = `Client` + `Submit` / `Wait`, `AnthropicBatch` satisfies it; a fixture batch has ended at once, a missing fixture is that video's error)
+- [x] `ai/detector`: `FixtureClient` (`AI_CLIENT=fixture`) reading `test/fixtures/ai/<native_id>.detect.json`, implementing `Client` and the batch interface (so e2e drives the batch path too) (`NewFixtureClient(dir, model)`; `BatchClient` interface = `Client` + `Submit` / `Wait`, `AnthropicBatch` satisfies it; a fixture batch has ended at once, a missing fixture is that video's error; the interface moved to `ai/pipeline` in Task 12)
 - [x] copied Go unit tests pass (`go test ./ai/...`); test for `FixtureClient` (missing file → error)
 
 ### Task 3: `ai detect`: queue → fetch → gate → detect → publish
@@ -426,7 +425,7 @@ Key decisions:
 - [x] gate (`gate.go`): overrun and duration-variants, `findByNativeIdAndDuration` port (same SQL as `prv/repository/video.js`, create when missing), `timeline_unreliable` (the overrun check runs first, so a refused video gets no `videos` row)
 - [x] detect: request as the held-out run; batch submit / poll by `batch_id`; `prv_ai_runs` row with transcript, raw output, usage, cost (`detector.Price`) (effort `medium`, `NoTimes`, no thinking; batch cost × 0.5 as the eval; the run row is written at submit and gets the answer when the batch ends; a tick submits, then polls every waiting batch once, so a fixture batch publishes in the same tick; eval `e7710d0` adds `AnthropicBatch.Poll`, `BatchClient` and `FixtureClient` have it)
 - [x] publish (`publish.go`): thresholds, category ids by name, `prv_ai_video_calculateds` upsert (`published_at`, `withdrawn_at = NULL`), status `published`; no entry survives the thresholds → status `published` with empty `data` (the video is done, nothing to skip; serving treats empty as no AI row) (bounds are whole seconds inside the predicted span: start up, end down; the length floor applies after that)
-- [x] heartbeat row `ai_detect`; exit 1 when any video failed in the tick, as the calculator (`calculator.WriteHeartbeat` exported; `ai detect <native_id>` is a manual run: it ignores `AI_DETECT_ENABLED`, views and budget, and writes no heartbeat, so a manual run never feeds the cron's alert)
+- [x] heartbeat row `ai_detect`; exit 1 when any video failed in the tick, as the calculator (Task 12: `failed_videos` counts infrastructure failures only; `calculator.WriteHeartbeat` exported; `ai detect <native_id>` is a manual run: it ignores `AI_DETECT_ENABLED`, views and budget, and writes no heartbeat, so a manual run never feeds the cron's alert)
 - [x] crontab: `*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1` (the binary sits next to its `main.go`, as `calculate` does; `/app/prv/commands/ai` is the source directory), gated by `AI_DETECT_ENABLED` inside the binary (exit 0 silently when off) (cron sees only `/app/.env`: `init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY` there; `docker-compose.yml` passes `AI_DETECT_ENABLED` (default `off`), `AI_MIN_VIEWS`, `AI_DAILY_BUDGET_VIDEOS`, `ANTHROPIC_API_KEY`)
 - [x] unit tests (sqlmock): queue rule incl. budget and fallback, retry schedule, gate decisions (overrun 2.9 / 3.1, duration variants), threshold filter, category mapping error (also `findOrCreateVideo`'s three branches and the env defaults)
 - [x] e2e: stub yt-dlp + fixture client; one video → `published` with the expected entries; one without a ru track → `next_attempt_at` set; one with overrun 10 s → `timeline_unreliable`, no AI row; `ai detect <native_id>` single-video mode; heartbeat on `/metrics` (also: off by default, no key with `AI_CLIENT=anthropic` → exit 1, the fallback rows both ways, empty publish, a yt-dlp failure → `queued` + exit 1 + `failed_videos`)
@@ -454,11 +453,11 @@ Key decisions:
 - Modify: `test/e2e.js`
 
 - [x] `signals.go`: the counters from Technical Details, one query per signal, restricted to the AI entries' bounds; `duration_variants` includes the "new videos row receiving requests after publish" fact (separate counter `duration_recut`: a row off by > 2 s created after publish with a request for the native_id since (`prv_ai_videos.last_seen_at`), because the GET path records no videos row; `time_saved` dropped: the event carries no video; conflicts count only sponsor / self_promotion markups, the detector never marks intro / credits; votes, undo and clicks are not limited to after publish, like the rating rule)
-- [x] `rules.go`: `ok` when nothing negative; `withdraw` by `duration`; else `needs_llm`; movement check against `judge_counters` (the re-cut check runs first; the duration withdraw is a fact, not gated by `AI_JUDGE_AUTO_WITHDRAW`; `judge_counters` is replaced by the judged counters, views / requests / age are in `signals` only)
+- [x] `rules.go`: `ok` when nothing negative; `withdraw` by `duration`; else `needs_llm`; movement check against `judge_counters` (Task 12 replaced the `duration` withdraw with `review` by rules and the movement check with a time watermark; the re-cut check runs first; the duration withdraw is a fact, not gated by `AI_JUDGE_AUTO_WITHDRAW`; `judge_counters` is replaced by the judged counters, views / requests / age are in `signals` only)
 - [x] ➕ `/admin/video/:video_id` AI block: list the row's `prv_ai_judgements` (Task 4 left them out, the table arrives here)
 - [x] `judge` subcommand: due rows (published, `withdrawn_at IS NULL`, counters moved or never judged and ≥ 24 h old), rules, `prv_ai_judgements` row, `judged_at` + `judge_counters` update; `AI_JUDGE_ENABLED` gate; hourly cron line (`ai/judge/judge.go`; rows with empty `data` are skipped; the judgement is written under the AI row's `FOR UPDATE`, a row withdrawn meanwhile is left alone; heartbeat `ai_judge`, exit 1 on a failed video; cron at minute 30; `AI_JUDGE_ENABLED` in `docker-compose.yml` (default `off`) and the deploy workflow's variable list, `init_env.sh` already copies every `AI_*`; new table, so `lib/schema.js` needs nothing)
 - [x] unit tests: each counter (sqlmock), rules table (no signals / dislikes / undo / conflicting markup with negative-rating author ignored / duration withdraw), movement (also `judgeVideo`: unmoved skip, review write, re-cut withdraw)
-- [x] e2e: published video + an undo event → judgement `needs_llm` recorded as `review` with `by=rules` while the LLM is off (Task 6 replaces this); a new `videos` row with another duration + request → `withdrawn_by = duration`, human path served (also: off by default, `ok` without signals, not due before 24 h, unmoved counters not re-judged, the new row without a request is not a re-cut, judgements on `/admin/video`)
+- [x] e2e: published video + an undo event → judgement `needs_llm` recorded as `review` with `by=rules` while the LLM is off (Task 6 replaces this); a new `videos` row with another duration + request → `withdrawn_by = duration`, human path served (Task 12: `review` by rules, the row stays served; also: off by default, `ok` without signals, not due before 24 h, unmoved counters not re-judged, the new row without a request is not a re-cut, judgements on `/admin/video`)
 - ⚠️ found while building the re-cut rule: `GET /video-calculated` served the AI row also on a `mismatch` / `no_duration` lookup (`findVideoForRead` falls back to any row of the native_id), so a player on another cut could get the old cut's AI segments until the judge withdrew the row. Fixed in Task 6 (first ➕): AI only on `match` / `backfilled` (`AI_LOOKUP_OUTCOMES` in `lib/find-ai-calculated.js`), as the Key decision "Keyed by `videos.id`" promises.
 
 ### Task 6: LLM judge, withdraw, review batches
@@ -472,7 +471,7 @@ Key decisions:
 - [x] ➕ `GET /video-calculated` serves the AI row only on a `match` / `backfilled` lookup (the ⚠️ of Task 5): `AI_LOOKUP_OUTCOMES` in `lib/find-ai-calculated.js`, unit test; e2e: a duration > 2 s off and a request without duration get the human segments on the AI-first app; the vote handler keeps resolving by the AI row (votes carry exact bounds)
 - [x] `llm.go`: request from signals + run transcript (±60 s around disagreements), schema, `FixtureClient` in tests, cost into the judgement row; min interval (`llmClient` in `ai/judge`, not the detector's `Client`: the detector package is a synced copy with its own output type; `fixtureJudge` reads `<native_id>.judge.json`; the min interval gates only the LLM path: within it the video is skipped with its old counters, so it is due again later; flags `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_JUDGE_AUTO_WITHDRAW` wired in `docker-compose.yml` and the deploy workflow, `init_env.sh` already copies every `AI_*`)
 - [x] `judge-v1.md`: the decision rules in the prompt mirror the review page's "How to decide" card (payer test, woven-in calls to action are self_promotion, unclear when the text does not decide, timing is a separate flag)
-- [x] `review.go`: batch `ai-judge-<date>` (new batch after 30 items), one item per AI entry (`kind='ai'`, `video_id`, `proposed`, `cues`, `link`, `flagged_by`), skip videos with an open ai item (part rule, codes, link and `flagged_by` as a list: see Technical Details → Judge; `kind` / `video_id` added to `ReviewItem`, `lib/schema.js` ALTER, `hydrate` exposes both)
+- [x] `review.go`: batch `ai-judge-<date>` (new batch after 30 items), one item per AI entry (`kind='ai'`, `video_id`, `proposed`, `cues`, `link`, `flagged_by`), skip videos with an open ai item (per entry since Task 12; part rule, codes, link and `flagged_by` as a list: see Technical Details → Judge; `kind` / `video_id` added to `ReviewItem`, `lib/schema.js` ALTER, `hydrate` exposes both)
 - [x] withdraw on `withdraw` when `AI_JUDGE_AUTO_WITHDRAW=on` (`withdrawn_by='judge'`, queue status `withdrawn`; the items are created either way)
 - [x] unit tests: prompt rendering (disagreement windows), schema parse errors → `review` by `rules` with reason `judge_invalid` (fail safe toward a human), min interval, no duplicate items (also: LLM ok / review / withdraw with auto withdraw on and off, a failed call records nothing, the re-cut skips the LLM, part selection, env defaults, client selection)
 - [x] e2e: fixture judge says `withdraw` → row withdrawn, human path served, items in a batch visible on `/admin/review?format=json`; fixture says `review` → row still served, items created; fixture says `ok` → nothing (also: the item page opens the ai item, JSON and HTML, blind; a second review while the item is open adds no item; the duration withdraw ignores `AI_JUDGE_AUTO_WITHDRAW=off` and creates no item)
