@@ -107,14 +107,14 @@ extension ──GET /video-calculated?…&views=V──▶ Node ──upsert─�
                                                  ├── AI row for this videos row? ──yes──▶ prv_ai_video_calculateds.data
                                                  └── no / AI_FIRST=off ──────────────▶ video_calculateds.data (today)
 
-cron (every 5 min, flock)  prv/commands/ai detect
+cron (every 5 min, flock)  prv/commands/ai/ai detect
    queue: prv_ai_videos.status='seen' AND views_max ≥ AI_MIN_VIEWS (or fallback, see Trigger)
    → yt-dlp info + auto subs (ru)      → no track: retry 6 h / 24 h / 72 h, then no_track
    → timeline gate                     → timeline_unreliable (nothing published)
    → Batches API submit (AnthropicBatch) → status detecting, batch_id; next tick polls
    → Validate + Resolve + thresholds   → prv_ai_runs (raw) + prv_ai_video_calculateds (published)
 
-cron (hourly, flock)  prv/commands/ai judge
+cron (hourly, flock)  prv/commands/ai/ai judge
    due: published rows with new signals since judged_at (or never judged, ≥ 24 h old)
    → signals (votes, undo, clicks, human markups, duration variants, views, age)
    → rules: nothing negative → ok (no call); duration changed > 2 s → withdraw (no call)
@@ -326,11 +326,11 @@ Key decisions:
 **Files:**
 - Create: `docs/research/20261022-ai-first-spikes.md` (results; no video ids in the repo)
 
-- [ ] from the prod host (KZ IP, no cookies): `yt-dlp --list-subs` + `--write-auto-subs --sub-langs ru --skip-download` on 10 prv videos with known ru auto tracks; record success rate, wall time, any rate limiting
-- [ ] subtitle readiness: 10 prv videos published < 2 h ago (channels with many human markups); poll `--list-subs` hourly for 3 days from the host (cron + log); record when the ru auto track appears → sets the retry schedule (6 h / 24 h / 72 h is the placeholder)
-- [ ] views: confirm the counter is in the prv video page DOM the extension already reads, and that `info.json` `view_count` is present for prv (fallback)
-- [ ] build check: `go.mod` to `go 1.27`, vendor `anthropic-sdk-go`, `go build -mod=vendor` in the Dockerfile stage; image size delta
-- [ ] write results and the chosen constants into the research note; adjust Technical Details if a fact contradicts them
+- [x] from the prod host (KZ IP, no cookies): `yt-dlp --list-subs` + `--write-auto-subs --sub-langs ru --skip-download` on 10 prv videos with known ru auto tracks; record success rate, wall time, any rate limiting (⚠️ deferred: prod-host spike, owner runs it later)
+- [x] subtitle readiness: 10 prv videos published < 2 h ago (channels with many human markups); poll `--list-subs` hourly for 3 days from the host (cron + log); record when the ru auto track appears → sets the retry schedule (6 h / 24 h / 72 h is the placeholder) (⚠️ deferred: prod-host spike, owner runs it later)
+- [x] views: confirm the counter is in the prv video page DOM the extension already reads, and that `info.json` `view_count` is present for prv (fallback) (⚠️ deferred: prod-host spike, owner runs it later)
+- [x] build check: `go.mod` to `go 1.27`, vendor `anthropic-sdk-go`, `go build -mod=vendor` in the Dockerfile stage; image size delta (measured in a throwaway copy, nothing committed: builds, copied tests pass, image +22.5 MB, +40.6 MB more with yt-dlp in Task 2)
+- [x] write results and the chosen constants into the research note; adjust Technical Details if a fact contradicts them (constants unchanged until the prod-host spikes; binary path fixed to `prv/commands/ai/ai`)
 
 ### Task 1: Views on the read path and the AI queue table
 
@@ -373,7 +373,7 @@ Key decisions:
 - [ ] detect: request as the held-out run; batch submit / poll by `batch_id`; `prv_ai_runs` row with transcript, raw output, usage, cost (`detector.Price`)
 - [ ] publish (`publish.go`): thresholds, category ids by name, `prv_ai_video_calculateds` upsert (`published_at`, `withdrawn_at = NULL`), status `published`; no entry survives the thresholds → status `published` with empty `data` (the video is done, nothing to skip; serving treats empty as no AI row)
 - [ ] heartbeat row `ai_detect`; exit 1 when any video failed in the tick, as the calculator
-- [ ] crontab: `*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai detect`, gated by `AI_DETECT_ENABLED` inside the binary (exit 0 silently when off)
+- [ ] crontab: `*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1` (the binary sits next to its `main.go`, as `calculate` does; `/app/prv/commands/ai` is the source directory), gated by `AI_DETECT_ENABLED` inside the binary (exit 0 silently when off)
 - [ ] unit tests (sqlmock): queue rule incl. budget and fallback, retry schedule, gate decisions (overrun 2.9 / 3.1, duration variants), threshold filter, category mapping error
 - [ ] e2e: stub yt-dlp + fixture client; one video → `published` with the expected entries; one without a ru track → `next_attempt_at` set; one with overrun 10 s → `timeline_unreliable`, no AI row; `ai detect <native_id>` single-video mode; heartbeat on `/metrics`
 - [ ] run `make test-e2e` and `go test ./ai/...` — must pass before task 4
@@ -496,6 +496,13 @@ Key decisions:
   which videos ran under which.
 - Held-out re-score with v2.2 before it ships as `AI_MODEL`'s prompt (eval repo; the gate is
   SCORE ≥ 0.15 and ≤ 6 s/h wrongly cut, scored once).
+
+**Prod-host spikes (deferred from Task 0 / Task 9, owner runs them; results go into
+`docs/research/20261022-ai-first-spikes.md`, constants adjusted from them)**
+- yt-dlp from the KZ IP: `--list-subs` + ru auto subs on 10 prv videos (success rate, wall time,
+  rate limiting).
+- Subtitle readiness: 10 fresh videos polled hourly for 3 days → the 6 h / 24 h / 72 h retry schedule.
+- Views: the counter in the prv page DOM, `info.json` `view_count` for prv.
 
 **Manual verification**
 - Prod: `ai detect <native_id>` on one known video; `docker logs` lines; `/metrics` gauges;
