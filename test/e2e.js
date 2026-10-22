@@ -1924,6 +1924,12 @@ test('ai judge: a human interval edited into a conflict is new evidence (bounds 
     assert.deepEqual((await conflicts()).at(-1), ['llm', 2, 1], 'intro turned sponsor');
     judge();
     assert.equal((await judgements(videoId)).length, 3, 'nothing newer: not judged again');
+
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'edit-c', category_id: cats.prv.intro, duration: 600,
+        data: { intervals: [{ start: 32, end: 68 }, { start: 500, end: 530 }] } });
+    assert.equal((await putMarkup('', { video_id: vid, user_id: 'edit-c', category_id: cats.prv.intro, start: 32, end: 68, new_category_id: sp })).status, 200);
+    judge();
+    assert.deepEqual((await conflicts()).at(-1), ['llm', 3, 1], 'the category change turned the other interval of the markup sponsor too');
 });
 
 test('ai judge: review items go to the day’s newest part that nobody holds or has started, within 30 items', async () => {

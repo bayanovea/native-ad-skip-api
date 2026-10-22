@@ -274,13 +274,15 @@ Key decisions:
   have the last word on what they saw); a conflicting markup belongs to no entry and takes the
   earliest baseline. New evidence = rows created after the baseline: a user's latest
   vote on an entry that is down, an undo, a conflicting human markup (dated by its interval's last
-  edit too: `PUT /markups` edits in place; an author's rating crossing 0 is not dated); plus re-cuts beyond the
+  edit too: `PUT /markups` edits in place, and a category change, which lives on the markup, touches
+  every interval of it; an author's rating crossing 0 is not dated); plus re-cuts beyond the
   recorded `judge_counters.duration_recut` (a row becomes a re-cut with a later request, which has
   no time of its own; that count only grows). Not a comparison of counts: totals shrink (an entry
   removed on review, votes changed back) and would hide new evidence, and a repeated identical
   vote keeps its row, so it is never new. A video with every entry kept and nothing newer is recorded `ok` by
-  `rules` once, which moves `judged_at` past the verdicts. `createdAt` is set by the writer before
-  its commit, so the tick waits 1 s after its start before reading: a write stamped before the
+  `rules` once, which moves `judged_at` past the verdicts. `createdAt` is set by the writer after its last
+  lock wait, just before its commit (`PUT /markups` updates the markup, whose row lock can wait out
+  a calculation, before the intervals), so the tick waits 1 s after its start before reading: a write stamped before the
   start has committed by then (one host clock for Node, Go and Postgres). Ids would not help:
   sequence values are not in commit order either.
 - Rules (no call), on the new evidence: a new re-cut and no new negative (a `videos` row with a
@@ -521,9 +523,6 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] eval repo README/CLAUDE.md: the product consumes `internal/detector` via copy; prompt changes land there first (eval `92e89b5`)
 - [x] `docs/backlog/`: items this plan leaves open (`ai-judge-autonomy-flag.md`, `ai-views-from-clients.md`, `ai-timeline-phase-3.md`, `ai-detect-failed-videos-alert-window.md`, `real-video-ids-in-tracked-files.md`; the last one also lists `docs/plans/completed/20261015-assessor-review-page.md`, which repeats a fixture id)
 - [x] move this plan to `docs/plans/completed/`
-- [x] the judge tick waits 1 s (`commitSettle`) before reading, so a signal stamped before the tick's start but committed after its read is never read as old next time; a repeated identical vote still recomputes the segment ratings (author rating and vote row untouched); e2e for the repeat on the human path (one row, author once, drifted rating repaired, delete back to the start)
-- [x] `POST /vote` (prv) takes the user's latest row as the previous vote (`"createdAt" DESC, id DESC`, as the rating rule) and a change replaces all their rows on the segment, so a vote matching an older legacy duplicate is no longer swallowed as a repeat; e2e with two legacy rows
-- [x] judge keep baseline per entry (`entryKeeps`; markups take the earliest), a conflicting markup dated by `GREATEST(m."createdAt", i."updatedAt")` and prv `PUT /markups` always writes the interval row; unit test for per-entry baselines, e2e for a keep on one entry before the other's and for bounds / category edits into a conflict
 - [x] cleanup pass before commit (residue / transient state / open questions) (➕ CI's Go unit test step now runs `./ai/...` too, it ran only `./calculator`)
 
 ### Task 12: Review fixes (2026-10-22 code review)
@@ -548,6 +547,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] the judge tick waits 1 s (`commitSettle`) before reading, so a signal stamped before the tick's start but committed after its read is never read as old next time; a repeated identical vote still recomputes the segment ratings (author rating and vote row untouched); e2e for the repeat on the human path (one row, author once, drifted rating repaired, delete back to the start)
 - [x] `POST /vote` (prv) takes the user's latest row as the previous vote (`"createdAt" DESC, id DESC`, as the rating rule) and a change replaces all their rows on the segment, so a vote matching an older legacy duplicate is no longer swallowed as a repeat; e2e with two legacy rows
 - [x] judge keep baseline per entry (`entryKeeps`; markups take the earliest), a conflicting markup dated by `GREATEST(m."createdAt", i."updatedAt")` and prv `PUT /markups` always writes the interval row; unit test for per-entry baselines, e2e for a keep on one entry before the other's and for bounds / category edits into a conflict
+- [x] prv `PUT /markups` with `new_category_id` touches every live interval of the markup (the category lives on `markups`, a sibling interval turned sponsor is a conflict too); the markup row is updated before the intervals, so their `updatedAt` is stamped after any wait on the calculator's markup lock; `POST /vote` (vote created after the row locks) and the undo writer (a plain insert) already stamp after their waits; e2e for a two-interval markup
 - [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion

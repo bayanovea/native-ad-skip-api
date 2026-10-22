@@ -94,7 +94,7 @@ func Run(cfg Config) error {
 		return err
 	}
 	// Signals are counted up to r.now and the next tick takes what came after, by "createdAt",
-	// which the writer sets before its commit: waiting lets a write stamped before r.now commit
+	// which the writer sets after its last lock wait, just before its commit: waiting lets a write stamped before r.now commit
 	// first, so the tick never misses one that the next tick would then call old.
 	time.Sleep(commitSettle)
 	// A failed video (an API error, say) is retried next tick and fires CalculatorFailedVideos;

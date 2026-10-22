@@ -164,8 +164,8 @@ func events(db *sql.DB, table, nativeID string, bounds []byte, asOf time.Time) (
 // humanMarkups lists the live human intervals on the AI row's videos row posted
 // since publish, each marked when it conflicts with the AI (see conflicts). An
 // interval is dated by its last edit too (PUT /markups moves its bounds in place and
-// touches it on a category change), not by markups."updatedAt", which every
-// recalculation bumps.
+// touches every interval of the markup on a category change), not by
+// markups."updatedAt", which every recalculation bumps.
 func humanMarkups(db *sql.DB, v Video, categories map[int]string, asOf time.Time) ([]humanNote, error) {
 	rows, err := db.Query(`SELECT m.category_id, i.start, i."end", COALESCE(u.rating, 0), GREATEST(m."createdAt", i."updatedAt") AS dated
 		FROM markups m

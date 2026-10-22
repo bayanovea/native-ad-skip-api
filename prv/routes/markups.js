@@ -137,11 +137,17 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         }
 
         await sequelize.transaction(async (transaction) => {
-            // Also for a category change alone, so the interval's "updatedAt" dates every edit for
-            // the AI judge (Sequelize skips an update that would only set "updatedAt").
+            // The intervals' "updatedAt" dates the edit for the AI judge, stamped in JS by the call, so it
+            // goes after the markup row lock, which can wait out a running calculation of the video.
+            await models.Markup.update(newMarkupValues, { where: { id: markupInterval.markup_id }, transaction });
+            // Columns are rewritten even when unchanged: Sequelize skips an update that would only set
+            // "updatedAt". The category lives on the markup, so a change dates every interval of it.
             await models.MarkupTimeInterval.update({ start: markupInterval.start, end: markupInterval.end, ...newIntervalValues },
                 { where: { id: markupInterval.id }, transaction });
-            await models.Markup.update(newMarkupValues, { where: { id: markupInterval.markup_id }, transaction });
+            if (newMarkupValues.category_id !== undefined) {
+                await models.MarkupTimeInterval.update({ markup_id: markupInterval.markup_id },
+                    { where: { markup_id: markupInterval.markup_id, deleted_at: null }, transaction });
+            }
         });
 
         res.status(200).send('Updated');
