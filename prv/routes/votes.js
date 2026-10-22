@@ -47,8 +47,12 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                 item.category_id === categoryId && item.start === start && item.end === end);
             if (!segment) return false;
 
+            // The latest row, as the rating rule reads it: pre-2026-10-17 data has several rows
+            // per user and segment.
+            const userVotes = { user_id: userId, video_id: video.id, category_id: categoryId, start, end };
             const prevVote = await models.Vote.findOne({
-                where: { user_id: userId, video_id: video.id, category_id: categoryId, start, end },
+                where: userVotes,
+                order: [['createdAt', 'DESC'], ['id', 'DESC']],
                 transaction,
             });
             // The same vote again keeps its row, so its time stays when the user said it (the AI
@@ -57,6 +61,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
             const repeat = prevVote && prevVote.vote === Number(vote);
             let voteObj;
             if (!repeat) {
+                await models.Vote.destroy({ where: userVotes, transaction });
                 voteObj = await models.Vote.create({
                     user_id: userId,
                     prv_user_id: req.body.prv_user_id,
@@ -66,7 +71,6 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                     end,
                     vote,
                 }, { transaction });
-                if (prevVote) await prevVote.destroy({ transaction });
             }
 
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, { categoryId, start, end }, { transaction });
