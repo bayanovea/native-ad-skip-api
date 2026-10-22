@@ -959,6 +959,21 @@ test('ai: the image carries the pinned yt-dlp', () => {
     assert.equal(r.stdout.trim(), '2026.10.21');
 });
 
+test('ai: prv_ai_timelines exists with the phase-3 columns', async () => {
+    const rows = await dbQuery(
+        `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'prv_ai_timelines' ORDER BY column_name`);
+    assert.deepEqual(rows.map(r => [r.column_name, r.data_type, r.is_nullable]), [
+        ['id', 'integer', 'NO'],
+        ['measured_at', 'timestamp with time zone', 'NO'],
+        ['method', 'text', 'NO'],
+        ['native_id', 'character varying', 'NO'],
+        ['steps', 'jsonb', 'NO'],
+        ['video_id', 'integer', 'YES'],
+        ['windows', 'jsonb', 'NO'],
+        ['yt_duration_s', 'double precision', 'YES'],
+    ]);
+});
+
 // ── AI detect (prv/commands/ai): stub yt-dlp and fixture model answers ─────────
 
 // docker-compose.e2e.yml points YTDLP_BIN and AI_CLIENT=fixture at test/fixtures/ai; an env value of undefined drops the variable.

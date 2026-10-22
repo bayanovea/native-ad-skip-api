@@ -338,7 +338,7 @@ Key decisions:
 - Use: `Resolve` the AI entries through the steps (subtitle time − shift at that point), compare
   with the human intervals, re-judge; publish only when every entry's window has a confident
   shift (matches ≥ 50 words).
-- The spike in Task 9 answers the two unknowns: CPU minutes per video on the 2 vCPU VM and the
+- The timeline spike (deferred from Task 9, see Post-Completion) answers the two unknowns: CPU minutes per video on the 2 vCPU VM and the
   accuracy against `drift.jsonl` (31 videos, known shifts). The plan for the implementation is
   written after that.
 
@@ -480,14 +480,16 @@ Key decisions:
 
 ### Task 9: Phase-3 spike and design note (audio drift)
 
-**Files:**
-- Create: `scripts/timeline-spike/` (`README.md`, `measure.py` = `~/Web/data/audit/audit.py` with whisper.cpp instead of the current ASR, host-only; nothing in the image), `docs/research/20261022-timeline-spike.md`
-- Modify: `prv/db/index.js` (`AiTimeline` model, table only), `lib/schema.js`
+Owner's decision: this task builds the table only; the spike script and its note are deferred
+to the prod-host spike (see Post-Completion), so the next plan starts from there.
 
-- [ ] `prv_ai_timelines` table (no writer in the product yet)
-- [ ] on the prod host (or a VM of the same size): whisper.cpp `small` on three 2-min windows of 5 audited videos; record CPU seconds, RAM, shift accuracy vs `drift.jsonl`
-- [ ] research note: cost per video, accuracy, the trigger budget this allows, and the open design points for the next plan (bisection for steps, re-timing through `Resolve`, judge input)
-- [ ] no product code path changes; `make test-e2e` unaffected
+**Files:**
+- Modify: `prv/db/index.js` (`AiTimeline` model, table only; new table, so `lib/schema.js` needs nothing), `test/e2e.js`
+
+- [x] `prv_ai_timelines` table (no writer in the product yet) (`id` PK added by Sequelize, so a video can be measured more than once; index on `native_id`; e2e asserts the columns and types)
+- [x] on the prod host (or a VM of the same size): whisper.cpp `small` on three 2-min windows of 5 audited videos; record CPU seconds, RAM, shift accuracy vs `drift.jsonl` (⚠️ deferred: prod-host spike, owner runs it later)
+- [x] research note: cost per video, accuracy, the trigger budget this allows, and the open design points for the next plan (bisection for steps, re-timing through `Resolve`, judge input) (⚠️ deferred: prod-host spike, owner runs it later)
+- [x] no product code path changes; `make test-e2e` unaffected
 
 ### Task 10: Verify acceptance criteria
 - [ ] every flag default leaves the product as before the plan (fresh e2e run with no `AI_*` env: identical behaviour, the only diff is the `views` param accepted)
@@ -542,6 +544,18 @@ Key decisions:
   rate limiting).
 - Subtitle readiness: 10 fresh videos polled hourly for 3 days → the 6 h / 24 h / 72 h retry schedule.
 - Views: the counter in the prv page DOM, `info.json` `view_count` for prv.
+
+**Timeline spike (deferred from Task 9, owner runs it; the phase-3 plan starts from its note)**
+- Where: the prod host or a VM of the same size (2 vCPU / 4 GB), host-only tools, nothing in the image.
+- Script: `scripts/timeline-spike/` (`README.md` with the install steps, `measure.py` =
+  `~/Web/data/audit/audit.py` with whisper.cpp `small`, Russian, instead of its current ASR);
+  it may write its results into `prv_ai_timelines` (`steps`, `windows`, `method`).
+- Measure: audio download (yt-dlp, `m4a ≤ 70 kbps`) + ASR on three 2-minute windows of 5 videos
+  from the drift audit: CPU seconds and peak RAM per window and per video, shift per window vs
+  the known shifts in `~/Web/data/audit/drift.jsonl` (error in seconds, words matched).
+- Note: `docs/research/20261022-timeline-spike.md` (no video ids): cost per video, accuracy, the
+  `AI_TIMELINE_DAILY` budget this allows on the VM, and the open design points for the next plan
+  (bisection for steps, re-timing through `Resolve`, judge input).
 
 **Manual verification**
 - Prod: `ai detect <native_id>` on one known video; `docker logs` lines; `/metrics` gauges;
