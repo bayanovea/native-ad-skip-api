@@ -4,14 +4,12 @@ import (
 	"database/sql"
 
 	"odedohbest/video-calculate/ai/vtt"
+	"odedohbest/video-calculate/calculator"
 )
 
 // maxOverrun is the timeline gate: a track whose last cue ends more than this many
 // seconds after the video does not fit it (eval audit: catches 13 of 15 drifted videos).
 const maxOverrun = 3.0
-
-// durationTolerance is lib/duration-tolerance.js DURATION_TOLERANCE.
-const durationTolerance = 2
 
 // overrun needs at least one cue (fetch treats an empty track as no track).
 func overrun(cues []vtt.Cue, duration float64) float64 {
@@ -28,7 +26,7 @@ func timelineOK(overrunS float64) bool { return overrunS <= maxOverrun }
 // yt-dlp sees another cut than the viewers, so the timing is not trusted.
 func findOrCreateVideo(db *sql.DB, nativeID string, duration int) (id int, ok bool, err error) {
 	err = db.QueryRow(`SELECT id FROM videos WHERE native_id = $1 AND duration BETWEEN $2::int - $3::int AND $2::int + $3::int
-		ORDER BY ABS(duration - $2::int), id LIMIT 1`, nativeID, duration, durationTolerance).Scan(&id)
+		ORDER BY ABS(duration - $2::int), id LIMIT 1`, nativeID, duration, calculator.DurationTolerance).Scan(&id)
 	if err != sql.ErrNoRows {
 		return id, err == nil, err
 	}
@@ -53,6 +51,6 @@ func findOrCreateVideo(db *sql.DB, nativeID string, duration int) (id int, ok bo
 func durationVariants(db *sql.DB, nativeID string, duration float64) (int, error) {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM videos WHERE native_id = $1 AND ABS(duration - $2::float8) > $3`,
-		nativeID, duration, durationTolerance).Scan(&n)
+		nativeID, duration, calculator.DurationTolerance).Scan(&n)
 	return n, err
 }

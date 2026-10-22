@@ -30,10 +30,10 @@ func (f *fakeLLM) Judge(_ context.Context, req detector.Request) (llmResult, err
 var judgeNow = published.Add(32 * time.Hour)
 
 // A video judged 7 h ago (at `since`), with no expectations set yet.
-func llmCase(t *testing.T, raw string, autoWithdraw bool) (*run, sqlmock.Sqlmock, Video, *fakeLLM) {
+func llmCase(t *testing.T, raw string, autoWithdraw bool) (*judgeRun, sqlmock.Sqlmock, Video, *fakeLLM) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{raw: raw}
-	r := &run{cfg: Config{AutoWithdraw: autoWithdraw, MinInterval: 6 * time.Hour}, db: db, categories: testCategories,
+	r := &judgeRun{cfg: Config{AutoWithdraw: autoWithdraw, MinInterval: 6 * time.Hour}, db: db, categories: testCategories, prv: testPrv,
 		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: judgeNow}
 	v := testVideo
 	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
@@ -42,7 +42,7 @@ func llmCase(t *testing.T, raw string, autoWithdraw bool) (*run, sqlmock.Sqlmock
 
 // llmCaseNotKept is llmCase for a video no human has kept since its last judgement, with two
 // undo events, one of them after it: the rules want the LLM.
-func llmCaseNotKept(t *testing.T, raw string, autoWithdraw bool) (*run, sqlmock.Sqlmock, Video, *fakeLLM) {
+func llmCaseNotKept(t *testing.T, raw string, autoWithdraw bool) (*judgeRun, sqlmock.Sqlmock, Video, *fakeLLM) {
 	r, mock, v, llm := llmCase(t, raw, autoWithdraw)
 	expectNotKept(mock, r.now)
 	return r, mock, v, llm
@@ -154,7 +154,7 @@ func TestJudgeVideoLLMWithdraw(t *testing.T) {
 		if auto {
 			mock.ExpectExec(regexp.QuoteMeta("SET withdrawn_at = NOW(), withdrawn_by = $2, withdrawn_reason = $3")).WithArgs(7, "judge", "not an ad").
 				WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn' WHERE native_id = $1")).WithArgs("-1_456000001").
+			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn', updated_at = NOW() WHERE native_id = $1")).WithArgs("-1_456000001").
 				WillReturnResult(sqlmock.NewResult(0, 1))
 		}
 		expectNewItems(mock, `["judge withdraw by llm: not an ad","signals: undo=2","keep: false"]`)
@@ -227,7 +227,7 @@ func TestJudgeVideoCountsTheSignalsAfterAKeep(t *testing.T) {
 func TestJudgeVideoSendsARecutToReviewWithoutTheLLMOrAWithdraw(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{}
-	r := &run{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories, llm: llm, now: reviewNow}
+	r := &judgeRun{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories, prv: testPrv, llm: llm, now: reviewNow}
 	expectSignals(mock, time.Time{}, reviewNow, [2]int{}, [2]int{}, 1)
 	expectTranscript(mock)
 	reason := "duration: 1 videos rows of another cut requested after publish"
@@ -244,7 +244,7 @@ func TestJudgeVideoSendsARecutToReviewWithoutTheLLMOrAWithdraw(t *testing.T) {
 func TestJudgeVideoNewNegativeSignalsAfterAnOldRecutReachTheLLM(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{raw: `{"decision":"withdraw","reason":"not an ad","segments":[{"index":0,"keep":false}]}`}
-	r := &run{cfg: Config{AutoWithdraw: true, MinInterval: 6 * time.Hour}, db: db, categories: testCategories,
+	r := &judgeRun{cfg: Config{AutoWithdraw: true, MinInterval: 6 * time.Hour}, db: db, categories: testCategories, prv: testPrv,
 		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: judgeNow}
 	v := testVideo
 	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
@@ -255,7 +255,7 @@ func TestJudgeVideoNewNegativeSignalsAfterAnOldRecutReachTheLLM(t *testing.T) {
 	expectLockAndJudgement(mock, "withdraw", "llm", "not an ad", "claude-sonnet-5-5", cost)
 	mock.ExpectExec(regexp.QuoteMeta("SET withdrawn_at = NOW(), withdrawn_by = $2, withdrawn_reason = $3")).WithArgs(7, "judge", "not an ad").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn' WHERE native_id = $1")).WithArgs("-1_456000001").
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn', updated_at = NOW() WHERE native_id = $1")).WithArgs("-1_456000001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNewItems(mock, `["judge withdraw by llm: not an ad","signals: undo=2 duration_recut=1","keep: false"]`)
 	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -269,7 +269,7 @@ func TestJudgeVideoNewNegativeSignalsAfterAnOldRecutReachTheLLM(t *testing.T) {
 func TestJudgeVideoNewRecutWithNegativeSignalsGoesToTheLLMAndAHuman(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{raw: `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`}
-	r := &run{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories,
+	r := &judgeRun{cfg: Config{AutoWithdraw: true}, db: db, categories: testCategories, prv: testPrv,
 		llm: llm, prompt: detector.Prompt{Text: "judge"}, price: detector.Prices["claude-sonnet-5-5"], now: reviewNow}
 	expectSignals(mock, time.Time{}, reviewNow, [2]int{}, [2]int{2, 2}, 1)
 	expectTranscript(mock)
@@ -333,7 +333,7 @@ func TestJudgeVideoCallsTheLLMOnceTheMinIntervalHasPassed(t *testing.T) {
 
 func TestRecordLeavesARowWithdrawnMeanwhile(t *testing.T) {
 	db, mock := newMock(t)
-	r := &run{db: db, categories: testCategories, now: reviewNow}
+	r := &judgeRun{db: db, categories: testCategories, prv: testPrv, now: reviewNow}
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
 		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(reviewNow))
@@ -346,7 +346,7 @@ func TestRecordLeavesARowWithdrawnMeanwhile(t *testing.T) {
 
 func TestTickJudgesTheOtherVideosAfterAFailure(t *testing.T) {
 	db, mock := newMock(t)
-	r := &run{db: db, categories: testCategories, now: judgeNow}
+	r := &judgeRun{db: db, categories: testCategories, prv: testPrv, now: judgeNow}
 	cols := []string{"video_id", "native_id", "data", "published_at", "duration", "judged_at", "judge_counters", "views_max", "requests", "last_seen_at"}
 	mock.ExpectQuery("FROM prv_ai_video_calculateds a").WillReturnRows(sqlmock.NewRows(cols).
 		AddRow(6, "-1_456000000", []byte(`not json`), published, 600, nil, nil, nil, 3, published).

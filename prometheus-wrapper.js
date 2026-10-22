@@ -79,7 +79,7 @@ function registerAiMetrics(sequelize) {
         labelNames: ['status'],
     });
     const cost = new client.Gauge({
-        name: 'ai_cost_usd_total',
+        name: 'ai_cost_usd',
         help: 'Model cost in USD so far: detect (prv_ai_runs) and judge (prv_ai_judgements)',
         labelNames: ['kind'],
     });
@@ -89,7 +89,7 @@ function registerAiMetrics(sequelize) {
         labelNames: ['kind'],
     });
     const judgements = new client.Gauge({
-        name: 'ai_judgements_total',
+        name: 'ai_judgements',
         help: 'prv_ai_judgements rows per decision and judge',
         labelNames: ['decision', 'by'],
     });

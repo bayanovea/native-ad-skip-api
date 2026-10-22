@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/ai/provider"
 	"odedohbest/video-calculate/ai/vtt"
 	"odedohbest/video-calculate/calculator"
 )
@@ -56,11 +58,12 @@ func env(name, def string) string {
 // commitSettle outlasts the signal writes' transactions (votes, undo events, markups: milliseconds).
 const commitSettle = time.Second
 
-// run is one tick's state.
-type run struct {
+// judgeRun is one tick's state.
+type judgeRun struct {
 	cfg        Config
 	db         *sql.DB
 	categories map[int]string
+	prv         provider.Provider
 	llm        llmClient
 	prompt     detector.Prompt
 	price      detector.Price
@@ -76,12 +79,15 @@ func Run(cfg Config) error {
 		defer db.Close()
 		return calculator.ClearHeartbeat(db, "ai_judge")
 	}
-	r := &run{cfg: cfg, now: time.Now()}
+	r := &judgeRun{cfg: cfg, now: time.Now()}
 	var err error
 	if r.llm, err = newLLMClient(cfg.Client, cfg.Model, cfg.FixtureDir); err != nil {
 		return err
 	}
 	if r.prompt, err = detector.LoadPrompt(cfg.PromptPath); err != nil {
+		return err
+	}
+	if r.prv, err = provider.Lookup("prv"); err != nil {
 		return err
 	}
 	var priced bool
@@ -100,20 +106,20 @@ func Run(cfg Config) error {
 	// A failed video (an API error, say) is retried next tick and fires CalculatorFailedVideos;
 	// the success, which CalculatorStale watches, needs only the tick's own query.
 	failed, err := r.tick()
+	if herr := calculator.WriteHeartbeatStatus(r.db, "ai_judge", failed, err == nil); herr != nil {
+		log.Printf("Heartbeat write failed: %v", herr)
+		return errors.Join(fmt.Errorf("heartbeat: %w", herr), err)
+	}
 	if err != nil {
-		log.Printf("ai judge: %v", err)
+		return fmt.Errorf("tick incomplete (%d videos failed): %w", failed, err)
 	}
-	if err := calculator.WriteHeartbeatStatus(r.db, "ai_judge", failed, err == nil); err != nil {
-		log.Printf("Heartbeat write failed: %v", err)
-		return fmt.Errorf("heartbeat: %w", err)
-	}
-	if err != nil || failed > 0 {
+	if failed > 0 {
 		return fmt.Errorf("tick incomplete: %d videos failed", failed)
 	}
 	return nil
 }
 
-func (r *run) tick() (failed int, err error) {
+func (r *judgeRun) tick() (failed int, err error) {
 	videos, err := dueVideos(r.db)
 	if err != nil {
 		return 0, err
@@ -165,7 +171,7 @@ type judgement struct {
 	Review               bool         // send the entries to /admin/review
 }
 
-func (r *run) judgeVideo(v Video) error {
+func (r *judgeRun) judgeVideo(v Video) error {
 	var err error
 	if v.Entries, err = parseEntries(v.Data); err != nil {
 		return fmt.Errorf("data: %w", err)
@@ -181,7 +187,7 @@ func (r *run) judgeVideo(v Video) error {
 		allKept = true
 		for i, e := range v.Entries {
 			since[i] = v.JudgedAt.Time
-			if at, ok := keeps[[2]int{e.Start, e.End}]; ok {
+			if at, ok := keeps[e.key()]; ok {
 				since[i] = at // humans have the last word: what they saw before their verdict is not new
 			} else {
 				allKept = false
@@ -226,7 +232,7 @@ func (r *run) judgeVideo(v Video) error {
 // askLLM makes the judge's call. A transport or API error fails the video (the
 // next tick retries); an answer that does not parse goes to a human as a review
 // by rules with reason judge_invalid.
-func (r *run) askLLM(v Video, s Signals, cues []vtt.Cue) (judgement, error) {
+func (r *judgeRun) askLLM(v Video, s Signals, cues []vtt.Cue) (judgement, error) {
 	res, err := r.llm.Judge(context.Background(), renderRequest(r.prompt, v, s, r.categories, cues))
 	if err != nil {
 		return judgement{}, fmt.Errorf("llm: %w", err)
@@ -253,7 +259,7 @@ func (r *run) askLLM(v Video, s Signals, cues []vtt.Cue) (judgement, error) {
 // review items, and moves judged_at to the tick's start (what the signals were
 // counted up to, so evidence created during the tick is new next time) with the
 // counters for the record. A row withdrawn meanwhile is left alone.
-func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
+func (r *judgeRun) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 	signals, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -283,16 +289,17 @@ func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 		return err
 	}
 	if j.WithdrawBy != "" {
+		// The same two writes as aiRepository.withdraw (prv/repository/ai.js): change both together.
 		if _, err := tx.Exec(`UPDATE prv_ai_video_calculateds SET withdrawn_at = NOW(), withdrawn_by = $2, withdrawn_reason = $3, updated_at = NOW()
 			WHERE video_id = $1`, v.VideoID, j.WithdrawBy, j.Reason); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'withdrawn' WHERE native_id = $1`, v.NativeID); err != nil {
+		if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'withdrawn', updated_at = NOW() WHERE native_id = $1`, v.NativeID); err != nil {
 			return err
 		}
 	}
 	if j.Review {
-		batch, n, err := addReviewItems(tx, v, j, s, cues, r.categories, r.now)
+		batch, n, err := addReviewItems(tx, r.prv, v, j, s, cues, r.categories, r.now)
 		if err != nil {
 			return err
 		}

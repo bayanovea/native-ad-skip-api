@@ -15,24 +15,25 @@ import (
 const batchMax = 30
 
 // addReviewItems sends the video's AI entries to /admin/review: one kind='ai' item
-// per entry in today's sheet ai-judge-<date>, mirroring reviewRepository.insertItems
-// and createBatch. An entry with an item still waiting for a verdict gets none, so a
+// per entry in today's sheet ai-judge-<date>. It writes the review tables with its own
+// SQL, mirroring reviewRepository.insertItems and createBatch (prv/repository/review.js):
+// a review-schema change updates both. An entry with an item still waiting for a verdict gets none, so a
 // withdrawn row's other entries still reach a human. Returns the batch and the
 // number of items, "" and 0 when every entry already waits.
-func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue, categories map[int]string, now time.Time) (string, int, error) {
+func addReviewItems(tx *sql.Tx, prv provider.Provider, v Video, j judgement, s Signals, cues []vtt.Cue, categories map[int]string, now time.Time) (string, int, error) {
 	rows, err := tx.Query(`SELECT i.start, i."end" FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = $1
 		AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts r WHERE r.item_id = i.id)`, v.VideoID)
 	if err != nil {
 		return "", 0, fmt.Errorf("open items: %w", err)
 	}
-	open := map[[2]int]bool{}
+	open := map[entryKey]bool{}
 	for rows.Next() {
-		var b [2]int
-		if err := rows.Scan(&b[0], &b[1]); err != nil {
+		var k entryKey
+		if err := rows.Scan(&k.start, &k.end); err != nil {
 			rows.Close()
 			return "", 0, fmt.Errorf("open items: %w", err)
 		}
-		open[b] = true
+		open[k] = true
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -40,7 +41,7 @@ func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue,
 	}
 	var todo []int
 	for i, e := range v.Entries {
-		if !open[[2]int{e.Start, e.End}] {
+		if !open[e.key()] {
 			todo = append(todo, i)
 		}
 	}
@@ -56,10 +57,6 @@ func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue,
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(position), 0) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, sheet).Scan(&last); err != nil {
 		return "", 0, err
 	}
-	prv, err := provider.Lookup("prv")
-	if err != nil {
-		return "", 0, err
-	}
 	for n, i := range todo {
 		e := v.Entries[i]
 		flagged, err := json.Marshal(flaggedBy(j, s, i))
@@ -69,8 +66,8 @@ func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue,
 		pos := last + n + 1
 		// The player opens 2 s early, as the sheets' links do (the page uses the link as is).
 		if _, err := tx.Exec(`INSERT INTO prv_review_items
-				(sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, kind, video_id, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ai', $12, CURRENT_TIMESTAMP)`,
+				(sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, kind, video_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ai', $12)`,
 			sheet, batch, fmt.Sprintf("A%d", pos), pos, v.NativeID, e.Start, e.End, categories[e.CategoryID],
 			nullString(cueText(cues, float64(e.Start), float64(e.End), "\n")), prv.LinkAt(v.NativeID, e.Start-2), flagged, v.VideoID); err != nil {
 			return "", 0, fmt.Errorf("review item: %w", err)
@@ -81,7 +78,8 @@ func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue,
 
 // reviewBatch picks the sheet's newest part that nobody holds or has started and
 // that has room for n more items, else registers a new part (<sheet>, then
-// <sheet>-p2, …), so a reviewer's batch never grows under them.
+// <sheet>-p2, …: the importer's names when a re-import adds a part to a sheet
+// imported whole), so a reviewer's batch never grows under them.
 func reviewBatch(tx *sql.Tx, sheet string, n int) (string, error) {
 	var batch string
 	err := tx.QueryRow(`SELECT b.batch FROM prv_review_batches b
@@ -112,7 +110,8 @@ func reviewBatch(tx *sql.Tx, sheet string, n int) (string, error) {
 
 // flaggedBy is the item's flagged_by, a list of strings like the sheets' run ids
 // (the page and the export read a list): the judgement, its signal counters and
-// the LLM's keep for this entry. Blind until the item has a verdict.
+// the LLM's keep for this entry. Blind until the item has a verdict. judgeReason in
+// prv/routes/admin-review.js parses the first line's format.
 func flaggedBy(j judgement, s Signals, entry int) []string {
 	out := []string{fmt.Sprintf("judge %s by %s: %s", j.Decision, j.By, j.Reason)}
 	c := s.Counters

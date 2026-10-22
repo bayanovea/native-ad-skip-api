@@ -94,11 +94,11 @@ test('registerAiMetrics: one refresh per scrape fills the AI gauges', async () =
     assert.equal(db.calls.length, 4, 'the gauges share one refresh of four queries');
     assert.match(output, /^ai_videos\{status="published"\} 3$/m);
     assert.match(output, /^ai_videos\{status="seen"\} 7$/m);
-    assert.match(output, /^ai_cost_usd_total\{kind="detect"\} 0.125$/m);
-    assert.match(output, /^ai_cost_usd_total\{kind="judge"\} 0$/m);
+    assert.match(output, /^ai_cost_usd\{kind="detect"\} 0.125$/m);
+    assert.match(output, /^ai_cost_usd\{kind="judge"\} 0$/m);
     assert.match(output, /^ai_cost_usd_24h\{kind="detect"\} 0.05$/m);
     assert.match(output, /^ai_cost_usd_24h\{kind="judge"\} 0$/m);
-    assert.match(output, /^ai_judgements_total\{decision="review",by="llm"\} 2$/m);
+    assert.match(output, /^ai_judgements\{decision="review",by="llm"\} 2$/m);
     assert.match(output, /^ai_review_open 4$/m);
 });
 
@@ -122,7 +122,7 @@ test('registerAiMetrics: a failing query logs once and leaves the gauges empty; 
             state = states[i];
             const output = await client.register.metrics();
             assert.doesNotMatch(output, /^ai_videos\{/m, 'no stale series after a failure');
-            assert.doesNotMatch(output, /^ai_judgements_total\{/m);
+            assert.doesNotMatch(output, /^ai_judgements\{/m);
             assert.doesNotMatch(output, /^ai_cost_usd_24h\{/m);
         }
         state = states[3];

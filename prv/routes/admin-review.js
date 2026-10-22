@@ -152,11 +152,17 @@ function beyondVideo(item, videos) {
     return Number(item.start) > longest ? longest : null;
 }
 
-// The judge's reason from an ai item's `flagged_by` ("judge <decision> by <by>: <reason>"), or null;
+// The judge's reason from an ai item's `flagged_by` ("judge <decision> by <by>: <reason>", written by
+// flaggedBy in ai/judge/review.go), or null;
 // undecided items carry no `flagged_by` (blind rule), so neither the badge nor the reason shows before a verdict.
 function judgeReason(item) {
     const line = (item.flagged_by || []).find(f => typeof f === 'string' && f.startsWith('judge '));
     return line && line.includes(': ') ? line.slice(line.indexOf(': ') + 2) : null;
+}
+
+function aiJudgeLine(item, t) {
+    const reason = judgeReason(item);
+    return `<div class="current ai-judge" style="margin-top:10px"><span class="badge ai-badge">${t('ai_badge')}</span>${reason ? ` <span class="muted">${t('ai_judge_reason')}</span> ${escapeHtml(reason)}` : ''}</div>`;
 }
 
 // `reviewer`'s latest verdict on a repository item (its history is newest first), or null.
@@ -445,7 +451,7 @@ function renderItemPage(payload, token, t, langLink) {
         <div class="current">${t('current_verdict')} ${badge(current.verdict, t)}${isLegacyWrongText(current) ? ` <span class="warn">${t('current_legacy_wrong_text')}</span>` : ''}
             <span class="muted">${t('current_by', { reviewer: current.reviewer, source: current.source, date: formatDate(current.decided_at) })}</span></div>
         ${current.comment ? `<blockquote>${escapeHtml(current.comment)}</blockquote>` : ''}
-        ${item.kind === 'ai' ? `<div class="current ai-judge" style="margin-top:10px"><span class="badge ai-badge">${t('ai_badge')}</span>${judgeReason(item) ? ` <span class="muted">${t('ai_judge_reason')}</span> ${escapeHtml(judgeReason(item))}` : ''}</div>` : ''}
+        ${item.kind === 'ai' ? aiJudgeLine(item, t) : ''}
         <div class="current flagged-by" style="margin-top:10px">${t('current_flagged_by')} ${(item.flagged_by || []).map(r => `<code>${escapeHtml(r)}</code>`).join(' ') || '<span class="muted">—</span>'}</div>
         <table>
             <thead><tr><th>${t('history_when')}</th><th>${t('history_verdict')}</th><th>${t('history_reviewer')}</th><th>${t('history_source')}</th><th>${t('history_comment')}</th></tr></thead>

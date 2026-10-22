@@ -17,11 +17,26 @@ type queued struct {
 	attempts int
 }
 
-// nativeIDPattern is a prv id ("-<owner>_<video>"); anything else never reaches yt-dlp's URL.
-var nativeIDPattern = regexp.MustCompile(`^-?[0-9]+_[0-9]+$`)
+// prv_ai_videos.status values the detector sets or tests (SQL text spells them out).
+const (
+	statusSeen               = "seen"
+	statusQueued             = "queued"
+	statusFetching           = "fetching"
+	statusDetecting          = "detecting"
+	statusPublished          = "published"
+	statusFailed             = "failed"
+	statusNoTrack            = "no_track"
+	statusTimelineUnreliable = "timeline_unreliable"
+)
+
+// nativeIDRegex is a prv id ("-<owner>_<video>"), valid in Go and Postgres alike (PRV_NATIVE_ID
+// in prv/repository/ai.js is its copy); anything else never reaches yt-dlp's URL.
+const nativeIDRegex = `^-?[0-9]+_[0-9]+$`
+
+var nativeIDPattern = regexp.MustCompile(nativeIDRegex)
 
 // A crashed tick leaves its rows in `fetching`; after an hour the queue takes them again.
-const queueRule = `native_id ~ '^-?[0-9]+_[0-9]+$' AND (
+const queueRule = `native_id ~ '` + nativeIDRegex + `' AND (
 	(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))
 	OR (status = 'queued' AND next_attempt_at <= NOW())
 	OR (status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'))`
@@ -93,7 +108,7 @@ func claimOne(db *sql.DB, nativeID string) (queued, error) {
 		return q, err
 	}
 	switch {
-	case status == "fetching" || status == "detecting":
+	case status == statusFetching || status == statusDetecting:
 		return q, fmt.Errorf("%s is already being fetched or detected", nativeID)
 	case hasRow:
 		return q, fmt.Errorf("%s already has an AI row (status %s): a re-detect is not supported", nativeID, status)
@@ -142,18 +157,18 @@ func nextAttempt(attempts int, noTrack bool) (string, time.Duration) {
 	d, ok := retryDelay(attempts)
 	switch {
 	case noTrack && !ok:
-		return "no_track", 0
+		return statusNoTrack, 0
 	case !noTrack && (attempts >= maxFetchErrors || !ok):
-		return "failed", 0
+		return statusFailed, 0
 	}
-	return "queued", d
+	return statusQueued, d
 }
 
 func markAttempt(db *sql.DB, q queued, noTrack bool, lastErr string) (string, error) {
 	attempts := q.attempts + 1
 	status, wait := nextAttempt(attempts, noTrack)
 	var next any
-	if status == "queued" {
+	if status == statusQueued {
 		next = time.Now().Add(wait)
 	}
 	_, err := db.Exec(`UPDATE prv_ai_videos SET status = $2, attempts = $3, next_attempt_at = $4, last_error = $5, updated_at = NOW()

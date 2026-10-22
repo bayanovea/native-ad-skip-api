@@ -20,13 +20,13 @@ func RecomputeRatings(tablePrefix string) error {
 	db := ConnectDb()
 	defer db.Close()
 
-	ids, err := getCalculatedVideoIds(db, tablePrefix)
+	ids, err := getVideoIds(db, tablePrefix+"video_calculateds")
 	if err != nil {
 		return fmt.Errorf("list calculated videos: %w", err)
 	}
 	var aiIds []string
 	if tablePrefix == "" {
-		if aiIds, err = getAiVideoIds(db); err != nil {
+		if aiIds, err = getVideoIds(db, "prv_ai_video_calculateds"); err != nil {
 			return fmt.Errorf("list AI rows: %w", err)
 		}
 	}
@@ -86,23 +86,6 @@ func RecomputeRatings(tablePrefix string) error {
 	return nil
 }
 
-func getAiVideoIds(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`SELECT video_id FROM prv_ai_video_calculateds ORDER BY video_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 // recomputeAiRatings rewrites the ratings in a prv AI row's data (any state, so a
 // restored or re-enabled row is right too) under the row's lock, which the vote
 // handlers and the review / withdraw writers also take.
@@ -145,8 +128,9 @@ func WithVoteRatings(tx *sql.Tx, videoId int, data []byte) ([]byte, error) {
 	return out, err
 }
 
-func getCalculatedVideoIds(db *sql.DB, tablePrefix string) ([]string, error) {
-	rows, err := db.Query(fmt.Sprintf(`SELECT DISTINCT video_id FROM %svideo_calculateds`, tablePrefix))
+// getVideoIds lists the video ids of a video_calculateds-shaped table.
+func getVideoIds(db *sql.DB, table string) ([]string, error) {
+	rows, err := db.Query(fmt.Sprintf(`SELECT DISTINCT video_id FROM %s`, table))
 	if err != nil {
 		return nil, err
 	}

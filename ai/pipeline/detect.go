@@ -144,43 +144,10 @@ func Detect(cfg Config, nativeID string) error {
 		}
 		return calculator.ClearHeartbeat(db, "ai_detect")
 	}
-	prompt, err := detector.LoadPrompt(cfg.PromptPath)
+	r, err := newDetectRun(cfg, manual)
 	if err != nil {
 		return err
 	}
-	r := &detectRun{cfg: cfg, prompt: prompt, priceFactor: 1,
-		ytdlp: &ytdlp.Runner{Bin: cfg.YtdlpBin, Attempts: 2, Timeout: 90 * time.Second, Backoff: 2 * time.Second, Logf: log.Printf}}
-	if r.prv, err = provider.Lookup("prv"); err != nil {
-		return err
-	}
-	switch {
-	case cfg.Client == "fixture":
-		f := detector.NewFixtureClient(cfg.FixtureDir, cfg.Model)
-		r.client = f
-		if !manual {
-			r.batch = f
-		}
-	case cfg.Client == "anthropic" && !manual:
-		b, err := detector.NewAnthropicBatch(cfg.Model, effort)
-		if err != nil {
-			return err
-		}
-		r.client, r.batch = b, b
-	case cfg.Client == "anthropic" || cfg.Client == "messages":
-		if r.client, err = detector.NewAnthropic(cfg.Model, effort); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("AI_CLIENT must be anthropic, messages or fixture, got %q", cfg.Client)
-	}
-	if r.batch != nil {
-		r.priceFactor = 0.5 // the Batches API's discount; the fixture batch stands in for it
-	}
-	var priced bool
-	if r.price, priced = detector.Prices[cfg.Model]; !priced {
-		log.Printf("ai detect: no price for %s, cost recorded as 0", cfg.Model)
-	}
-
 	r.db = calculator.ConnectDb()
 	defer r.db.Close()
 	if r.categories, err = loadCategories(r.db); err != nil {
@@ -199,42 +166,84 @@ func Detect(cfg Config, nativeID string) error {
 		return manualOutcome(r.db, nativeID)
 	}
 
-	failed, ok := r.tick(ctx)
-	if err := calculator.WriteHeartbeatStatus(r.db, "ai_detect", failed, ok); err != nil {
-		log.Printf("Heartbeat write failed: %v", err)
-		return fmt.Errorf("heartbeat: %w", err)
+	failed, err := r.tick(ctx)
+	if herr := calculator.WriteHeartbeatStatus(r.db, "ai_detect", failed, err == nil); herr != nil {
+		log.Printf("Heartbeat write failed: %v", herr)
+		return errors.Join(fmt.Errorf("heartbeat: %w", herr), err)
 	}
-	if !ok || failed > 0 {
+	if err != nil {
+		return fmt.Errorf("tick incomplete (%d videos failed): %w", failed, err)
+	}
+	if failed > 0 {
 		return fmt.Errorf("tick incomplete: %d videos failed", failed)
 	}
 	return nil
 }
 
+// newDetectRun loads the prompt and picks the model client: a manual run always
+// calls the model synchronously, a cron tick uses the Batches API unless
+// AI_CLIENT=messages.
+func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
+	prompt, err := detector.LoadPrompt(cfg.PromptPath)
+	if err != nil {
+		return nil, err
+	}
+	r := &detectRun{cfg: cfg, prompt: prompt, priceFactor: 1,
+		ytdlp: &ytdlp.Runner{Bin: cfg.YtdlpBin, Attempts: 2, Timeout: 90 * time.Second, Backoff: 2 * time.Second, Logf: log.Printf}}
+	if r.prv, err = provider.Lookup("prv"); err != nil {
+		return nil, err
+	}
+	switch {
+	case cfg.Client == "fixture":
+		f := detector.NewFixtureClient(cfg.FixtureDir, cfg.Model)
+		r.client = f
+		if !manual {
+			r.batch = f
+		}
+	case cfg.Client == "anthropic" && !manual:
+		b, err := detector.NewAnthropicBatch(cfg.Model, effort)
+		if err != nil {
+			return nil, err
+		}
+		r.client, r.batch = b, b
+	case cfg.Client == "anthropic" || cfg.Client == "messages":
+		if r.client, err = detector.NewAnthropic(cfg.Model, effort); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("AI_CLIENT must be anthropic, messages or fixture, got %q", cfg.Client)
+	}
+	if r.batch != nil {
+		r.priceFactor = 0.5 // the Batches API's discount; the fixture batch stands in for it
+	}
+	var priced bool
+	if r.price, priced = detector.Prices[cfg.Model]; !priced {
+		log.Printf("ai detect: no price for %s, cost recorded as 0", cfg.Model)
+	}
+	return r, nil
+}
+
 // tick is one cron run. `failed` counts videos the infrastructure failed (DB,
 // API, a yt-dlp that cannot start), not what the tick decided about a video
 // (unavailable, no track, an invalid answer, expired: recorded on its row);
-// ok is false when a step of the tick itself failed.
-func (r *detectRun) tick(ctx context.Context) (failed int, ok bool) {
-	ok = true
-	claimed, err := claimQueued(r.db, r.cfg)
-	if err != nil {
-		log.Printf("ai detect: claim: %v", err)
-		ok = false
+// err is the failures of the tick's own steps.
+func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
+	claimed, cerr := claimQueued(r.db, r.cfg)
+	if cerr != nil {
+		err = fmt.Errorf("claim: %w", cerr)
 	}
 	failed = r.detect(ctx, claimed, true)
 	if r.batch != nil {
-		n, err := r.poll(ctx)
+		n, perr := r.poll(ctx)
 		failed += n
-		if err != nil {
-			log.Printf("ai detect: list batches: %v", err)
-			ok = false
+		if perr != nil {
+			err = errors.Join(err, fmt.Errorf("list batches: %w", perr))
 		}
 	}
-	if err := r.expire(); err != nil {
-		log.Printf("ai detect: expire: %v", err)
-		ok = false
+	if eerr := r.expire(); eerr != nil {
+		err = errors.Join(err, fmt.Errorf("expire: %w", eerr))
 	}
-	return failed, ok
+	return failed, err
 }
 
 // detect fetches the claimed videos and submits the ones that passed the gate.
@@ -259,7 +268,7 @@ func manualOutcome(db *sql.DB, nativeID string) error {
 	if err := db.QueryRow(`SELECT status, last_error FROM prv_ai_videos WHERE native_id = $1`, nativeID).Scan(&status, &lastErr); err != nil {
 		return err
 	}
-	if status != "published" {
+	if status != statusPublished {
 		return fmt.Errorf("%s %s: %s", nativeID, status, lastErr.String)
 	}
 	return nil
@@ -280,16 +289,16 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		if !known {
 			log.Printf("ai detect: %s: no view_count in yt-dlp's info, waiting for views from clients", q.nativeID)
 		}
-		status := "fetching"
+		status := statusFetching
 		if views < int64(r.cfg.MinViews) {
-			status = "seen"
+			status = statusSeen
 		}
 		// views_max set, so the queue rule re-examines the row only once the extension reports more views.
 		if _, err := r.db.Exec(`UPDATE prv_ai_videos SET views_max = GREATEST(views_max, $2), status = $3, updated_at = NOW()
 			WHERE native_id = $1`, q.nativeID, views, status); err != nil {
 			return nil, err
 		}
-		if status == "seen" {
+		if status == statusSeen {
 			log.Printf("ai detect: %s seen: %d views below AI_MIN_VIEWS", q.nativeID, views)
 			return nil, nil
 		}
@@ -319,7 +328,7 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 	over := overrun(cues, info.Duration)
 	if !timelineOK(over) {
 		reason := fmt.Sprintf("last cue ends %.1f s after the video (%.0f s)", over, info.Duration)
-		if err := setStatus(r.db, q.nativeID, "timeline_unreliable", reason); err != nil {
+		if err := setStatus(r.db, q.nativeID, statusTimelineUnreliable, reason); err != nil {
 			return nil, err
 		}
 		log.Printf("ai detect: %s timeline_unreliable: %s", q.nativeID, reason)
@@ -330,8 +339,8 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		return nil, fmt.Errorf("videos row: %w", err)
 	}
 	if !ok {
-		reason := fmt.Sprintf("yt-dlp's %.0f s is more than %d s off every duration players reported", info.Duration, durationTolerance)
-		if err := setStatus(r.db, q.nativeID, "timeline_unreliable", reason); err != nil {
+		reason := fmt.Sprintf("yt-dlp's %.0f s is more than %d s off every duration players reported", info.Duration, calculator.DurationTolerance)
+		if err := setStatus(r.db, q.nativeID, statusTimelineUnreliable, reason); err != nil {
 			return nil, err
 		}
 		log.Printf("ai detect: %s timeline_unreliable: %s", q.nativeID, reason)
@@ -342,7 +351,7 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		return nil, fmt.Errorf("duration variants: %w", err)
 	}
 	if variants > 0 {
-		log.Printf("ai: duration variants: %s has %d videos rows off yt-dlp's %.0f s by more than %d s", q.nativeID, variants, info.Duration, durationTolerance)
+		log.Printf("ai detect: duration variants: %s has %d videos rows off yt-dlp's %.0f s by more than %d s", q.nativeID, variants, info.Duration, calculator.DurationTolerance)
 	}
 
 	meta := transcript.Meta{
@@ -417,7 +426,8 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 		}
 		if r.batch == nil {
 			res, err := r.client.Detect(ctx, p.req)
-			if r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err) != nil {
+			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err); err != nil {
+				log.Printf("ai detect: %s %v", p.q.nativeID, err)
 				failed++
 			}
 			continue
@@ -537,7 +547,8 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		}
 		for _, w := range videos {
 			res, err := r.client.Detect(ctx, detector.Request{Key: w.nativeID})
-			if r.finish(w.nativeID, w.runID, w.videoID, w.cues, res, err) != nil {
+			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, res, err); err != nil {
+				log.Printf("ai detect: %s %v", w.nativeID, err)
 				failed++
 			}
 		}
@@ -567,32 +578,29 @@ func (r *detectRun) expire() error {
 // finish records the model's answer on the run and publishes the video, in one
 // transaction under the queue row's lock; a video another run already resolved is
 // skipped. A failed call or an invalid answer marks the video failed (the run row
-// keeps what came back); the error return is for the database only.
+// keeps what came back); the error return is for the database only, and the caller logs it.
 func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, res detector.Result, callErr error) error {
 	tx, err := r.db.Begin()
 	if err != nil {
-		log.Printf("ai detect: %s: %v", nativeID, err)
 		return err
 	}
 	defer tx.Rollback()
 	var status string
 	if err := tx.QueryRow(`SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE`, nativeID).Scan(&status); err != nil {
-		log.Printf("ai detect: %s: %v", nativeID, err)
-		return err
+		return fmt.Errorf("lock queue row: %w", err)
 	}
-	if status != "detecting" {
+	if status != statusDetecting {
 		return nil
 	}
 
 	usage, err := json.Marshal(usageRow{res.Usage.InputTokens, res.Usage.OutputTokens, res.Usage.CacheReadTokens, res.Usage.CacheWriteTokens})
 	if err != nil {
-		return err
+		return fmt.Errorf("run %d usage: %w", runID, err)
 	}
 	cost := r.price.Cost(res.Usage) * r.priceFactor
 	if _, err := tx.Exec(`UPDATE prv_ai_runs SET raw_output = $2, usage = $3, cost_usd = $4 WHERE id = $1`,
 		runID, rawJSON(res.Raw), usage, cost); err != nil {
-		log.Printf("ai detect: %s run %d: %v", nativeID, runID, err)
-		return err
+		return fmt.Errorf("run %d: %w", runID, err)
 	}
 
 	units := requestFormat.Apply(cues)
@@ -600,11 +608,11 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		callErr = detector.Validate(units, res.Output)
 	}
 	if callErr != nil {
-		if err := setStatus(tx, nativeID, "failed", callErr.Error()); err != nil {
-			return err
+		if err := setStatus(tx, nativeID, statusFailed, callErr.Error()); err != nil {
+			return fmt.Errorf("mark failed: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return err
+			return fmt.Errorf("commit failed: %w", err)
 		}
 		log.Printf("ai detect: %s failed: %v", nativeID, callErr)
 		return nil
@@ -612,16 +620,14 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 
 	data := entries(detector.Resolve(units, res.Output), r.categories)
 	if err := publish(tx, videoID, nativeID, runID, data); err != nil {
-		log.Printf("ai detect: %s %v", nativeID, err)
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'published', batch_id = NULL, last_error = NULL, updated_at = NOW()
 		WHERE native_id = $1`, nativeID); err != nil {
-		return err
+		return fmt.Errorf("mark published: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("ai detect: %s: %v", nativeID, err)
-		return err
+		return fmt.Errorf("commit published: %w", err)
 	}
 	log.Printf("ai detect: %s published: %d entries of %d segments, video %d, run %d, $%.4f",
 		nativeID, len(data), len(res.Output.Segments), videoID, runID, cost)

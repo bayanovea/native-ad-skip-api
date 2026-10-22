@@ -38,7 +38,7 @@ let cats = {}; // { prv: { intro, sponsor }, rt: { intro, sponsor }, yt: { intro
 
 before(async () => {
     await createDb();
-    startServer();
+    serverProc = startServer();
     await waitForSchema();
     await waitForListen();
     cats.prv = await loadCats('');
@@ -94,7 +94,6 @@ function startServer(port = E2E_PORT, env = {}, tag = 'server') {
     });
     proc.stdout.on('data', d => process.stdout.write(`[${tag}] ${d}`));
     proc.stderr.on('data', d => process.stderr.write(`[${tag}] ${d}`));
-    if (port === E2E_PORT) serverProc = proc;
     return proc;
 }
 
@@ -1052,7 +1051,7 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.equal(run.yt_duration_s, 600.4);
     assert.equal(run.raw_output.segments.length, 3);
     assert.ok(Math.abs(run.cost_usd - FIXTURE_COST / 2) < 1e-12, `batch: half price, got ${run.cost_usd}`);
-    assert.match(out, /ai: duration variants: -1_456000201 has 1 videos rows/);
+    assert.match(out, /ai detect: duration variants: -1_456000201 has 1 videos rows/);
     assert.match(out, /ai detect: -1_456000201 published: 1 entries of 3 segments/);
 
     v = await aiVideo('-1_456000202');
@@ -2054,8 +2053,8 @@ test('ai metrics: /metrics exposes the AI gauges from the tables', async () => {
     const [{ detect, judge }] = await dbQuery(`SELECT
         (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) AS detect,
         (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) AS judge`);
-    assert.match(text, new RegExp(`^ai_cost_usd_total\\{kind="detect"\\} ${Number(detect)}$`, 'm'));
-    assert.match(text, new RegExp(`^ai_cost_usd_total\\{kind="judge"\\} ${Number(judge)}$`, 'm'));
+    assert.match(text, new RegExp(`^ai_cost_usd\\{kind="detect"\\} ${Number(detect)}$`, 'm'));
+    assert.match(text, new RegExp(`^ai_cost_usd\\{kind="judge"\\} ${Number(judge)}$`, 'm'));
     const [day] = await dbQuery(`SELECT
         (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours') AS detect,
         (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements WHERE created_at > NOW() - INTERVAL '24 hours') AS judge`);
@@ -2066,7 +2065,7 @@ test('ai metrics: /metrics exposes the AI gauges from the tables', async () => {
     const judged = await dbQuery(`SELECT decision, "by", COUNT(*)::int AS n FROM prv_ai_judgements GROUP BY decision, "by"`);
     assert.ok(judged.some(r => r.decision === 'review' && r.by === 'llm'));
     for (const { decision, by, n } of judged) {
-        assert.equal(parseCounter(text, 'ai_judgements_total', { decision, by }), n, `ai_judgements_total{${decision},${by}}`);
+        assert.equal(parseCounter(text, 'ai_judgements', { decision, by }), n, `ai_judgements{${decision},${by}}`);
     }
 
     const [{ open }] = await dbQuery(`SELECT COUNT(*)::int AS open FROM prv_review_items i

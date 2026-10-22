@@ -54,14 +54,14 @@ async function aiBlock(models, video, token) {
         ${aiRow.withdrawn_at ? '' : '<button class="delete-btn" onclick="withdrawAi(this)">Withdraw</button>'}
     </div>
     ${entries ? `
-    <table style="margin-bottom:28px">
+    <table class="ai-table">
         <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th></tr></thead>
         <tbody>${entries}</tbody>
     </table>` : '<div class="no-calc">Nothing passed the thresholds.</div>'}`;
     }
     if (judgements.length) {
         row += `
-    <table style="margin-bottom:28px">
+    <table class="ai-table">
         <thead><tr><th>Judged</th><th>Decision</th><th>By</th><th>Reason</th></tr></thead>
         <tbody>${judgements.map(j => `
             <tr class="ai-judgement">
@@ -219,6 +219,7 @@ module.exports = function createAdminRoutes(models, { markupRepository, aiReposi
         .muted { color: #64748b; font-size: 0.8rem; }
         code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.78rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #93c5fd; }
         .empty { text-align: center; padding: 48px; color: #475569; }
+        .ai-table { margin-bottom: 28px; }
         .no-calc { background: #1e293b; border-radius: 10px; padding: 20px; color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
         a { color: #93c5fd; text-decoration: none; }
         a:hover { text-decoration: underline; }

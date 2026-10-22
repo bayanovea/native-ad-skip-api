@@ -211,7 +211,7 @@ func disagreementWindows(entries []Entry, humans []humanNote) []window {
 // transcript around every disagreement.
 func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]string, cues []vtt.Cue) detector.Request {
 	var b strings.Builder
-	fmt.Fprintf(&b, "<video duration=%q published_hours_ago=\"%.0f\" requests=\"%d\"", fmt.Sprint(v.Duration.Int64), s.AgeH, s.Requests)
+	fmt.Fprintf(&b, "<video duration=\"%d\" published_hours_ago=\"%.0f\" requests=\"%d\"", v.Duration.Int64, s.AgeH, s.Requests)
 	if s.ViewsMax != nil {
 		fmt.Fprintf(&b, " views=\"%d\"", *s.ViewsMax)
 	}

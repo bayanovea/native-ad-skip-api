@@ -13,7 +13,7 @@ function load(aiFirst) {
 
 afterEach(() => { delete process.env.AI_FIRST; });
 
-// A stub AiVideoCalculated over `rows` that honours the where clause the helper sends.
+// A stub AiVideoCalculated over `rows` that honours the where clause the helper sends (the row in any state).
 function makeModels(rows) {
     const calls = [];
     return {
@@ -22,8 +22,7 @@ function makeModels(rows) {
             AiVideoCalculated: {
                 async findOne(opts) {
                     calls.push(opts);
-                    const { video_id, withdrawn_at } = opts.where;
-                    return rows.find(r => r.video_id === video_id && r.withdrawn_at === withdrawn_at) || null;
+                    return rows.find(r => r.video_id === opts.where.video_id) || null;
                 },
             },
         },

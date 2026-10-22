@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-)
 
-// durationTolerance is lib/duration-tolerance.js DURATION_TOLERANCE.
-const durationTolerance = 2
+	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/calculator"
+)
 
 // Counters are the signal counts a judgement sees and records (prv_ai_videos.judge_counters).
 type Counters struct {
@@ -60,6 +60,11 @@ type Entry struct {
 	End        int `json:"end"`
 }
 
+// entryKey is an entry's bounds, by which review items and their verdicts find it.
+type entryKey struct{ start, end int }
+
+func (e Entry) key() entryKey { return entryKey{e.Start, e.End} }
+
 // Video is one published AI row with its queue state.
 type Video struct {
 	VideoID       int
@@ -76,7 +81,7 @@ type Video struct {
 }
 
 // entryBounds joins a signal table to the AI entries' exact bounds and, where the
-// JSON has it, each entry's baseline (since).
+// JSON has it, each entry's baseline (since). Every query that embeds it passes that JSON as $2.
 const entryBounds = `jsonb_to_recordset($2::jsonb) AS e(category_id int, start int, "end" int, since timestamptz)`
 
 // baseline is an AI entry with the time after which the evidence on it is new.
@@ -124,7 +129,7 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, since []time
 	for _, h := range s.humans {
 		if h.Conflicting {
 			s.ConflictingMarkups++
-			if h.CreatedAt.After(markupsSince) {
+			if h.DatedAt.After(markupsSince) {
 				s.New.ConflictingMarkups++
 			}
 		}
@@ -179,11 +184,11 @@ func humanMarkups(db *sql.DB, v Video, categories map[int]string, asOf time.Time
 	var out []humanNote
 	for rows.Next() {
 		var h humanInterval
-		var created time.Time
-		if err := rows.Scan(&h.CategoryID, &h.Start, &h.End, &h.AuthorRating, &created); err != nil {
+		var dated time.Time
+		if err := rows.Scan(&h.CategoryID, &h.Start, &h.End, &h.AuthorRating, &dated); err != nil {
 			return nil, err
 		}
-		out = append(out, humanNote{h, conflicts(h, v.Entries, categories), created})
+		out = append(out, humanNote{h, conflicts(h, v.Entries, categories), dated})
 	}
 	return out, rows.Err()
 }
@@ -197,7 +202,7 @@ type humanInterval struct {
 type humanNote struct {
 	humanInterval
 	Conflicting bool
-	CreatedAt   time.Time
+	DatedAt     time.Time // its markup's creation or its own last edit, whichever is later
 }
 
 // conflicts: a human interval of a category the detector produces whose IoU is
@@ -207,7 +212,7 @@ func conflicts(h humanInterval, entries []Entry, categories map[int]string) bool
 	if h.AuthorRating < 0 {
 		return false
 	}
-	if c := categories[h.CategoryID]; c != "sponsor" && c != "self_promotion" {
+	if c := categories[h.CategoryID]; c != detector.CategorySponsor && c != detector.CategorySelfPromotion {
 		return false
 	}
 	for _, e := range entries {
@@ -234,7 +239,7 @@ func iou(s1, e1, s2, e2 float64) float64 {
 func durationVariants(db *sql.DB, v Video, asOf time.Time) (variants, recut int, err error) {
 	err = db.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE "createdAt" > $3 AND "createdAt" < $4)
 		FROM videos WHERE native_id = $1 AND id <> $2 AND ABS(duration - $5::int) > $6 AND "createdAt" <= $7`,
-		v.NativeID, v.VideoID, v.PublishedAt, v.LastSeenAt, v.Duration, durationTolerance, asOf).Scan(&variants, &recut)
+		v.NativeID, v.VideoID, v.PublishedAt, v.LastSeenAt, v.Duration, calculator.DurationTolerance, asOf).Scan(&variants, &recut)
 	return
 }
 
@@ -250,7 +255,7 @@ func storedRecut(stored []byte) int {
 // entryKeeps maps the bounds of each AI entry whose latest review verdict keeps it and
 // came after the last judgement to that verdict's time (prv/repository/ai.js allKept
 // matches the items the same way).
-func entryKeeps(db *sql.DB, v Video) (map[[2]int]time.Time, error) {
+func entryKeeps(db *sql.DB, v Video) (map[entryKey]time.Time, error) {
 	rows, err := db.Query(`SELECT e.start, e."end", l.decided_at FROM `+entryBounds+`
 		JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
 			WHERE i.kind = 'ai' AND i.video_id = $1 AND i.start = e.start AND i."end" = e."end"
@@ -261,14 +266,14 @@ func entryKeeps(db *sql.DB, v Video) (map[[2]int]time.Time, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	keeps := map[[2]int]time.Time{}
+	keeps := map[entryKey]time.Time{}
 	for rows.Next() {
-		var start, end int
+		var k entryKey
 		var at time.Time
-		if err := rows.Scan(&start, &end, &at); err != nil {
+		if err := rows.Scan(&k.start, &k.end, &at); err != nil {
 			return nil, err
 		}
-		keeps[[2]int{start, end}] = at
+		keeps[k] = at
 	}
 	return keeps, rows.Err()
 }

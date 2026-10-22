@@ -13,6 +13,10 @@ import (
 	"github.com/lib/pq"
 )
 
+// DurationTolerance is lib/duration-tolerance.js DURATION_TOLERANCE: the seconds within
+// which two durations of a native_id are the same cut (used by the ai commands).
+const DurationTolerance = 2
+
 type Interval struct {
 	start int
 	end   int

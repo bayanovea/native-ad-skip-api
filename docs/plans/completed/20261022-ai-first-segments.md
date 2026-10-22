@@ -211,7 +211,7 @@ Key decisions:
   `videos` row: `findByNativeIdAndDuration(native_id, round(info.duration))`; when the native_id
   has rows with a duration and none is within ± 2 s of yt-dlp's → `timeline_unreliable` (yt-dlp
   sees another cut than the players), else the row without a duration or a new one. Other rows off
-  by > 2 s next to a match are logged as `ai: duration variants` (old split families exist,
+  by > 2 s next to a match are logged as `ai detect: duration variants` (old split families exist,
   `docs/backlog/video-rows-race-and-old-split-families.md`); the judge counts them itself.
 - Transcript rendering, request and thresholds exactly as the eval (`detector.NewRequestFormat`
   with the format the held-out run used, cue timestamps dropped); publish filter: `sponsor` with
@@ -345,9 +345,9 @@ Key decisions:
 - Heartbeat rows `ai_detect` / `ai_judge` → `calculator_*` gauges already exposed per provider;
   `CalculatorStale` threshold per provider (detect 15 min, judge 2 h) — one rule change. A tick
   with its flag off deletes its row, so a switched-off command never ages into the alert.
-- New gauges from one `collect()`: `ai_videos{status}`, `ai_cost_usd_total{kind=detect|judge}`,
+- New gauges from one `collect()`: `ai_videos{status}`, `ai_cost_usd{kind=detect|judge}`,
   `ai_cost_usd_24h{kind}` (the last 24 h, from `created_at`; `AiCostDaily` alerts on its sum, not on
-  `increase()` of a gauge), `ai_judgements_total{decision,by}`, `ai_review_open`. Grafana: an "AI" row on
+  `increase()` of a gauge), `ai_judgements{decision,by}`, `ai_review_open`. Grafana: an "AI" row on
   `infrastructure.json`.
 - Logs: `ai detect: <native_id> <status> …` one line per video, `ai judge: <video_id> <decision>
   <by> …`.
@@ -493,9 +493,9 @@ Key decisions:
 **Files:**
 - Modify: `prometheus-wrapper.js` (`registerAiMetrics`), `server.js`, `grafana/provisioning/alerting/rules.yml`, `grafana/dashboards/infrastructure.json`, `test/prometheus-wrapper.test.js`, `test/e2e.js`
 
-- [x] gauges `ai_videos{status}`, `ai_cost_usd_total{kind}`, `ai_judgements_total{decision,by}`, `ai_review_open` from one `collect()`; a failing query logs once and leaves them empty (`registerAiMetrics`, one `UNION ALL` query per scrape; open = an ai item with no verdict; `ai_review_open` has no labels, so prom-client shows 0 rather than nothing after a failed query)
+- [x] gauges `ai_videos{status}`, `ai_cost_usd{kind}`, `ai_judgements{decision,by}`, `ai_review_open` from one `collect()`; a failing query logs once and leaves them empty (`registerAiMetrics`, one `UNION ALL` query per scrape; open = an ai item with no verdict; `ai_review_open` has no labels, so prom-client shows 0 rather than nothing after a failed query)
 - [x] `CalculatorStale`: per-provider threshold (`ai_detect` 15 min, `ai_judge` 2 h) — one rule with a label-based threshold or two rules; `deleteRules` not needed (one rule: A = age of the last success divided by the provider's limit, three selectors joined by `or`, threshold 1; `noDataState: Alerting` kept. A switched-off `ai detect` / `ai judge` tick deletes its heartbeat row (`calculator.ClearHeartbeat`), so a command turned off after it ran has no series instead of an aging one)
-- [x] `AiCostDaily` alert: `increase(ai_cost_usd_total[24h]) > AI_DAILY_BUDGET_VIDEOS × 0.05` (budget breached twice over) (`sum` over both kinds; Grafana cannot read the env, so the threshold is 10 = the default budget 200 × 0.05, to change with the budget)
+- [x] `AiCostDaily` alert: `sum(ai_cost_usd_24h) > AI_DAILY_BUDGET_VIDEOS × 0.05` (budget breached twice over) (`sum` over both kinds; Grafana cannot read the env, so the threshold is 10 = the default budget 200 × 0.05, to change with the budget)
 - [x] dashboard row: videos by status, cost per day, judgements by decision, open review items (row "AI" on `infrastructure.json`; the "seconds since last success" stat gets ai_detect / ai_judge threshold overrides)
 - [x] unit test for the collector (DB-free, injected query); e2e asserts the gauges on `/metrics` after the Task 3/6 scenarios (e2e compares every gauge with the tables after the Task 3–7 scenarios; the off tests insert a stale heartbeat and check it is gone)
 
@@ -548,6 +548,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] `POST /vote` (prv) takes the user's latest row as the previous vote (`"createdAt" DESC, id DESC`, as the rating rule) and a change replaces all their rows on the segment, so a vote matching an older legacy duplicate is no longer swallowed as a repeat; e2e with two legacy rows
 - [x] judge keep baseline per entry (`entryKeeps`; markups take the earliest), a conflicting markup dated by `GREATEST(m."createdAt", i."updatedAt")` and prv `PUT /markups` always writes the interval row; unit test for per-entry baselines, e2e for a keep on one entry before the other's and for bounds / category edits into a conflict
 - [x] prv `PUT /markups` with `new_category_id` touches every live interval of the markup (the category lives on `markups`, a sibling interval turned sponsor is a conflict too); the markup row is updated before the intervals, so their `updatedAt` is stamped after any wait on the calculator's markup lock; `POST /vote` (vote created after the row locks) and the undo writer (a plain insert) already stamp after their waits; e2e for a two-interval markup
+- [x] smells pass: `ai detect` callers log every `finish` error and a tick returns its failed steps (`tick incomplete (N videos failed): <cause>`, judge too); the judge withdraw sets `prv_ai_videos.updated_at` like `aiRepository.withdraw` (each names the other); one `calculator.DurationTolerance`, Go `prv_ai_videos` status constants, the queue's id regex from one constant; gauges `ai_cost_usd` / `ai_judgements` (no `_total`; the panel uses `delta()`); judge review items: coupling to `reviewRepository` noted (part names already match a re-import's), `created_at` from the DB default, the prv provider resolved once per tick
 - [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion
@@ -569,7 +570,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS=10000`: the
   detector publishes, nobody is served; compare `prv_ai_video_calculateds` with the human
   segments on the same videos from the DB (precision check on live data, no viewer affected).
-- Week 2: `AI_FIRST=on` + `AI_JUDGE_ENABLED=on`; watch `ai_judgements_total`, the review
+- Week 2: `AI_FIRST=on` + `AI_JUDGE_ENABLED=on`; watch `ai_judgements`, the review
   queue and the undo rate per 1k views against the human-path baseline. Kill switch: `AI_FIRST=off`
   (set the repository variable, then Run workflow with `image_tag` = the running sha: no build,
   only the container swap).

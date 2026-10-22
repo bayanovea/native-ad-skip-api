@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,17 @@ func TestPollResolvesAnEndedBatchAFailedResultIsTheVideosOutcome(t *testing.T) {
 	}
 	if failed, err := r.poll(context.Background()); failed != 0 || err != nil || len(f.detected) != 2 {
 		t.Fatalf("got %d %v, detected %v", failed, err, f.detected)
+	}
+}
+
+func TestTickReturnsItsFailedSteps(t *testing.T) {
+	r, mock, _ := batchRun(t)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM prv_ai_runs")).WillReturnError(errors.New("budget down"))
+	mock.ExpectQuery("v.status = 'detecting'").WillReturnError(errors.New("list down"))
+	mock.ExpectQuery(regexp.QuoteMeta("SET status = 'failed'")).WillReturnRows(sqlmock.NewRows([]string{"native_id"}))
+	failed, err := r.tick(context.Background())
+	if failed != 0 || err == nil || !strings.Contains(err.Error(), "claim: daily budget: budget down") || !strings.Contains(err.Error(), "list batches: list down") {
+		t.Fatalf("got %d %v", failed, err)
 	}
 }
 
