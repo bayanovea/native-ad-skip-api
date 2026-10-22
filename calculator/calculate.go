@@ -84,15 +84,21 @@ func Run(tablePrefix string, videoId ...string) error {
 // schema sync, so on a fresh deploy the first cron runs may fail here until
 // Node has booted.
 func WriteHeartbeat(db *sql.DB, provider string, failed int) error {
+	return WriteHeartbeatStatus(db, provider, failed, failed == 0)
+}
+
+// WriteHeartbeatStatus is WriteHeartbeat with the success decided by the caller:
+// an AI command's tick succeeds when its own steps worked, whatever its videos did.
+func WriteHeartbeatStatus(db *sql.DB, provider string, failed int, success bool) error {
 	_, err := db.Exec(`
 		INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
-		VALUES ($1, NOW(), CASE WHEN $2 = 0 THEN NOW() END, $2)
+		VALUES ($1, NOW(), CASE WHEN $3 THEN NOW() END, $2)
 		ON CONFLICT (provider) DO UPDATE SET
 			last_run_at = EXCLUDED.last_run_at,
 			failed_videos = EXCLUDED.failed_videos,
-			last_success_at = CASE WHEN EXCLUDED.failed_videos = 0
+			last_success_at = CASE WHEN $3
 				THEN EXCLUDED.last_run_at ELSE calculator_heartbeats.last_success_at END
-	`, provider, failed)
+	`, provider, failed, success)
 	return err
 }
 

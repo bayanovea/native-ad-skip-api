@@ -149,7 +149,7 @@ Key decisions:
   The detect cron submits one batch per tick and resolves finished batches on the next ticks.
 - **Judge: rules first, LLM second, humans last.** Most videos have no negative signal and
   cost nothing. The LLM judge runs at most once per video per `AI_JUDGE_MIN_INTERVAL` (6 h)
-  and only when the signal counters moved since the last judgement; it gets the AI segments
+  and only when a negative signal counter grew since the last judgement; it gets the AI segments
   with their quotes, the counters normalised by views when known, the human intervals with the
   transcript around every disagreement, and answers with a schema. Phase 2a (this plan): every
   `withdraw` and `review` goes to a human; `withdraw` also unpublishes at once
@@ -217,10 +217,11 @@ Key decisions:
   then `no_track` (the owner's point: auto subtitles may not exist yet when the video is fresh;
   the spike measures how long prv takes).
 - Gate: `overrun = lastCue.End − info.duration`; `overrun > 3` → `timeline_unreliable`. The
-  `videos` row: `findByNativeIdAndDuration(native_id, round(info.duration))` (creates one when
-  missing); if the native_id has other `videos` rows whose duration differs from yt-dlp's by
-  > 2 s, log `ai: duration variants` and count them in `judge_counters.duration_variants` (a
-  signal, not a gate: old split families exist, `docs/backlog/video-rows-race-and-old-split-families.md`).
+  `videos` row: `findByNativeIdAndDuration(native_id, round(info.duration))`; when the native_id
+  has rows with a duration and none is within ± 2 s of yt-dlp's → `timeline_unreliable` (yt-dlp
+  sees another cut than the players), else the row without a duration or a new one. Other rows off
+  by > 2 s next to a match are logged as `ai: duration variants` (old split families exist,
+  `docs/backlog/video-rows-race-and-old-split-families.md`); the judge counts them itself.
 - Transcript rendering, request and thresholds exactly as the eval (`detector.NewRequestFormat`
   with the format the held-out run used, cue timestamps dropped); publish filter: `sponsor` with
   confidence ≥ `medium`, `self_promotion` only `high`, `end − start ≥ 5`; categories mapped to
@@ -230,8 +231,16 @@ Key decisions:
   video.
 - Batches: tick 1 submits up to `AI_BATCH_MAX` queued videos as one batch (`status=detecting`,
   `batch_id`); every tick polls each waiting batch once (`Poll`), resolves finished results,
-  `failed` after 24 h without a result (a constant, not an env variable). `AI_CLIENT=messages` uses the synchronous client
-  (for a single-video manual run: `ai detect <native_id>`).
+  `failed` after 24 h without a result (a constant, not an env variable; a switched-off tick
+  still expires). The run rows are written before the submit, so the budget counts a batch whose
+  id a dying tick never stored (that video expires, it is not paid for twice); a rejected submit
+  deletes them and counts as a failed fetch. `AI_CLIENT=messages` uses the synchronous client;
+  the manual run (`ai detect <native_id>`) always does (a batch would wait for a cron tick that may
+  be off) and refuses a native_id that already has an AI row (`docs/backlog/ai-redetect.md`).
+- Heartbeat `ai_detect`: `failed_videos` counts infrastructure failures only (DB, API, a yt-dlp that
+  cannot start: no attempt spent, the row is claimed again after 1 h); a video's own outcome
+  (unavailable, no track, invalid answer, expiry) is on its row. The success needs only the tick's
+  own steps (claim, batch listing, expiry).
 
 ### Serving and votes (Node)
 
@@ -259,9 +268,12 @@ Key decisions:
   (`time_saved` events carry no video, so they are not a per-video signal).
 - Rules (no call): all of `votes_down`, `undo`, conflicting `human_markups` (IoU < 0.5 with every
   AI entry of the same category, author rating ≥ 0) are 0 → `ok`; a `videos` row with a duration
-  that differs by > 2 s appeared after publish and now receives requests → `withdraw` by
-  `duration` (the video was re-cut). Everything else → LLM judge, if `judge_counters` moved and
-  `judged_at` is older than `AI_JUDGE_MIN_INTERVAL`.
+  that differs by > 2 s appeared after publish and now receives requests → `review` by `rules`
+  (the row stays served: anyone can create such a row with one request, and the AI row reaches only
+  players of its own cut anyway). Everything else → LLM judge, if a negative counter (`votes_down`,
+  `undo`, conflicting markups, `duration_recut`) grew since `judge_counters` and `judged_at` is older
+  than `AI_JUDGE_MIN_INTERVAL`; when every entry's latest ai-item verdict keeps it and came after
+  the last judgement, `ok` by `rules` instead (humans have the last word, only later signals count).
 - LLM judge: one Messages call (`AI_JUDGE_MODEL`, default `claude-sonnet-5-5`; `AI_CLIENT=anthropic`
   and `messages` both use the Messages API here, `fixture` reads `<native_id>.judge.json`), schema
   `{decision: ok|withdraw|review, reason, segments: [{index, keep: bool}]}`, prompt
@@ -270,8 +282,9 @@ Key decisions:
   `views_max` is known, human intervals and the transcript ±60 s around every AI entry and every
   conflicting human interval (windows merged). A transport / API error fails the video (the next
   tick retries); an answer that does not parse or check (unknown decision, empty reason, a segment
-  index outside the entries or twice) is `review` by `rules` with reason `judge_invalid: …`, model
-  and cost still recorded.
+  index outside the entries or twice, an entry without a keep, `ok` with a `keep: false`) is
+  `review` by `rules` with reason `judge_invalid: …`, model and cost still recorded. The judge's
+  heartbeat succeeds when the due-videos query worked; a failed video is in `failed_videos`.
 - Outcome: `prv_ai_judgements` row (`model`, `cost_usd` when the LLM was called); an LLM `withdraw`
   → `withdrawn_at/by='judge'/reason` (when `AI_JUDGE_AUTO_WITHDRAW=on`); LLM `withdraw` and `review`
   (and `judge_invalid`) → one `prv_review_items` row per AI entry (kind `ai`, `video_id`, sheet
@@ -283,8 +296,7 @@ Key decisions:
   `judge <decision> by <by>: <reason>`, `signals: <non-zero counters>`, `keep: <bool>`; blind as
   today), written by the Go binary with the same INSERTs as `reviewRepository.insertItems` /
   `createBatch` (`reviews_needed` 1). A video already waiting on an open ai item is not
-  re-submitted. The rules' duration withdraw sends nothing to review: a verdict on the old cut's
-  timing would put the row back.
+  re-submitted. The rules' re-cut `review` sends the items the same way.
 
 ### Applying verdicts
 
@@ -503,6 +515,15 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] move this plan to `docs/plans/completed/`
 - [x] cleanup pass before commit (residue / transient state / open questions) (➕ CI's Go unit test step now runs `./ai/...` too, it ran only `./calculator`)
 
+### Task 12: Review fixes (2026-10-22 code review, Critical and Major)
+- [x] `YTDLP_BIN` defaults to `/usr/local/bin/yt-dlp` (cron's PATH is `/usr/bin:/bin`); e2e runs the image's binary by that path under that PATH
+- [x] manual `ai detect <native_id>` always synchronous, exit 1 unless `published`; a switched-off tick still expires stale runs; a native_id with an AI row is refused (re-detect: `docs/backlog/ai-redetect.md`); `publish` no longer clears `withdrawn_*`
+- [x] duration gate as Technical Details say (`timeline_unreliable` when players reported only other cuts); detect no longer writes `judge_counters`
+- [x] run rows before the batch submit, a rejected submit counts an attempt; heartbeats count infrastructure failures only (`calculator.WriteHeartbeatStatus`), a yt-dlp that cannot start spends no attempt; the shared `attempts` budget documented
+- [x] judge: due again only when a negative counter grows; `ok` by rules when every entry was kept on review since the last judgement; a re-cut → `review` by rules instead of a `duration` withdraw; `parseOutput` requires one keep per entry and no `ok` with `keep: false`
+- [x] fixture clients report usage (detect cost × 0.5 for a batch checked in e2e); tests: poll not ended / poll error / failed result, expiry, submit order and rejection, `anthropicJudge` over httptest, review parts (held, started, full), the restore rule's `decided_at ≥ withdrawn_at`, a category change with votes, the manual run's failed answer
+- [x] cleanup pass before commit (residue / transient state / open questions)
+
 ## Post-Completion
 
 **Deploy order and rollout**
@@ -558,7 +579,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
   (bisection for steps, re-timing through `Resolve`, judge input).
 
 **Manual verification**
-- Prod: `AI_CLIENT=messages ai detect <native_id>` on one known video (inside the app container, under `flock /tmp/ai-detect.lock`); `docker logs` lines; `/metrics` gauges;
+- Prod: `ai detect <native_id>` on one known video (inside the app container, under `flock /tmp/ai-detect.lock`); `docker logs` lines; `/metrics` gauges;
   `/admin/video/:id` block; a vote from the extension on an AI segment; `AI_FIRST=off` round trip.
 
 ## Open questions

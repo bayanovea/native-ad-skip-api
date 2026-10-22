@@ -14,11 +14,12 @@ const (
 	needsLLM         = "needs_llm"
 )
 
-// rules decides without a model call: a re-cut video is withdrawn (its AI row is
-// timed for the old cut), no negative signal is ok, anything else needs the LLM.
+// rules decides without a model call: a re-cut video goes to a human (a
+// videos row anyone can create is no proof; the AI row is served only to players
+// of its own cut anyway), no negative signal is ok, anything else needs the LLM.
 func rules(s Signals) (decision, reason string) {
 	if s.DurationRecut > 0 {
-		return decisionWithdraw, fmt.Sprintf("duration: %d videos rows of another cut requested after publish", s.DurationRecut)
+		return decisionReview, fmt.Sprintf("duration: %d videos rows of another cut requested after publish", s.DurationRecut)
 	}
 	var neg []string
 	for _, c := range []struct {
@@ -35,12 +36,14 @@ func rules(s Signals) (decision, reason string) {
 	return needsLLM, strings.Join(neg, " ")
 }
 
-// moved: the counters differ from the ones stored at the last judgement (a
-// missing or unreadable record counts as moved).
-func moved(stored []byte, c Counters) bool {
+// worsened: a negative counter grew since the last judgement (a missing or
+// unreadable record counts as grown). Likes, clicks and agreeing markups never
+// make a video due again, so a row with one old undo is not re-judged on every view.
+func worsened(stored []byte, c Counters) bool {
 	var prev Counters
 	if len(stored) == 0 || json.Unmarshal(stored, &prev) != nil {
 		return true
 	}
-	return prev != c
+	return c.VotesDown > prev.VotesDown || c.Undo > prev.Undo ||
+		c.ConflictingMarkups > prev.ConflictingMarkups || c.DurationRecut > prev.DurationRecut
 }

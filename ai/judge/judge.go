@@ -90,17 +90,18 @@ func Run(cfg Config) error {
 	if r.categories, err = loadCategories(r.db); err != nil {
 		return err
 	}
+	// A failed video (an API error, say) is retried next tick and fires CalculatorFailedVideos;
+	// the success, which CalculatorStale watches, needs only the tick's own query.
 	failed, err := r.tick()
 	if err != nil {
 		log.Printf("ai judge: %v", err)
-		failed++
 	}
-	if err := calculator.WriteHeartbeat(r.db, "ai_judge", failed); err != nil {
+	if err := calculator.WriteHeartbeatStatus(r.db, "ai_judge", failed, err == nil); err != nil {
 		log.Printf("Heartbeat write failed: %v", err)
 		return fmt.Errorf("heartbeat: %w", err)
 	}
-	if failed > 0 {
-		return fmt.Errorf("%d videos failed", failed)
+	if err != nil || failed > 0 {
+		return fmt.Errorf("tick incomplete: %d videos failed", failed)
 	}
 	return nil
 }
@@ -120,7 +121,7 @@ func (r *run) tick() (failed int, err error) {
 }
 
 // dueVideos lists the published non-empty rows that were judged before (judgeVideo
-// skips them unless their counters moved) or were published 24 h ago, so a first
+// skips them unless a negative counter grew) or were published 24 h ago, so a first
 // judgement sees a day of signals.
 func dueVideos(db *sql.DB) ([]Video, error) {
 	rows, err := db.Query(`SELECT a.video_id, a.native_id, a.data, a.published_at, v.duration,
@@ -166,18 +167,24 @@ func (r *run) judgeVideo(v Video) error {
 	if err != nil {
 		return err
 	}
-	if v.JudgedAt.Valid && !moved(v.JudgeCounters, s.Counters) {
+	if v.JudgedAt.Valid && !worsened(v.JudgeCounters, s.Counters) {
 		return nil
 	}
 	decision, reason := rules(s)
-	j := judgement{Decision: decision, By: "rules", Reason: reason}
+	j := judgement{Decision: decision, By: "rules", Reason: reason, Review: decision == decisionReview}
 	var cues []vtt.Cue
-	switch decision {
-	case decisionWithdraw:
-		// The only rule withdraw is a re-cut, a fact rather than an opinion, so AI_JUDGE_AUTO_WITHDRAW does not
-		// gate it, and no human is asked: a verdict on the old cut's timing would put it back.
-		j.WithdrawBy = "duration"
-	case needsLLM:
+	if decision != decisionOK && v.JudgedAt.Valid {
+		// Humans have the last word: the signals up to their verdicts are taken as seen, so only later ones count.
+		kept, err := keptSince(r.db, v)
+		if err != nil {
+			return err
+		}
+		if kept {
+			decision = decisionOK
+			j = judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}
+		}
+	}
+	if decision == needsLLM {
 		if v.JudgedAt.Valid && r.now.Sub(v.JudgedAt.Time) < r.cfg.MinInterval {
 			return nil // the stored counters stay, so the video is due again after the interval
 		}
@@ -185,6 +192,11 @@ func (r *run) judgeVideo(v Video) error {
 			return err
 		}
 		if j, err = r.askLLM(v, s, cues); err != nil {
+			return err
+		}
+	}
+	if j.Review && cues == nil {
+		if cues, err = runCues(r.db, v.VideoID); err != nil {
 			return err
 		}
 	}

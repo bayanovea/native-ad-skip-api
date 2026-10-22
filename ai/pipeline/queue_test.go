@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,6 +133,63 @@ func TestMarkAttemptNoTrack(t *testing.T) {
 	status, err := markAttempt(db, queued{nativeID: "-1_456000001", attempts: 1}, true, "no ru subtitle track")
 	if err != nil || status != "queued" {
 		t.Fatalf("got %s, %v", status, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarkAttemptAnErrorAfterTwoNoTrackTriesFailsTheVideo(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// attempts is one fetch budget: no track at 1 and 2, then a yt-dlp error is the third attempt
+	mock.ExpectExec("UPDATE prv_ai_videos SET status").WithArgs("-1_456000001", "failed", 3, nil, "ytdlp: boom").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if status, err := markAttempt(db, queued{nativeID: "-1_456000001", attempts: 2}, false, "ytdlp: boom"); err != nil || status != "failed" {
+		t.Fatalf("got %s, %v", status, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimOne(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	expect := func(status string, hasRow bool) {
+		mock.ExpectExec("INSERT INTO prv_ai_videos").WithArgs("-1_456000001").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(regexp.QuoteMeta("EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)")).WithArgs("-1_456000001").
+			WillReturnRows(sqlmock.NewRows([]string{"status", "exists"}).AddRow(status, hasRow))
+	}
+
+	for _, c := range []struct {
+		status string
+		hasRow bool
+		err    string
+	}{
+		{"detecting", false, "already being fetched or detected"},
+		{"published", true, "already has an AI row (status published): a re-detect is not supported"},
+		{"withdrawn", true, "already has an AI row (status withdrawn)"},
+	} {
+		expect(c.status, c.hasRow)
+		if _, err := claimOne(db, "-1_456000001"); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: got %v, want %q", c.status, err, c.err)
+		}
+	}
+
+	expect("failed", false)
+	mock.ExpectQuery(`SET status = 'fetching'(?s).*AND status = \$2`).
+		WithArgs("-1_456000001", "failed").WillReturnRows(sqlmock.NewRows([]string{"views_max", "attempts"}).AddRow(nil, 3))
+	q, err := claimOne(db, "-1_456000001")
+	if err != nil || q.attempts != 3 || q.viewsMax.Valid {
+		t.Fatalf("a failed video is claimed again: got %+v %v", q, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

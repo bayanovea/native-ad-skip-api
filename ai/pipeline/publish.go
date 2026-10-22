@@ -77,7 +77,8 @@ func loadCategories(db *sql.DB) (map[string]int, error) {
 }
 
 // publish writes the video's AI row; an empty data still marks the video done
-// (serving treats it as no AI row). A re-detect replaces an earlier row, withdrawn or not.
+// (serving treats it as no AI row). claimOne refuses a native_id that has one, so
+// the conflict branch is a safety net, and it never serves a withdrawn row again.
 func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry) error {
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -86,7 +87,7 @@ func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry
 	_, err = tx.Exec(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at, updated_at)
 		VALUES ($1, $2, $3, $4, NOW(), NOW())
 		ON CONFLICT (video_id) DO UPDATE SET native_id = EXCLUDED.native_id, run_id = EXCLUDED.run_id, data = EXCLUDED.data,
-			published_at = NOW(), withdrawn_at = NULL, withdrawn_by = NULL, withdrawn_reason = NULL, updated_at = NOW()`,
+			published_at = NOW(), updated_at = NOW()`,
 		videoID, nativeID, runID, b)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)

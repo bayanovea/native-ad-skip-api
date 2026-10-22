@@ -52,25 +52,35 @@ func TestFindOrCreateVideo(t *testing.T) {
 	// a row within ±2 wins
 	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY ABS(duration - $2::int), id LIMIT 1")).WithArgs("-1_456000001", 600, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
-	if id, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || id != 7 {
-		t.Fatalf("tolerance match: got %d, %v", id, err)
+	if id, ok, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || !ok || id != 7 {
+		t.Fatalf("tolerance match: got %d %v %v", id, ok, err)
+	}
+
+	// none, but players reported another duration: yt-dlp sees another cut
+	mock.ExpectQuery("ORDER BY ABS").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS (SELECT 1 FROM videos WHERE native_id = $1 AND duration IS NOT NULL)")).
+		WithArgs("-1_456000001").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	if _, ok, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || ok {
+		t.Fatalf("another cut: got %v %v", ok, err)
 	}
 
 	// none: the row without a duration takes it
 	mock.ExpectQuery("ORDER BY ABS").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE videos SET duration = $2`)).WithArgs("-1_456000001", 600).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
-	if id, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || id != 8 {
-		t.Fatalf("null duration: got %d, %v", id, err)
+	if id, ok, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || !ok || id != 8 {
+		t.Fatalf("null duration: got %d %v %v", id, ok, err)
 	}
 
 	// neither: a new row
 	mock.ExpectQuery("ORDER BY ABS").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("UPDATE videos").WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO videos")).WithArgs("-1_456000001", 600).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
-	if id, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || id != 9 {
-		t.Fatalf("new row: got %d, %v", id, err)
+	if id, ok, err := findOrCreateVideo(db, "-1_456000001", 600); err != nil || !ok || id != 9 {
+		t.Fatalf("new row: got %d %v %v", id, ok, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

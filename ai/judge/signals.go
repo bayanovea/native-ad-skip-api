@@ -187,6 +187,18 @@ func durationVariants(db *sql.DB, v Video) (variants, recut int, err error) {
 	return
 }
 
+// keptSince: every AI entry's latest review verdict keeps it and came after the
+// last judgement (prv/repository/ai.js allKept matches the items the same way).
+func keptSince(db *sql.DB, v Video) (kept bool, err error) {
+	err = db.QueryRow(`SELECT COALESCE(bool_and(COALESCE(l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3, false)), false)
+		FROM `+entryBounds+`
+		LEFT JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
+			WHERE i.kind = 'ai' AND i.video_id = $1 AND i.start = e.start AND i."end" = e."end"
+			ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE`,
+		v.VideoID, v.Data, v.JudgedAt.Time).Scan(&kept)
+	return
+}
+
 // parseEntries reads the bounds of the row's data.
 func parseEntries(data []byte) ([]Entry, error) {
 	var out []Entry

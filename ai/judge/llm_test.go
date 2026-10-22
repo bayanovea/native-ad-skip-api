@@ -1,8 +1,16 @@
 package judge
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/vtt"
@@ -13,7 +21,10 @@ func TestParseOutput(t *testing.T) {
 		raw, err string
 	}{
 		{`{"decision":"withdraw","reason":"r","segments":[{"index":0,"keep":false},{"index":1,"keep":true}]}`, ""},
-		{`{"decision":"ok","reason":"r","segments":[]}`, ""},
+		{`{"decision":"ok","reason":"r","segments":[{"index":1,"keep":true},{"index":0,"keep":true}]}`, ""},
+		{`{"decision":"ok","reason":"r","segments":[]}`, "0 segments answered, the video has 2"},
+		{`{"decision":"review","reason":"r","segments":[{"index":0,"keep":true}]}`, "1 segments answered"},
+		{`{"decision":"ok","reason":"r","segments":[{"index":0,"keep":true},{"index":1,"keep":false}]}`, "ok with keep false on segment 1"},
 		{`not json`, "parse"},
 		{`{"decision":"ok","reason":"r","segments":[],"extra":1}`, "parse"},
 		{`stop_reason max_tokens: {"decision":"ok"`, "parse"},
@@ -77,5 +88,52 @@ func TestRenderRequest(t *testing.T) {
 	}
 	if strings.Contains(req.User, "далеко от всего") {
 		t.Error("a cue outside every window is not sent")
+	}
+}
+
+func TestAnthropicJudge(t *testing.T) {
+	var sent map[string]any
+	stop := "end_turn"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &sent); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"m","type":"message","role":"assistant","model":"m","stop_reason":"` + stop + `",
+			"content":[{"type":"text","text":"{\"decision\":\"ok\"}"}],
+			"usage":{"input_tokens":1200,"output_tokens":40,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}`))
+	}))
+	defer srv.Close()
+	j := &anthropicJudge{client: anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL(srv.URL), option.WithMaxRetries(0)), model: "claude-sonnet-5-5"}
+	req := detector.Request{System: "PROMPT", User: "<video>", Schema: llmSchema}
+
+	res, err := j.Judge(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Raw != `{"decision":"ok"}` || res.Usage != (detector.Usage{InputTokens: 1200, OutputTokens: 40, CacheReadTokens: 5, CacheWriteTokens: 7}) {
+		t.Fatalf("got %+v", res)
+	}
+	format := sent["output_config"].(map[string]any)["format"].(map[string]any)
+	if sent["model"] != "claude-sonnet-5-5" || sent["max_tokens"] != float64(llmMaxTokens) || format["type"] != "json_schema" ||
+		format["schema"].(map[string]any)["required"] == nil {
+		t.Fatalf("request %v", sent)
+	}
+	if sys := sent["system"].([]any)[0].(map[string]any); sys["text"] != "PROMPT" {
+		t.Fatalf("system %v", sys)
+	}
+
+	// A cut-off answer is still returned (and paid): parseOutput makes it judge_invalid.
+	stop = "max_tokens"
+	if res, err = j.Judge(context.Background(), req); err != nil || res.Raw != `stop_reason max_tokens: {"decision":"ok"}` {
+		t.Fatalf("got %+v %v", res, err)
+	}
+	if _, err := parseOutput(res.Raw, 0); err == nil {
+		t.Fatal("a cut-off answer must not parse")
 	}
 }

@@ -9,12 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/provider"
@@ -46,7 +50,8 @@ func ConfigFromEnv() (Config, error) {
 		Client:        env("AI_CLIENT", "anthropic"),
 		FixtureDir:    env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:    env("AI_PROMPT", "/app/ai/prompts/v2.2.md"),
-		YtdlpBin:      env("YTDLP_BIN", "yt-dlp"),
+		// Absolute: cron's PATH (/usr/bin:/bin) does not reach the image's /usr/local/bin.
+		YtdlpBin: env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
 	}
 	for _, v := range []struct {
 		name string
@@ -111,12 +116,19 @@ type pending struct {
 // Detect runs one cron tick: claim → fetch → gate → submit, then resolve the
 // batches that have ended. With a nativeID it is the manual run for that video
 // only: no views or budget check, no heartbeat (the cron's alert must not see a
-// manual run), and it runs whatever AI_DETECT_ENABLED says. A switched-off cron
-// tick only clears the ai_detect heartbeat.
+// manual run), it runs whatever AI_DETECT_ENABLED says, and it calls the model
+// synchronously (a batch would wait for a cron tick that may be switched off), so
+// it exits 1 unless the video ends published. A switched-off cron tick only
+// expires stale runs and clears the ai_detect heartbeat.
 func Detect(cfg Config, nativeID string) error {
-	if nativeID == "" && !cfg.DetectEnabled {
+	manual := nativeID != ""
+	if !manual && !cfg.DetectEnabled {
 		db := calculator.ConnectDb()
 		defer db.Close()
+		// Runs submitted before the switch went off: failed after 24 h, so a manual run can claim them again.
+		if err := (&detectRun{db: db}).expire(); err != nil {
+			log.Printf("ai detect: expire: %v", err)
+		}
 		return calculator.ClearHeartbeat(db, "ai_detect")
 	}
 	prompt, err := detector.LoadPrompt(cfg.PromptPath)
@@ -128,22 +140,28 @@ func Detect(cfg Config, nativeID string) error {
 	if r.prv, err = provider.Lookup("prv"); err != nil {
 		return err
 	}
-	switch cfg.Client {
-	case "anthropic":
+	switch {
+	case cfg.Client == "fixture":
+		f := detector.NewFixtureClient(cfg.FixtureDir, cfg.Model)
+		r.client = f
+		if !manual {
+			r.batch = f
+		}
+	case cfg.Client == "anthropic" && !manual:
 		b, err := detector.NewAnthropicBatch(cfg.Model, effort)
 		if err != nil {
 			return err
 		}
-		r.client, r.batch, r.priceFactor = b, b, 0.5
-	case "messages":
+		r.client, r.batch = b, b
+	case cfg.Client == "anthropic" || cfg.Client == "messages":
 		if r.client, err = detector.NewAnthropic(cfg.Model, effort); err != nil {
 			return err
 		}
-	case "fixture":
-		f := detector.NewFixtureClient(cfg.FixtureDir, cfg.Model)
-		r.client, r.batch = f, f
 	default:
 		return fmt.Errorf("AI_CLIENT must be anthropic, messages or fixture, got %q", cfg.Client)
+	}
+	if r.batch != nil {
+		r.priceFactor = 0.5 // the Batches API's discount; the fixture batch stands in for it
 	}
 	var priced bool
 	if r.price, priced = detector.Prices[cfg.Model]; !priced {
@@ -156,39 +174,61 @@ func Detect(cfg Config, nativeID string) error {
 		return err
 	}
 
-	failed := r.tick(context.Background(), nativeID)
-	if nativeID == "" {
-		if err := calculator.WriteHeartbeat(r.db, "ai_detect", failed); err != nil {
-			log.Printf("Heartbeat write failed: %v", err)
-			return fmt.Errorf("heartbeat: %w", err)
+	ctx := context.Background()
+	if manual {
+		q, err := claimOne(r.db, nativeID)
+		if err != nil {
+			return err
 		}
+		if r.detect(ctx, []queued{q}, false) > 0 {
+			return fmt.Errorf("%s failed", nativeID)
+		}
+		return manualOutcome(r.db, nativeID)
 	}
-	if failed > 0 {
-		return fmt.Errorf("%d videos failed", failed)
+
+	failed, ok := r.tick(ctx)
+	if err := calculator.WriteHeartbeatStatus(r.db, "ai_detect", failed, ok); err != nil {
+		log.Printf("Heartbeat write failed: %v", err)
+		return fmt.Errorf("heartbeat: %w", err)
+	}
+	if !ok || failed > 0 {
+		return fmt.Errorf("tick incomplete: %d videos failed", failed)
 	}
 	return nil
 }
 
-func (r *detectRun) tick(ctx context.Context, nativeID string) (failed int) {
-	var claimed []queued
-	if nativeID != "" {
-		q, err := claimOne(r.db, nativeID)
+// tick is one cron run. `failed` counts videos the infrastructure failed (DB,
+// API, a yt-dlp that cannot start), not what the tick decided about a video
+// (unavailable, no track, an invalid answer, expired: recorded on its row);
+// ok is false when a step of the tick itself failed.
+func (r *detectRun) tick(ctx context.Context) (failed int, ok bool) {
+	ok = true
+	claimed, err := claimQueued(r.db, r.cfg)
+	if err != nil {
+		log.Printf("ai detect: claim: %v", err)
+		ok = false
+	}
+	failed = r.detect(ctx, claimed, true)
+	if r.batch != nil {
+		n, err := r.poll(ctx)
+		failed += n
 		if err != nil {
-			log.Printf("ai detect: %s: %v", nativeID, err)
-			return 1
-		}
-		claimed = []queued{q}
-	} else {
-		var err error
-		if claimed, err = claimQueued(r.db, r.cfg); err != nil {
-			log.Printf("ai detect: claim: %v", err)
-			failed++
+			log.Printf("ai detect: list batches: %v", err)
+			ok = false
 		}
 	}
+	if err := r.expire(); err != nil {
+		log.Printf("ai detect: expire: %v", err)
+		ok = false
+	}
+	return failed, ok
+}
 
+// detect fetches the claimed videos and submits the ones that passed the gate.
+func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews bool) (failed int) {
 	var ready []pending
 	for _, q := range claimed {
-		p, err := r.fetch(ctx, q, nativeID == "")
+		p, err := r.fetch(ctx, q, checkViews)
 		if err != nil {
 			log.Printf("ai detect: %s %v", q.nativeID, err)
 			failed++
@@ -196,11 +236,20 @@ func (r *detectRun) tick(ctx context.Context, nativeID string) (failed int) {
 			ready = append(ready, *p)
 		}
 	}
-	failed += r.submit(ctx, ready)
-	if r.batch != nil {
-		failed += r.poll(ctx)
+	return failed + r.submit(ctx, ready)
+}
+
+// manualOutcome is the manual run's exit: an error unless the video ended published.
+func manualOutcome(db *sql.DB, nativeID string) error {
+	var status string
+	var lastErr sql.NullString
+	if err := db.QueryRow(`SELECT status, last_error FROM prv_ai_videos WHERE native_id = $1`, nativeID).Scan(&status, &lastErr); err != nil {
+		return err
 	}
-	return failed + r.expire()
+	if status != "published" {
+		return fmt.Errorf("%s %s: %s", nativeID, status, lastErr.String)
+	}
+	return nil
 }
 
 // fetch downloads the video's subtitles and applies the gate. It returns nil
@@ -259,9 +308,17 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		log.Printf("ai detect: %s timeline_unreliable: %s", q.nativeID, reason)
 		return nil, nil
 	}
-	videoID, err := findOrCreateVideo(r.db, q.nativeID, roundDuration(info.Duration))
+	videoID, ok, err := findOrCreateVideo(r.db, q.nativeID, roundDuration(info.Duration))
 	if err != nil {
 		return nil, fmt.Errorf("videos row: %w", err)
+	}
+	if !ok {
+		reason := fmt.Sprintf("yt-dlp's %.0f s is more than %d s off every duration players reported", info.Duration, durationTolerance)
+		if err := setStatus(r.db, q.nativeID, "timeline_unreliable", reason); err != nil {
+			return nil, err
+		}
+		log.Printf("ai detect: %s timeline_unreliable: %s", q.nativeID, reason)
+		return nil, nil
 	}
 	variants, err := durationVariants(r.db, q.nativeID, info.Duration)
 	if err != nil {
@@ -269,10 +326,6 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 	}
 	if variants > 0 {
 		log.Printf("ai: duration variants: %s has %d videos rows off yt-dlp's %.0f s by more than %d s", q.nativeID, variants, info.Duration, durationTolerance)
-	}
-	if _, err := r.db.Exec(`UPDATE prv_ai_videos SET judge_counters = COALESCE(judge_counters, '{}'::jsonb) || jsonb_build_object('duration_variants', $2::int)
-		WHERE native_id = $1`, q.nativeID, variants); err != nil {
-		return nil, err
 	}
 
 	meta := transcript.Meta{
@@ -303,15 +356,22 @@ func readVTT(base string) ([]vtt.Cue, error) {
 	return vtt.Collapse(raw), nil
 }
 
-// fetchError records a failed yt-dlp call; its message is flattened to one line
-// (the runner joins the attempts' errors with newlines).
+// fetchError records a failed yt-dlp call as an attempt of the video; its message
+// is flattened to one line (the runner joins the attempts' errors with newlines).
+// A yt-dlp that cannot start is the host's fault, not the video's: it is returned
+// unrecorded, and the row, left in `fetching`, is claimed again after an hour.
 func (r *detectRun) fetchError(q queued, err error) error {
+	var execErr *exec.Error
+	if errors.As(err, &execErr) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		return err
+	}
 	msg := strings.ReplaceAll(err.Error(), "\n", ": ")
 	status, uerr := markAttempt(r.db, q, false, msg)
 	if uerr != nil {
 		return errors.Join(err, uerr)
 	}
-	return fmt.Errorf("%s after fetch attempt %d: %s", status, q.attempts+1, msg)
+	log.Printf("ai detect: %s %s after fetch attempt %d: %s", q.nativeID, status, q.attempts+1, msg)
+	return nil
 }
 
 func (r *detectRun) noTrack(q queued) error {
@@ -323,34 +383,16 @@ func (r *detectRun) noTrack(q queued) error {
 	return nil
 }
 
-// submit sends the tick's videos as one batch (or calls the model per video with
-// the synchronous client) and records a prv_ai_runs row per video.
+// submit records a prv_ai_runs row per video, then sends the videos as one batch
+// (or calls the model per video with the synchronous client). The run rows come
+// first, so the daily budget counts a submitted batch even if the tick dies
+// before the batch id is stored: those rows stay `detecting` without one and
+// expire, rather than being claimed and paid for again.
 func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
-	if len(ready) == 0 {
-		return 0
-	}
-	batchID := ""
-	if r.batch != nil {
-		reqs := make([]detector.Request, len(ready))
-		for i, p := range ready {
-			reqs[i] = p.req
-		}
-		id, err := r.batch.Submit(ctx, reqs)
-		if err != nil {
-			for _, p := range ready {
-				log.Printf("ai detect: %s queued: batch submit: %v", p.q.nativeID, err)
-				if _, err := r.db.Exec(`UPDATE prv_ai_videos SET status = 'queued', next_attempt_at = NOW(), last_error = $2, updated_at = NOW()
-					WHERE native_id = $1`, p.q.nativeID, err.Error()); err != nil {
-					log.Printf("ai detect: %s: %v", p.q.nativeID, err)
-				}
-			}
-			return len(ready)
-		}
-		batchID = id
-		log.Printf("ai detect: batch %s submitted: %d videos", batchID, len(ready))
-	}
+	var started []pending
+	var runIDs []int64
 	for _, p := range ready {
-		runID, err := r.startRun(p, batchID)
+		runID, err := r.startRun(p)
 		if err != nil {
 			log.Printf("ai detect: %s run row: %v", p.q.nativeID, err)
 			failed++
@@ -361,12 +403,43 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 			if r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err) != nil {
 				failed++
 			}
+			continue
 		}
+		started = append(started, p)
+		runIDs = append(runIDs, runID)
 	}
+	if len(started) == 0 {
+		return failed
+	}
+	reqs := make([]detector.Request, len(started))
+	ids := make([]string, len(started))
+	for i, p := range started {
+		reqs[i], ids[i] = p.req, p.q.nativeID
+	}
+	batchID, err := r.batch.Submit(ctx, reqs)
+	if err != nil {
+		// Nothing was sent: the run rows go, and the try counts as a failed fetch, so a rejected request backs off.
+		for i, p := range started {
+			msg := "batch submit: " + strings.ReplaceAll(err.Error(), "\n", ": ")
+			_, derr := r.db.Exec(`DELETE FROM prv_ai_runs WHERE id = $1`, runIDs[i])
+			status, merr := markAttempt(r.db, p.q, false, msg)
+			if err := errors.Join(derr, merr); err != nil {
+				log.Printf("ai detect: %s: %v", p.q.nativeID, err)
+			}
+			log.Printf("ai detect: %s %s after %s", p.q.nativeID, status, msg)
+		}
+		return failed + len(started)
+	}
+	if _, err := r.db.Exec(`UPDATE prv_ai_videos SET batch_id = $2, updated_at = NOW() WHERE native_id = ANY($1)`,
+		pq.Array(ids), batchID); err != nil {
+		log.Printf("ai detect: batch %s: storing its id: %v", batchID, err)
+		return failed + len(started)
+	}
+	log.Printf("ai detect: batch %s submitted: %d videos", batchID, len(started))
 	return failed
 }
 
-func (r *detectRun) startRun(p pending, batchID string) (int64, error) {
+func (r *detectRun) startRun(p pending) (int64, error) {
 	tr, err := json.Marshal(storedTranscript{Meta: p.meta, Cues: p.cues})
 	if err != nil {
 		return 0, err
@@ -382,8 +455,8 @@ func (r *detectRun) startRun(p pending, batchID string) (int64, error) {
 		p.q.nativeID, p.videoID, r.prompt.SHA, r.prompt.Version, r.client.Model(), tr, p.overrun, p.meta.Duration).Scan(&runID); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'detecting', batch_id = $2, last_error = NULL, updated_at = NOW()
-		WHERE native_id = $1`, p.q.nativeID, nullString(batchID)); err != nil {
+	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'detecting', batch_id = NULL, last_error = NULL, updated_at = NOW()
+		WHERE native_id = $1`, p.q.nativeID); err != nil {
 		return 0, err
 	}
 	return runID, tx.Commit()
@@ -396,8 +469,9 @@ type storedTranscript struct {
 	Cues []vtt.Cue       `json:"cues"`
 }
 
-// poll checks every batch with videos waiting on it once and resolves the ended ones.
-func (r *detectRun) poll(ctx context.Context) (failed int) {
+// poll checks every batch with videos waiting on it once and resolves the ended
+// ones; err is a failure to list them.
+func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 	type waiting struct {
 		nativeID string
 		runID    int64
@@ -409,8 +483,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int) {
 		JOIN LATERAL (SELECT id, video_id, transcript FROM prv_ai_runs WHERE native_id = v.native_id ORDER BY id DESC LIMIT 1) run ON TRUE
 		WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL`)
 	if err != nil {
-		log.Printf("ai detect: list batches: %v", err)
-		return 1
+		return 0, err
 	}
 	batches := map[string][]waiting{}
 	for rows.Next() {
@@ -419,8 +492,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int) {
 		var tr []byte
 		if err := rows.Scan(&w.nativeID, &batchID, &w.runID, &w.videoID, &tr); err != nil {
 			rows.Close()
-			log.Printf("ai detect: list batches: %v", err)
-			return 1
+			return failed, err
 		}
 		var st storedTranscript
 		if err := json.Unmarshal(tr, &st); err != nil {
@@ -433,8 +505,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int) {
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		log.Printf("ai detect: list batches: %v", err)
-		return failed + 1
+		return failed, err
 	}
 
 	for batchID, videos := range batches {
@@ -454,31 +525,32 @@ func (r *detectRun) poll(ctx context.Context) (failed int) {
 			}
 		}
 	}
-	return failed
+	return failed, nil
 }
 
-// expire fails videos whose model call has not come back within 24 h
-// (a batch that never ended, or a synchronous run that crashed mid-call).
-func (r *detectRun) expire() (failed int) {
+// expire fails videos whose model call has not come back within 24 h (a batch
+// that never ended or was never stored, or a synchronous run that crashed mid-call).
+func (r *detectRun) expire() error {
 	rows, err := r.db.Query(`UPDATE prv_ai_videos SET status = 'failed', last_error = 'no model result after 24 h', updated_at = NOW()
 		WHERE status = 'detecting' AND updated_at < NOW() - INTERVAL '24 hours' RETURNING native_id`)
 	if err != nil {
-		log.Printf("ai detect: expire: %v", err)
-		return 1
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			log.Printf("ai detect: %s failed: no model result after 24 h", id)
-			failed++
+		if err := rows.Scan(&id); err != nil {
+			return err
 		}
+		log.Printf("ai detect: %s failed: no model result after 24 h", id)
 	}
-	return failed
+	return rows.Err()
 }
 
 // finish records the model's answer on the run and publishes the video, in one
-// transaction under the queue row's lock; a video another run already resolved is skipped.
+// transaction under the queue row's lock; a video another run already resolved is
+// skipped. A failed call or an invalid answer marks the video failed (the run row
+// keeps what came back); the error return is for the database only.
 func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, res detector.Result, callErr error) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -518,7 +590,7 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 			return err
 		}
 		log.Printf("ai detect: %s failed: %v", nativeID, callErr)
-		return callErr
+		return nil
 	}
 
 	data := entries(detector.Resolve(units, res.Output), r.categories)

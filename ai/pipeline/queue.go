@@ -71,17 +71,31 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 }
 
 // claimOne is the manual single-video run: any row not already in flight, created
-// when missing, regardless of views and budget.
+// when missing, regardless of views and budget. A native_id with an AI row is
+// refused: a re-detect would replace data that votes, review verdicts and a
+// withdrawal refer to (docs/backlog/ai-redetect.md).
 func claimOne(db *sql.DB, nativeID string) (queued, error) {
 	q := queued{nativeID: nativeID}
 	if _, err := db.Exec(`INSERT INTO prv_ai_videos (native_id) VALUES ($1) ON CONFLICT (native_id) DO NOTHING`, nativeID); err != nil {
 		return q, err
 	}
+	var status string
+	var hasRow bool
+	if err := db.QueryRow(`SELECT status, EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)
+		FROM prv_ai_videos WHERE native_id = $1`, nativeID).Scan(&status, &hasRow); err != nil {
+		return q, err
+	}
+	switch {
+	case status == "fetching" || status == "detecting":
+		return q, fmt.Errorf("%s is already being fetched or detected", nativeID)
+	case hasRow:
+		return q, fmt.Errorf("%s already has an AI row (status %s): a re-detect is not supported", nativeID, status)
+	}
 	err := db.QueryRow(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW()
-		WHERE native_id = $1 AND status NOT IN ('fetching', 'detecting') RETURNING views_max, attempts`, nativeID).
+		WHERE native_id = $1 AND status = $2 RETURNING views_max, attempts`, nativeID, status).
 		Scan(&q.viewsMax, &q.attempts)
 	if err == sql.ErrNoRows {
-		return q, fmt.Errorf("%s is already being fetched or detected", nativeID)
+		return q, fmt.Errorf("%s changed status meanwhile, run again", nativeID)
 	}
 	return q, err
 }
@@ -115,7 +129,9 @@ const maxFetchErrors = 3
 
 // nextAttempt decides a failed fetch: the row's next status and, when it stays
 // queued, the wait. noTrack retries on the full schedule, a yt-dlp error stops at
-// maxFetchErrors.
+// maxFetchErrors. Both count in one `attempts`, so an error after two no-track
+// tries is the third attempt and fails the video: a fetch budget per video, not
+// an error count.
 func nextAttempt(attempts int, noTrack bool) (string, time.Duration) {
 	d, ok := retryDelay(attempts)
 	switch {

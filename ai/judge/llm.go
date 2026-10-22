@@ -139,11 +139,12 @@ func (f *fixtureJudge) Judge(_ context.Context, req detector.Request) (llmResult
 	if err != nil {
 		return llmResult{}, fmt.Errorf("fixture: %w", err)
 	}
-	return llmResult{Raw: string(b)}, nil
+	return llmResult{Raw: string(b), Usage: detector.FixtureUsage}, nil
 }
 
-// parseOutput decodes and checks the answer against the video's entries; any
-// failure makes the judgement judge_invalid.
+// parseOutput decodes and checks the answer against the video's entries: one keep
+// per entry, and no "ok" that drops one. Any failure makes the judgement
+// judge_invalid, so a contradictory answer reaches a human instead of serving.
 func parseOutput(raw string, entries int) (llmOutput, error) {
 	var out llmOutput
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -168,6 +169,12 @@ func parseOutput(raw string, entries int) (llmOutput, error) {
 			return out, fmt.Errorf("segment index %d twice", s.Index)
 		}
 		seen[s.Index] = true
+		if out.Decision == decisionOK && !s.Keep {
+			return out, fmt.Errorf("decision ok with keep false on segment %d", s.Index)
+		}
+	}
+	if len(seen) != entries {
+		return out, fmt.Errorf("%d segments answered, the video has %d", len(seen), entries)
 	}
 	return out, nil
 }

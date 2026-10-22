@@ -42,4 +42,4 @@ Answer with one decision for the video:
 
 `reason`: one sentence a reviewer reads before deciding, naming the segments and the signals that drove the
 decision. `segments`: one entry per detector segment, `index` from `<ai_segments>` and `keep` = whether you
-believe that segment is a correct ad cut for the viewer.
+believe that segment is a correct ad cut for the viewer; `ok` means every `keep` is true.

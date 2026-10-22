@@ -2,7 +2,7 @@ const { QueryTypes } = require('sequelize');
 const { voteRating } = require('../../lib/segment-rating');
 
 const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
-// A keep verdict never restores a row withdrawn by `duration` (timed for the old cut) or `admin` (the operator's switch).
+// A keep verdict never restores a row withdrawn by `duration` (timed for the old cut; the judge now sends a re-cut to review) or `admin` (the operator's switch).
 const RESTORABLE_BY = new Set(['judge', 'review']);
 
 module.exports = function createAiRepository(models, sequelize) {

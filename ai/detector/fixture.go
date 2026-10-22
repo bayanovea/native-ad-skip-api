@@ -41,13 +41,16 @@ func NewFixtureClient(dir, model string) *FixtureClient {
 // Model implements Client.
 func (f *FixtureClient) Model() string { return f.model }
 
+// FixtureUsage is what every fixture answer reports, so tests see a cost.
+var FixtureUsage = Usage{InputTokens: 10000, OutputTokens: 200}
+
 // Detect implements Client; a missing fixture is an error, as a failed call.
 func (f *FixtureClient) Detect(_ context.Context, req Request) (Result, error) {
 	b, err := os.ReadFile(filepath.Join(f.dir, req.Key+".detect.json"))
 	if err != nil {
 		return Result{}, fmt.Errorf("fixture: %w", err)
 	}
-	res := Result{Raw: string(b)}
+	res := Result{Raw: string(b), Usage: FixtureUsage}
 	res.Output, err = ParseOutput(res.Raw)
 	return res, err
 }

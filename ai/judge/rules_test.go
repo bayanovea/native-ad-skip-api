@@ -16,7 +16,7 @@ func TestRules(t *testing.T) {
 		{"undo", Counters{Undo: 1}, needsLLM, "undo=1"},
 		{"conflicting markup", Counters{HumanMarkups: 1, ConflictingMarkups: 1}, needsLLM, "conflicting_markups=1"},
 		{"several", Counters{VotesDown: 1, Undo: 3}, needsLLM, "votes_down=1 undo=3"},
-		{"a re-cut wins over everything", Counters{Undo: 4, DurationVariants: 1, DurationRecut: 1}, decisionWithdraw,
+		{"a re-cut wins over everything and goes to a human", Counters{Undo: 4, DurationVariants: 1, DurationRecut: 1}, decisionReview,
 			"duration: 1 videos rows of another cut requested after publish"},
 	}
 	for _, c := range cases {
@@ -50,7 +50,7 @@ func TestConflictingMarkupWithANegativeRatedAuthorIsIgnored(t *testing.T) {
 	}
 }
 
-func TestMoved(t *testing.T) {
+func TestWorsened(t *testing.T) {
 	c := Counters{VotesUp: 1, Undo: 2, DurationVariants: 1}
 	for _, x := range []struct {
 		stored string
@@ -61,9 +61,18 @@ func TestMoved(t *testing.T) {
 		{`{"votes_up":1,"undo":2,"duration_variants":1}`, false},
 		{`{"votes_up":1,"votes_down":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":1,"duration_recut":0}`, false},
 		{`{"votes_up":1,"undo":1,"duration_variants":1}`, true},
+		{`{"undo":2,"votes_down":1}`, false},                     // a down vote changed to up
+		{`{"undo":2,"clicks":40,"human_markups":3}`, false},      // positive counters never make it due
+		{`{"undo":2,"votes_up":0,"duration_variants":0}`, false}, // nor do likes or old split rows
 	} {
-		if got := moved([]byte(x.stored), c); got != x.want {
-			t.Errorf("moved(%s) = %v, want %v", x.stored, got, x.want)
+		if got := worsened([]byte(x.stored), c); got != x.want {
+			t.Errorf("worsened(%s) = %v, want %v", x.stored, got, x.want)
+		}
+	}
+	for _, grown := range []Counters{{VotesDown: 1}, {ConflictingMarkups: 1}, {DurationRecut: 1}} {
+		grown.Undo = 2
+		if !worsened([]byte(`{"undo":2}`), grown) {
+			t.Errorf("%+v: want worsened", grown)
 		}
 	}
 }
