@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Segments before and after AI-first</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;700&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">adskip · how it works · updated 2026-10-22 · <a href="ru.html">Русский</a></p>
+  <h1>Segments: today and once AI-first is on</h1>
+  <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
+
+  <div class="legend">
+    <span><i class="dot human"></i>people (markups, votes)</span>
+    <span><i class="dot ai"></i>AI (detector, judge)</span>
+    <span><i class="dot warn"></i>stop / doubt</span>
+    <span><i class="dot ok"></i>live for viewers</span>
+  </div>
+
+  <!-- ===================== PHASE 1 ===================== -->
+  <h2>Phase 1. AI already runs, viewers never see it</h2>
+  <p>Nothing changes for the viewer or the extension. The AI prepares segments "into a drawer", assessors check them.</p>
+
+  <h3>What the viewer gets, same as today</h3>
+  <div class="flow">
+    <div class="node human"><b>People mark ads</b><span>a viewer marks an ad in the extension</span></div>
+    <div class="arrow">→</div>
+    <div class="node human"><b>We merge</b><span>once a minute: several markups of the same spot → one segment</span></div>
+    <div class="arrow">→</div>
+    <div class="node ok"><b>Served to the extension</b><span>it skips the segment; the viewer can vote 👍 👎 and undo a skip</span></div>
+  </div>
+
+  <h3>What the AI does in the background</h3>
+  <div class="flow">
+    <div class="node"><b>Count popularity</b><span>every extension request marks the video as "being watched"</span></div>
+    <div class="arrow">→</div>
+    <div class="node ai"><b>Fetch prv subtitles</b><span>popular videos only, a limited number per day</span></div>
+    <div class="arrow">→</div>
+    <div class="node warn"><b>Track check</b><span>do the subtitles match the video length? if not, stop</span></div>
+    <div class="arrow">→</div>
+    <div class="node ai"><b>Claude reads the text</b><span>finds sponsor ads and self-promotion</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><b>Into the drawer</b><span>stored but <u>not served</u>; only confident findings are kept</span></div>
+  </div>
+
+  <h3>Shifted subtitles: why the track check comes first</h3>
+  <p>The detector sees only the subtitle text and its timing. If the subtitle track belongs to another version of the video (longer, cut differently), every time is shifted and a "clean" segment lands in the wrong place.</p>
+  <div class="drift">
+    <span>video</span>
+    <div class="track"><i class="word" style="left:4%;width:20%"></i><i class="ad" style="left:40%;width:18%"></i><i class="word" style="left:70%;width:22%"></i></div>
+    <span>subtitles ok</span>
+    <div class="track"><i class="word" style="left:4%;width:20%"></i><i class="ad" style="left:40%;width:18%"></i><i class="word" style="left:70%;width:22%"></i></div>
+    <span>subtitles shifted</span>
+    <div class="track over"><i class="word" style="left:9%;width:20%"></i><i class="ad" style="left:47%;width:18%"></i><i class="word" style="left:78%;width:19%"></i><i class="extra" style="left:97%;width:3%"></i></div>
+  </div>
+  <p class="caption">The rule is simple: if the subtitle track is noticeably longer than the video, or the video exists in several cuts of different length and the subtitles fit none of them, the AI publishes nothing for that video. Missing an ad beats cutting the wrong thing. A separate story (later): measure the shift from the audio and move the segments back.</p>
+
+  <h3>The assessor in phase 1</h3>
+  <p>The assessor checks the AI's findings on the review page. Two independent answers per item:</p>
+  <ul class="plain">
+    <li><b>Verdict</b>: what the text is: <span class="pill">sponsor</span> <span class="pill">self_promotion</span> <span class="pill">not_ad</span> <span class="pill">unclear</span>. Judge the text, not the picture.</li>
+    <li><b>Flag "subtitles ≠ video"</b>: a fact about the whole video, not the segment. Set separately; it never replaces the verdict.</li>
+  </ul>
+  <p>These verdicts tell us how far the detector can be trusted and decide when phase 2 can start.</p>
+
+  <div class="two">
+    <div class="card"><h3>For the frontend</h3>
+      <ul>
+        <li>The API and the response format do not change.</li>
+        <li>Start sending <code>views</code> (the video's view count) with the segments request: the AI then picks truly popular videos instead of counting requests.</li>
+      </ul>
+    </div>
+    <div class="card"><h3>For the assessor</h3>
+      <ul>
+        <li>Items come in batches from sheets; the first free reviewer takes a batch, it is theirs until the last verdict.</li>
+        <li>Until there is a verdict, who flagged the segment stays hidden (blind review).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===================== PHASE 2 ===================== -->
+  <h2>Phase 2. AI-first: the viewer gets the AI segments</h2>
+  <p>One switch turns it on. For a video with a ready AI markup the extension gets it instead of the human one. For every other video, as before.</p>
+
+  <h3>What the extension gets</h3>
+  <div class="flow">
+    <div class="node"><b>The extension asks</b><span>video + its duration</span></div>
+    <div class="arrow">→</div>
+    <div class="node warn"><b>Is there an AI markup for this cut of the video?</b><span>durations compared: another cut → another markup</span></div>
+  </div>
+  <div class="branch">
+    <div class="node ai"><b>Yes → AI segments</b><span>same format, plus <code>source: "ai"</code> and <code>confidence</code>. The extension needs no change.</span></div>
+    <div class="node human"><b>No → human segments</b><span>as in phase 1. People keep marking AI videos too: that is the judge's strongest hint and the fallback when a markup is withdrawn.</span></div>
+  </div>
+
+  <div class="bar">
+    <div class="v">0:00</div><div class="s" style="flex:0 0 22%">AI: sponsor</div><div class="v"></div><div class="s" style="flex:0 0 14%">AI: self-promo</div><div class="v">end</div>
+  </div>
+  <p class="caption">One interval, one vote. When a human segment has the same bounds as an AI one, the viewer's vote counts for both and for the markup authors too. The viewer does not care who drew the segment.</p>
+
+  <h3>The judge: who watches for AI mistakes</h3>
+  <p>Once an hour the judge checks the published AI markups that got <b>new negative signals</b>: dislikes, undone skips, human markups elsewhere, a new cut of the video. Likes and agreeing markups give no reason to look.</p>
+  <div class="flow">
+    <div class="node human"><b>Viewer signals</b><span>👎, undone skip, a markup saying "the ad is not here at all"</span></div>
+    <div class="arrow">→</div>
+    <div class="node ai"><b>Judge</b><span>simple rules; in doubt, Claude reads the text and the signals</span></div>
+    <div class="arrow">→</div>
+    <div class="node"><b>Decision</b><span>one of three ↓</span></div>
+  </div>
+  <div class="flow">
+    <div class="node ok"><b>ok</b><span>all fine, keep it</span></div>
+    <div class="node warn"><b>review</b><span>doubt → the segments go to an assessor; they stay live while the assessor decides</span></div>
+    <div class="node warn"><b>withdraw</b><span>the AI markup is taken off the air, viewers get the human segments again; it also goes to an assessor</span></div>
+  </div>
+  <div class="note ok">The judge never closes a case on its own: a human has the last word. It only pulls doubtful segments and calls an assessor.</div>
+
+  <h3>The assessor in phase 2: a verdict changes what is live</h3>
+  <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason. The decision is the same as before, but now it acts at once:</p>
+  <div class="branch">
+    <div class="node ok"><b>sponsor / self_promotion</b><span>the segment stays live (or comes back) with that category. If the judge withdrew the whole markup and every segment of it is confirmed, the markup is live again.</span></div>
+    <div class="node warn"><b>not_ad / unclear</b><span>the segment is removed from the AI markup. Once all are removed, the markup is withdrawn and viewers get the human segments.</span></div>
+  </div>
+  <p>The "subtitles ≠ video" flag is set as before, separately from the verdict. It accumulates as knowledge about the video and feeds the later work on shifted tracks.</p>
+
+  <div class="two">
+    <div class="card"><h3>For the frontend</h3>
+      <ul>
+        <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown.</li>
+        <li>Always send the video duration: without it no AI markup is served (we cannot tell which cut it is).</li>
+        <li>Undone skips and dislikes are valuable events; they reach the judge.</li>
+      </ul>
+    </div>
+    <div class="card"><h3>For the assessor</h3>
+      <ul>
+        <li>AI items come in batches from the judge, one per segment; real viewers are behind them, so they come before the sheets.</li>
+        <li>Decide by the text, as before. One verdict puts one segment on or off the air.</li>
+        <li>The track flag is a separate checkbox; it never replaces the verdict.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Safety nets</h2>
+  <ul class="plain">
+    <li><b>Kill switch.</b> One flag turns AI-first off entirely: the extension gets the human segments again, no data is touched.</li>
+    <li><b>Per video.</b> An admin can withdraw the AI markup of one video; verdicts never bring that one back.</li>
+    <li><b>Human markups live on in parallel.</b> They are never lost and always ready to replace the AI.</li>
+    <li><b>Budget.</b> The detector handles a limited number of videos per day; overspend raises an alert.</li>
+  </ul>
+</div>
+</body>
+</html>
