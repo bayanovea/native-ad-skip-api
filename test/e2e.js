@@ -945,6 +945,12 @@ test('ai: a request without views leaves views_max NULL; the legacy branch and b
 });
 
 // RT: GET must not create a Video row when the video doesn't exist
+test('ai: the image carries the pinned yt-dlp', () => {
+    const r = spawnSync('yt-dlp', ['--version'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), '2026.10.21');
+});
+
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';
     const res = await getCalculated('rt', vid, { duration: 300 });

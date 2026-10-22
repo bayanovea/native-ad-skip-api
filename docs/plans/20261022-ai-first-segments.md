@@ -352,12 +352,12 @@ Key decisions:
 - Modify: `go.mod`, `go.sum`, `vendor/`, `Dockerfile`, `.dockerignore` (if any)
 - Modify: eval repo (`~/Web/ad-skip-segment-eval`): the copied packages must not import `netguard`/`store` (they do not today; add a test there that keeps it so)
 
-- [ ] `scripts/sync-detector.sh <eval checkout>`: copies the five packages and the prompt, rewrites the import path to `odedohbest/video-calculate/ai/…`, drops `apiKeyPath` (env only) and `claudecli.go` (not for the product), writes the eval commit sha to `ai/SOURCE`; refuses on a dirty eval checkout
-- [ ] `go.mod`: `go 1.27`, `anthropic-sdk-go` at the eval's version; `go mod vendor`
-- [ ] Dockerfile: `yt-dlp` static binary (pinned release, sha256 checked) into the runtime stage; `ai/` copied into the `go-build` stage
-- [ ] `ai/detector`: `FixtureClient` (`AI_CLIENT=fixture`) reading `test/fixtures/ai/<native_id>.detect.json`, implementing `Client` and the batch interface (so e2e drives the batch path too)
-- [ ] copied Go unit tests pass (`go test ./ai/...`); test for `FixtureClient` (missing file → error)
-- [ ] `make test-e2e` still green (nothing wired yet) — must pass before task 3
+- [x] `scripts/sync-detector.sh <eval checkout>`: copies the five packages and the prompt, rewrites the import path to `odedohbest/video-calculate/ai/…`, drops `apiKeyPath` (env only) and `claudecli.go` (not for the product), writes the eval commit sha to `ai/SOURCE`; refuses on a dirty eval checkout (also drops the eval's `anthropic_test.go`, which tests only the key file; product-owned files `detector/fixture.go`, `fixture_test.go`, `apikey_test.go` survive a sync; ends with `go build ./ai/...` and a warning when the eval's SDK version differs; eval side: `internal/policy/product_imports_test.go`, eval `9393890`)
+- [x] `go.mod`: `go 1.27`, `anthropic-sdk-go` at the eval's version; `go mod vendor` (v1.80.0)
+- [x] Dockerfile: `yt-dlp` static binary (pinned release, sha256 checked) into the runtime stage; `ai/` copied into the `go-build` stage (own `ytdlp` stage, release `2026.10.21`, `yt-dlp_linux` / `_aarch64` by `TARGETARCH`; e2e checks `yt-dlp --version` in the image)
+- [x] `ai/detector`: `FixtureClient` (`AI_CLIENT=fixture`) reading `test/fixtures/ai/<native_id>.detect.json`, implementing `Client` and the batch interface (so e2e drives the batch path too) (`NewFixtureClient(dir, model)`; `BatchClient` interface = `Client` + `Submit` / `Wait`, `AnthropicBatch` satisfies it; a fixture batch has ended at once, a missing fixture is that video's error)
+- [x] copied Go unit tests pass (`go test ./ai/...`); test for `FixtureClient` (missing file → error)
+- [x] `make test-e2e` still green (nothing wired yet) — must pass before task 3
 
 ### Task 3: `ai detect`: queue → fetch → gate → detect → publish
 
