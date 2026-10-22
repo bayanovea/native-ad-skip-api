@@ -76,7 +76,9 @@ correctly, even at the cost of missed ads.
 - **CRITICAL: all tests must pass before starting next task** - no exceptions
 - **CRITICAL: update this plan file when scope changes during implementation**
 - behind flags from day one: `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (all `off`
-  by default, so a deploy of any intermediate task changes nothing for clients)
+  by default, so a deploy of any intermediate task changes nothing for clients); the switch to
+  AI-first is only ever a deliberate env change by the owner (`AI_FIRST=on` in the deploy
+  secrets), never a code default, a migration or a later task of this plan
 - prv only (`rt` / `yt` have no traffic, `docs/backlog/rt-yt-providers-unused.md`)
 
 ## Testing Strategy
