@@ -61,16 +61,31 @@ test('a row published with nothing to skip (empty or missing data) is not served
     assert.equal(await findAiCalculated(makeModels([{ ...active, data: null }]).models, 1), null);
 });
 
-test('transaction and lock are passed through', async () => {
+test('the transaction is passed through', async () => {
     const findAiCalculated = load('on');
     const { models, calls } = makeModels([active]);
     const transaction = { id: 't' };
-    await findAiCalculated(models, 1, { transaction, lock: 'UPDATE' });
+    await findAiCalculated(models, 1, { transaction });
     assert.equal(calls[0].transaction, transaction);
-    assert.equal(calls[0].lock, 'UPDATE');
 });
 
-test('the AI row is served only when the player duration fits the videos row', () => {
-    const { AI_LOOKUP_OUTCOMES } = require('../lib/find-ai-calculated');
-    assert.deepEqual([...AI_LOOKUP_OUTCOMES].sort(), ['backfilled', 'match']);
+test('lockAiCalculated: the row in any state (also with AI_FIRST off), FOR UPDATE in the transaction', async () => {
+    load(undefined);
+    const { lockAiCalculated, servesAi } = require('../lib/find-ai-calculated');
+    const withdrawn = { ...active, withdrawn_at: new Date() };
+    const calls = [];
+    const models = { AiVideoCalculated: { async findOne(opts) { calls.push(opts); return withdrawn; } } };
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    assert.equal(await lockAiCalculated(models, 1, { transaction }), withdrawn);
+    assert.deepEqual(calls[0], { where: { video_id: 1 }, lock: 'UPDATE', transaction });
+    assert.equal(servesAi(active), false, 'AI_FIRST off: nothing is served');
+});
+
+test('servesAi: AI_FIRST on, not withdrawn, something published', () => {
+    load('on');
+    const { servesAi } = require('../lib/find-ai-calculated');
+    assert.equal(servesAi(active), true);
+    for (const row of [null, { ...active, withdrawn_at: new Date() }, { ...active, data: [] }, { ...active, data: null }]) {
+        assert.equal(servesAi(row), false, JSON.stringify(row));
+    }
 });

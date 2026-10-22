@@ -69,7 +69,7 @@ function shareCollect(refresh, gauges) {
     for (const g of gauges) g.collect = collect;
 }
 
-// AI-first state (prv tables), one query per scrape; registered like the
+// AI-first state (prv tables), read on every scrape; registered like the
 // heartbeat. A failing query is logged once and leaves the gauges empty
 // (ai_review_open reads 0: prom-client always exposes a label-less gauge).
 function registerAiMetrics(sequelize) {
@@ -83,6 +83,11 @@ function registerAiMetrics(sequelize) {
         help: 'Model cost in USD so far: detect (prv_ai_runs) and judge (prv_ai_judgements)',
         labelNames: ['kind'],
     });
+    const cost24h = new client.Gauge({
+        name: 'ai_cost_usd_24h',
+        help: 'Model cost in USD over the last 24 h: detect (prv_ai_runs) and judge (prv_ai_judgements)',
+        labelNames: ['kind'],
+    });
     const judgements = new client.Gauge({
         name: 'ai_judgements_total',
         help: 'prv_ai_judgements rows per decision and judge',
@@ -92,36 +97,36 @@ function registerAiMetrics(sequelize) {
         name: 'ai_review_open',
         help: 'AI review items without a verdict',
     });
+    const costOf = (kind, table) => `SELECT '${kind}' AS kind, COALESCE(SUM(cost_usd), 0) AS total,
+        COALESCE(SUM(cost_usd) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) AS day FROM ${table}`;
     let logged = false;
     async function refresh() {
-        let rows;
+        let results;
         try {
-            [rows] = await sequelize.query(
-                `SELECT 'videos' AS metric, status AS a, NULL AS b, COUNT(*) AS value FROM prv_ai_videos GROUP BY status
-                 UNION ALL SELECT 'cost', 'detect', NULL, COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs
-                 UNION ALL SELECT 'cost', 'judge', NULL, COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements
-                 UNION ALL SELECT 'judgements', decision, "by", COUNT(*) FROM prv_ai_judgements GROUP BY decision, "by"
-                 UNION ALL SELECT 'review_open', NULL, NULL, COUNT(*) FROM prv_review_items i
-                     WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)`);
+            results = await Promise.all([
+                'SELECT status, COUNT(*) AS n FROM prv_ai_videos GROUP BY status',
+                `${costOf('detect', 'prv_ai_runs')} UNION ALL ${costOf('judge', 'prv_ai_judgements')}`,
+                'SELECT decision, "by", COUNT(*) AS n FROM prv_ai_judgements GROUP BY decision, "by"',
+                `SELECT COUNT(*) AS n FROM prv_review_items i
+                  WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)`,
+            ].map(async sql => (await sequelize.query(sql))[0]));
             logged = false;
         } catch (err) {
             if (!logged) console.error('AI metrics query failed:', err.message);
             logged = true;
-            rows = [];
+            results = [[], [], [], []];
         }
-        videos.reset();
-        cost.reset();
-        judgements.reset();
-        reviewOpen.reset();
-        for (const { metric, a, b, value } of rows) {
-            const v = Number(value);
-            if (metric === 'videos') videos.set({ status: a }, v);
-            else if (metric === 'cost') cost.set({ kind: a }, v);
-            else if (metric === 'judgements') judgements.set({ decision: a, by: b }, v);
-            else if (metric === 'review_open') reviewOpen.set(v);
+        const [videoRows, costRows, judgementRows, openRows] = results;
+        for (const g of [videos, cost, cost24h, judgements, reviewOpen]) g.reset();
+        for (const { status, n } of videoRows) videos.set({ status }, Number(n));
+        for (const { kind, total, day } of costRows) {
+            cost.set({ kind }, Number(total));
+            cost24h.set({ kind }, Number(day));
         }
+        for (const { decision, by, n } of judgementRows) judgements.set({ decision, by }, Number(n));
+        for (const { n } of openRows) reviewOpen.set(Number(n));
     }
-    shareCollect(refresh, [videos, cost, judgements, reviewOpen]);
+    shareCollect(refresh, [videos, cost, cost24h, judgements, reviewOpen]);
 }
 
 function incrementVideoCalculatedLookup(outcome, provider, source = 'human') {

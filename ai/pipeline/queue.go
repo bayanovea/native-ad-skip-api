@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/lib/pq"
@@ -16,11 +17,14 @@ type queued struct {
 	attempts int
 }
 
+// nativeIDPattern is a prv id ("-<owner>_<video>"); anything else never reaches yt-dlp's URL.
+var nativeIDPattern = regexp.MustCompile(`^-?[0-9]+_[0-9]+$`)
+
 // A crashed tick leaves its rows in `fetching`; after an hour the queue takes them again.
-const queueRule = `
+const queueRule = `native_id ~ '^-?[0-9]+_[0-9]+$' AND (
 	(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))
 	OR (status = 'queued' AND next_attempt_at <= NOW())
-	OR (status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour')`
+	OR (status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'))`
 
 // claimQueued moves up to the tick's share of the daily budget from the queue to
 // `fetching`, oldest first. The row lock is held only for the claim, so the read
@@ -76,6 +80,9 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 // withdrawal refer to (docs/backlog/ai-redetect.md).
 func claimOne(db *sql.DB, nativeID string) (queued, error) {
 	q := queued{nativeID: nativeID}
+	if !nativeIDPattern.MatchString(nativeID) {
+		return q, fmt.Errorf("%q is not a prv video id (-<owner>_<video>)", nativeID)
+	}
 	if _, err := db.Exec(`INSERT INTO prv_ai_videos (native_id) VALUES ($1) ON CONFLICT (native_id) DO NOTHING`, nativeID); err != nil {
 		return q, err
 	}
@@ -100,16 +107,15 @@ func claimOne(db *sql.DB, nativeID string) (queued, error) {
 	return q, err
 }
 
-// viewCount reads view_count from yt-dlp's info JSON. A missing count is 0, so the
-// row waits for the extension to report views instead of being fetched every tick.
-func viewCount(raw []byte) int64 {
+// viewCount reads view_count from yt-dlp's info JSON; ok is false when it is missing.
+func viewCount(raw []byte) (n int64, ok bool) {
 	var info struct {
 		ViewCount *int64 `json:"view_count"`
 	}
 	if json.Unmarshal(raw, &info) != nil || info.ViewCount == nil {
-		return 0
+		return 0, false
 	}
-	return *info.ViewCount
+	return *info.ViewCount, true
 }
 
 // retrySchedule is the wait after the 1st, 2nd and 3rd fetch attempt that found no

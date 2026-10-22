@@ -2,6 +2,8 @@ const { QueryTypes } = require('sequelize');
 const { voteRating } = require('../../lib/segment-rating');
 
 const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
+// A prv video id (`<owner>_<id>`, owner negative for a community); anything else is never queued for `ai detect`.
+const PRV_NATIVE_ID = /^-?\d+_\d+$/;
 // A keep verdict never restores a row withdrawn by `duration` (timed for the old cut; the judge now sends a re-cut to review) or `admin` (the operator's switch).
 const RESTORABLE_BY = new Set(['judge', 'review']);
 
@@ -21,6 +23,7 @@ module.exports = function createAiRepository(models, sequelize) {
     return {
         // GREATEST skips NULL, so a request without `views` never lowers or clears views_max.
         async seen(nativeId, views) {
+            if (!PRV_NATIVE_ID.test(nativeId)) return;
             await sequelize.query(
                 `INSERT INTO prv_ai_videos (native_id, views_max, requests)
                  VALUES (:nativeId, :views, 1)

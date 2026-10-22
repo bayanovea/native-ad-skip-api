@@ -16,46 +16,67 @@ const batchMax = 30
 
 // addReviewItems sends the video's AI entries to /admin/review: one kind='ai' item
 // per entry in today's sheet ai-judge-<date>, mirroring reviewRepository.insertItems
-// and createBatch. A video with an ai item still waiting for a verdict gets none.
-// Returns the batch, "" when skipped.
-func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue, categories map[int]string, now time.Time) (string, error) {
-	var open bool
-	if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = $1
-		AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts r WHERE r.item_id = i.id))`, v.VideoID).Scan(&open); err != nil {
-		return "", fmt.Errorf("open items: %w", err)
+// and createBatch. An entry with an item still waiting for a verdict gets none, so a
+// withdrawn row's other entries still reach a human. Returns the batch and the
+// number of items, "" and 0 when every entry already waits.
+func addReviewItems(tx *sql.Tx, v Video, j judgement, s Signals, cues []vtt.Cue, categories map[int]string, now time.Time) (string, int, error) {
+	rows, err := tx.Query(`SELECT i.start, i."end" FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = $1
+		AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts r WHERE r.item_id = i.id)`, v.VideoID)
+	if err != nil {
+		return "", 0, fmt.Errorf("open items: %w", err)
 	}
-	if open {
-		return "", nil
+	open := map[[2]int]bool{}
+	for rows.Next() {
+		var b [2]int
+		if err := rows.Scan(&b[0], &b[1]); err != nil {
+			rows.Close()
+			return "", 0, fmt.Errorf("open items: %w", err)
+		}
+		open[b] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", 0, fmt.Errorf("open items: %w", err)
+	}
+	var todo []int
+	for i, e := range v.Entries {
+		if !open[[2]int{e.Start, e.End}] {
+			todo = append(todo, i)
+		}
+	}
+	if len(todo) == 0 {
+		return "", 0, nil
 	}
 	sheet := "ai-judge-" + now.UTC().Format("2006-01-02")
-	batch, err := reviewBatch(tx, sheet, len(v.Entries))
+	batch, err := reviewBatch(tx, sheet, len(todo))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	var last int
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(position), 0) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, sheet).Scan(&last); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	prv, err := provider.Lookup("prv")
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	for i, e := range v.Entries {
+	for n, i := range todo {
+		e := v.Entries[i]
 		flagged, err := json.Marshal(flaggedBy(j, s, i))
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
-		pos := last + i + 1
+		pos := last + n + 1
 		// The player opens 2 s early, as the sheets' links do (the page uses the link as is).
 		if _, err := tx.Exec(`INSERT INTO prv_review_items
 				(sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, kind, video_id, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ai', $12, CURRENT_TIMESTAMP)`,
 			sheet, batch, fmt.Sprintf("A%d", pos), pos, v.NativeID, e.Start, e.End, categories[e.CategoryID],
 			nullString(cueText(cues, float64(e.Start), float64(e.End), "\n")), prv.LinkAt(v.NativeID, e.Start-2), flagged, v.VideoID); err != nil {
-			return "", fmt.Errorf("review item: %w", err)
+			return "", 0, fmt.Errorf("review item: %w", err)
 		}
 	}
-	return batch, nil
+	return batch, len(todo), nil
 }
 
 // reviewBatch picks the sheet's newest part that nobody holds or has started and

@@ -905,14 +905,14 @@
             "uid": "c62ca5db-1b9b-4b36-a035-145154b708ae"
           },
           "editorMode": "code",
-          "expr": "increase(ai_cost_usd_total[24h])",
+          "expr": "ai_cost_usd_24h",
           "instant": false,
           "legendFormat": "{{kind}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "AI: cost per day",
+      "title": "AI: cost over the last 24 h",
       "type": "timeseries"
     },
     {

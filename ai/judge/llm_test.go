@@ -91,6 +91,20 @@ func TestRenderRequest(t *testing.T) {
 	}
 }
 
+func TestRenderRequestWithoutViews(t *testing.T) {
+	zero := int64(0)
+	for _, views := range []*int64{nil, &zero} {
+		s := Signals{Counters: Counters{Undo: 5}, ViewsMax: views, Requests: 12, AgeH: 30}
+		req := renderRequest(detector.Prompt{Text: "PROMPT"}, testVideo, s, testCategories, nil)
+		if strings.Contains(req.User, "per 1k views") || !strings.Contains(req.User, "undo=5\n") {
+			t.Errorf("views %v: no rates without views, got\n%s", views, req.User)
+		}
+		if hasViews := strings.Contains(req.User, ` views="`); hasViews != (views != nil) {
+			t.Errorf("views %v: views attribute %v", views, hasViews)
+		}
+	}
+}
+
 func TestAnthropicJudge(t *testing.T) {
 	var sent map[string]any
 	stop := "end_turn"

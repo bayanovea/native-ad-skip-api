@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,11 +91,23 @@ const (
 
 var requestFormat = detector.Format{NoTimes: true}
 
+// batchClient is the batch transport: detector.AnthropicBatch in production, detector.FixtureClient in tests.
+type batchClient interface {
+	Submit(ctx context.Context, reqs []detector.Request) (string, error)
+	// Poll checks once; true when the batch has ended and its results are loaded.
+	Poll(ctx context.Context, batchID string) (bool, error)
+}
+
+var (
+	_ batchClient = (*detector.AnthropicBatch)(nil)
+	_ batchClient = (*detector.FixtureClient)(nil)
+)
+
 type detectRun struct {
 	cfg         Config
 	db          *sql.DB
 	client      detector.Client
-	batch       detector.BatchClient // nil for the synchronous client
+	batch       batchClient // nil for the synchronous client
 	prompt      detector.Prompt
 	price       detector.Price
 	priceFactor float64
@@ -262,7 +275,11 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		return nil, r.fetchError(q, err)
 	}
 	if checkViews && !q.viewsMax.Valid {
-		views := viewCount(raw)
+		// A missing count is 0: the row waits for the extension to report views instead of being fetched every tick.
+		views, known := viewCount(raw)
+		if !known {
+			log.Printf("ai detect: %s: no view_count in yt-dlp's info, waiting for views from clients", q.nativeID)
+		}
 		status := "fetching"
 		if views < int64(r.cfg.MinViews) {
 			status = "seen"
@@ -308,7 +325,7 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 		log.Printf("ai detect: %s timeline_unreliable: %s", q.nativeID, reason)
 		return nil, nil
 	}
-	videoID, ok, err := findOrCreateVideo(r.db, q.nativeID, roundDuration(info.Duration))
+	videoID, ok, err := findOrCreateVideo(r.db, q.nativeID, int(math.Round(info.Duration)))
 	if err != nil {
 		return nil, fmt.Errorf("videos row: %w", err)
 	}

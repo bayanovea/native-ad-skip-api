@@ -66,60 +66,66 @@ test('counters are exposed via prom-client default register output', async () =>
     assert.match(output, /request_without_version_total/);
 });
 
-function fakeDb(results) {
+// A sequelize stub for registerAiMetrics: `answer(sql)` gives the rows of each query (or throws).
+function fakeDb(answer) {
     const calls = [];
     return {
         calls,
         async query(sql) {
             calls.push(sql);
-            const next = results.shift();
-            if (next instanceof Error) throw next;
-            return [next];
+            return [answer(sql)];
         },
     };
 }
 
-test('registerAiMetrics: one query per scrape fills the four AI gauges', async () => {
+const aiRows = (videos) => (sql) => {
+    if (sql.includes('FROM prv_ai_videos')) return videos;
+    if (sql.includes('cost_usd')) return [{ kind: 'detect', total: 0.125, day: 0.05 }, { kind: 'judge', total: 0, day: 0 }];
+    if (sql.includes('FROM prv_ai_judgements')) return [{ decision: 'review', by: 'llm', n: '2' }];
+    return [{ n: '4' }];
+};
+
+test('registerAiMetrics: one refresh per scrape fills the AI gauges', async () => {
     const wrapper = require('../prometheus-wrapper.js');
-    const db = fakeDb([[
-        { metric: 'videos', a: 'published', b: null, value: '3' },
-        { metric: 'videos', a: 'seen', b: null, value: '7' },
-        { metric: 'cost', a: 'detect', b: null, value: 0.125 },
-        { metric: 'cost', a: 'judge', b: null, value: 0 },
-        { metric: 'judgements', a: 'review', b: 'llm', value: '2' },
-        { metric: 'review_open', a: null, b: null, value: '4' },
-    ]]);
+    const db = fakeDb(aiRows([{ status: 'published', n: '3' }, { status: 'seen', n: '7' }]));
     wrapper.registerAiMetrics(db);
 
     const output = await client.register.metrics();
-    assert.equal(db.calls.length, 1, 'the four gauges share one query');
+    assert.equal(db.calls.length, 4, 'the gauges share one refresh of four queries');
     assert.match(output, /^ai_videos\{status="published"\} 3$/m);
     assert.match(output, /^ai_videos\{status="seen"\} 7$/m);
     assert.match(output, /^ai_cost_usd_total\{kind="detect"\} 0.125$/m);
     assert.match(output, /^ai_cost_usd_total\{kind="judge"\} 0$/m);
+    assert.match(output, /^ai_cost_usd_24h\{kind="detect"\} 0.05$/m);
+    assert.match(output, /^ai_cost_usd_24h\{kind="judge"\} 0$/m);
     assert.match(output, /^ai_judgements_total\{decision="review",by="llm"\} 2$/m);
     assert.match(output, /^ai_review_open 4$/m);
 });
 
 test('registerAiMetrics: a failing query logs once and leaves the gauges empty; a later scrape fills them again', async () => {
     const wrapper = require('../prometheus-wrapper.js');
-    const db = fakeDb([
-        [{ metric: 'videos', a: 'published', b: null, value: '1' }],
-        new Error('relation "prv_ai_videos" does not exist'),
-        new Error('relation "prv_ai_videos" does not exist'),
-        [{ metric: 'videos', a: 'failed', b: null, value: '2' }],
-    ]);
+    const states = [
+        aiRows([{ status: 'published', n: '1' }]),
+        () => { throw new Error('relation "prv_ai_videos" does not exist'); },
+        () => { throw new Error('relation "prv_ai_videos" does not exist'); },
+        aiRows([{ status: 'failed', n: '2' }]),
+    ];
+    let state = states[0];
+    const db = fakeDb(sql => state(sql));
     wrapper.registerAiMetrics(db);
     const logs = [];
     const orig = console.error;
     console.error = (...args) => logs.push(args.join(' '));
     try {
         assert.match(await client.register.metrics(), /^ai_videos\{status="published"\} 1$/m);
-        for (let i = 0; i < 2; i++) {
+        for (let i = 1; i <= 2; i++) {
+            state = states[i];
             const output = await client.register.metrics();
             assert.doesNotMatch(output, /^ai_videos\{/m, 'no stale series after a failure');
             assert.doesNotMatch(output, /^ai_judgements_total\{/m);
+            assert.doesNotMatch(output, /^ai_cost_usd_24h\{/m);
         }
+        state = states[3];
         const output = await client.register.metrics();
         assert.match(output, /^ai_videos\{status="failed"\} 2$/m);
         assert.doesNotMatch(output, /status="published"/);

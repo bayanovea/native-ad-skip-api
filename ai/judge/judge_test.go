@@ -67,7 +67,7 @@ func expectLockAndJudgement(mock sqlmock.Sqlmock, decision, by string, reason an
 
 // expectNewItems: no open item, a fresh sheet, one item for the one entry.
 func expectNewItems(mock sqlmock.Sqlmock, flagged string) {
-	mock.ExpectQuery("SELECT EXISTS").WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT i.start, i."end" FROM prv_review_items i`)).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"start", "end"}))
 	mock.ExpectQuery("SELECT b.batch FROM prv_review_batches").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT COUNT\\(DISTINCT batch\\)").WithArgs("ai-judge-2026-10-21").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING")).WithArgs("ai-judge-2026-10-21").
@@ -123,7 +123,8 @@ func TestJudgeVideoLLMWithdraw(t *testing.T) {
 		if auto {
 			mock.ExpectExec(regexp.QuoteMeta("SET withdrawn_at = NOW(), withdrawn_by = $2, withdrawn_reason = $3")).WithArgs(7, "judge", "not an ad").
 				WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn'")).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn' WHERE native_id = $1")).WithArgs("-1_456000001").
+				WillReturnResult(sqlmock.NewResult(0, 1))
 		}
 		expectNewItems(mock, `["judge withdraw by llm: not an ad","signals: undo=2","keep: false"]`)
 		expectCounters(mock)
@@ -223,5 +224,45 @@ func TestNewLLMClient(t *testing.T) {
 	}
 	if _, err := f.Judge(context.Background(), detector.Request{Key: "-1_456000001"}); err == nil {
 		t.Fatal("missing fixture: want an error")
+	}
+}
+
+func TestJudgeVideoCallsTheLLMOnceTheMinIntervalHasPassed(t *testing.T) {
+	r, mock, v, llm := llmCaseNotKept(t, `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true}]}`, true)
+	r.now = v.JudgedAt.Time.Add(r.cfg.MinInterval) // exactly the interval
+	expectTranscript(mock)
+	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
+	expectCounters(mock)
+	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
+func TestRecordLeavesARowWithdrawnMeanwhile(t *testing.T) {
+	db, mock := newMock(t)
+	r := &run{db: db, categories: testCategories, now: reviewNow}
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(reviewNow))
+	mock.ExpectRollback()
+	j := judgement{Decision: "withdraw", By: "llm", Reason: "r", WithdrawBy: "judge", Review: true}
+	if err := r.record(testVideo, Signals{}, j, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTickJudgesTheOtherVideosAfterAFailure(t *testing.T) {
+	db, mock := newMock(t)
+	r := &run{db: db, categories: testCategories, now: published.Add(32 * time.Hour)}
+	cols := []string{"video_id", "native_id", "data", "published_at", "duration", "judged_at", "judge_counters", "views_max", "requests", "last_seen_at"}
+	mock.ExpectQuery("FROM prv_ai_video_calculateds a").WillReturnRows(sqlmock.NewRows(cols).
+		AddRow(6, "-1_456000000", []byte(`not json`), published, 600, nil, nil, nil, 3, published).
+		AddRow(7, "-1_456000001", testVideo.Data, published, 600, nil, nil, 25000, 12, published))
+	expectSignals(mock, 0, 0)
+	expectLockAndJudgement(mock, "ok", "rules", "no negative signal", nil, nil)
+	mock.ExpectExec("judged_at = NOW()").WithArgs("-1_456000001", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if failed, err := r.tick(); failed != 1 || err != nil {
+		t.Fatalf("got %d %v", failed, err)
 	}
 }

@@ -275,14 +275,14 @@ func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 		}
 	}
 	if j.Review {
-		batch, err := addReviewItems(tx, v, j, s, cues, r.categories, r.now)
+		batch, n, err := addReviewItems(tx, v, j, s, cues, r.categories, r.now)
 		if err != nil {
 			return err
 		}
-		if batch == "" {
-			log.Printf("ai judge: %d already waits for a review verdict, no new items", v.VideoID)
+		if n == 0 {
+			log.Printf("ai judge: %d already waits for a review verdict on every entry, no new items", v.VideoID)
 		} else {
-			log.Printf("ai judge: %d sent %d items to review batch %s", v.VideoID, len(v.Entries), batch)
+			log.Printf("ai judge: %d sent %d items to review batch %s", v.VideoID, n, batch)
 		}
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET judged_at = NOW(), judge_counters = $2, updated_at = NOW() WHERE native_id = $1`,

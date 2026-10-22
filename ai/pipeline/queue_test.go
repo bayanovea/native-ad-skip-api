@@ -22,7 +22,7 @@ func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(198))
 	mock.ExpectBegin()
 	// views from the extension, or unknown views and enough GETs (the fallback), or a retry that is due
-	mock.ExpectQuery(regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))")+
+	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-?[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))")+
 		`(?s).*status = 'queued' AND next_attempt_at <= NOW\(\).*ORDER BY first_seen_at.*LIMIT \$3 FOR UPDATE SKIP LOCKED`).
 		WithArgs(10000, 3, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}).
@@ -91,8 +91,8 @@ func TestViewCount(t *testing.T) {
 		`{"id":"x"}`:                    0,
 		`not json`:                      0,
 	} {
-		if got := viewCount([]byte(raw)); got != want {
-			t.Errorf("viewCount(%s) = %d, want %d", raw, got, want)
+		if got, ok := viewCount([]byte(raw)); got != want || ok != (want > 0) {
+			t.Errorf("viewCount(%s) = %d %v, want %d", raw, got, ok, want)
 		}
 	}
 }
@@ -167,6 +167,12 @@ func TestClaimOne(t *testing.T) {
 		mock.ExpectExec("INSERT INTO prv_ai_videos").WithArgs("-1_456000001").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(regexp.QuoteMeta("EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)")).WithArgs("-1_456000001").
 			WillReturnRows(sqlmock.NewRows([]string{"status", "exists"}).AddRow(status, hasRow))
+	}
+
+	for _, id := range []string{"", "x", "-1_", "1_2/../3", "-1_456000001?x=1"} {
+		if _, err := claimOne(db, id); err == nil || !strings.Contains(err.Error(), "is not a prv video id") {
+			t.Errorf("%q: got %v", id, err)
+		}
 	}
 
 	for _, c := range []struct {

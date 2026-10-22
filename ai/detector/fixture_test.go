@@ -31,16 +31,13 @@ func TestFixtureClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Wait(ctx, id, 0, nil); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := f.Detect(ctx, Request{Key: "-1_456000001"}); err != nil {
 		t.Fatalf("batch path: %v", err)
 	}
 	if ended, err := f.Poll(ctx, id); err != nil || !ended {
 		t.Fatalf("poll: ended=%v err=%v", ended, err)
 	}
-	if err := f.Wait(ctx, "msgbatch_01", 0, nil); err == nil {
+	if _, err := f.Poll(ctx, "msgbatch_01"); err == nil {
 		t.Fatal("foreign batch id: want an error")
 	}
 	if _, err := f.Submit(ctx, []Request{{}}); err == nil {

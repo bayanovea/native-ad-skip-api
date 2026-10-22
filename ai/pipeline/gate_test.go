@@ -14,6 +14,10 @@ func TestTimelineGate(t *testing.T) {
 	if o := overrun(cues, 600); !timelineOK(o) {
 		t.Fatalf("overrun %.1f: want the track accepted", o)
 	}
+	cues[1].End = 603
+	if o := overrun(cues, 600); !timelineOK(o) {
+		t.Fatalf("overrun %.1f: the limit itself is accepted", o)
+	}
 	cues[1].End = 603.1
 	if o := overrun(cues, 600); timelineOK(o) {
 		t.Fatalf("overrun %.1f: want timeline_unreliable", o)

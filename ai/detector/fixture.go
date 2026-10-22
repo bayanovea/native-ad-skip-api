@@ -6,22 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-)
-
-// BatchClient is the batch transport of the detect command: AnthropicBatch in
-// production, FixtureClient in tests.
-type BatchClient interface {
-	Client
-	Submit(ctx context.Context, reqs []Request) (string, error)
-	Wait(ctx context.Context, batchID string, every time.Duration, progress func(string)) error
-	// Poll checks once; true when the batch has ended and its results are loaded.
-	Poll(ctx context.Context, batchID string) (bool, error)
-}
-
-var (
-	_ BatchClient = (*AnthropicBatch)(nil)
-	_ BatchClient = (*FixtureClient)(nil)
 )
 
 const fixtureBatchPrefix = "fixture-"
@@ -55,7 +39,7 @@ func (f *FixtureClient) Detect(_ context.Context, req Request) (Result, error) {
 	return res, err
 }
 
-// Submit implements BatchClient.
+// Submit is the batch call: the batch id lists the keys.
 func (f *FixtureClient) Submit(_ context.Context, reqs []Request) (string, error) {
 	keys := make([]string, len(reqs))
 	for i, r := range reqs {
@@ -67,18 +51,10 @@ func (f *FixtureClient) Submit(_ context.Context, reqs []Request) (string, error
 	return fixtureBatchPrefix + strings.Join(keys, ","), nil
 }
 
-// Wait implements BatchClient; it only refuses a batch id another client made.
-func (f *FixtureClient) Wait(_ context.Context, batchID string, _ time.Duration, progress func(string)) error {
+// Poll: a fixture batch has always ended; a batch id another client made is refused.
+func (f *FixtureClient) Poll(_ context.Context, batchID string) (bool, error) {
 	if !strings.HasPrefix(batchID, fixtureBatchPrefix) {
-		return fmt.Errorf("fixture: not a fixture batch: %s", batchID)
+		return false, fmt.Errorf("fixture: not a fixture batch: %s", batchID)
 	}
-	if progress != nil {
-		progress("batch " + batchID + ": ended")
-	}
-	return nil
-}
-
-// Poll implements BatchClient; a fixture batch has always ended.
-func (f *FixtureClient) Poll(ctx context.Context, batchID string) (bool, error) {
-	return true, f.Wait(ctx, batchID, 0, nil)
+	return true, nil
 }

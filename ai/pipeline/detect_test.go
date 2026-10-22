@@ -2,7 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -10,7 +13,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/ai/provider"
 	"odedohbest/video-calculate/ai/transcript"
+	"odedohbest/video-calculate/ai/ytdlp"
 )
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
@@ -58,8 +63,7 @@ func (f *fakeBatch) Submit(_ context.Context, reqs []detector.Request) (string, 
 	}
 	return "msgbatch_1", f.submitErr
 }
-func (f *fakeBatch) Wait(context.Context, string, time.Duration, func(string)) error { return nil }
-func (f *fakeBatch) Poll(context.Context, string) (bool, error)                      { return f.ended, f.pollErr }
+func (f *fakeBatch) Poll(context.Context, string) (bool, error) { return f.ended, f.pollErr }
 
 func batchRun(t *testing.T) (*detectRun, sqlmock.Sqlmock, *fakeBatch) {
 	t.Helper()
@@ -171,5 +175,48 @@ func TestSubmitErrorDropsTheRunsAndCountsAnAttempt(t *testing.T) {
 		WithArgs("-1_456000001", "queued", 2, sqlmock.AnyArg(), "batch submit: 400 invalid request").WillReturnResult(sqlmock.NewResult(0, 1))
 	if failed := r.submit(context.Background(), []pending{readyVideo("-1_456000001")}); failed != 1 {
 		t.Fatalf("failed %d", failed)
+	}
+}
+
+// stubYtdlp is a yt-dlp whose -j prints a video with a ru track and whose subtitle
+// download writes vtt to <-o>.ru.vtt, or nothing when vtt is "".
+func stubYtdlp(t *testing.T, vtt string) *ytdlp.Runner {
+	t.Helper()
+	dir := t.TempDir()
+	info := `{"id":"-1_456000001","duration":600,"subtitles":{"ru":[{"ext":"Ru AUTO","url":"https://example.invalid/a.vtt"}]}}`
+	script := "#!/bin/sh\nout=\nsubs=\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift ;; --write-subs) subs=1 ;; esac; shift; done\n" +
+		"if [ -z \"$subs\" ]; then cat " + filepath.Join(dir, "info.json") + "; exit 0; fi\n" +
+		"if [ -f " + filepath.Join(dir, "subs.vtt") + " ]; then cp " + filepath.Join(dir, "subs.vtt") + " \"$out.ru.vtt\"; fi\n"
+	files := map[string]string{"yt-dlp": script, "info.json": info}
+	if vtt != "" {
+		files["subs.vtt"] = vtt
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &ytdlp.Runner{Bin: filepath.Join(dir, "yt-dlp"), Attempts: 1, Timeout: 10 * time.Second}
+}
+
+func TestFetchTrackWithoutCues(t *testing.T) {
+	for _, c := range []struct {
+		name, vtt, status, lastErr string
+	}{
+		// yt-dlp listed the track, then wrote no file: a failed fetch, not a missing track
+		{"no file", "", "queued", "yt-dlp reported a track but wrote no .vtt"},
+		{"no cues", "WEBVTT\n\n", "queued", "no ru subtitle track"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, mock, _ := batchRun(t)
+			r.ytdlp = stubYtdlp(t, c.vtt)
+			r.prv, _ = provider.Lookup("prv")
+			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
+				WithArgs("-1_456000001", c.status, 1, sqlmock.AnyArg(), c.lastErr).WillReturnResult(sqlmock.NewResult(0, 1))
+			p, err := r.fetch(context.Background(), queued{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}}, true)
+			if p != nil || err != nil {
+				t.Fatalf("got %+v %v", p, err)
+			}
+		})
 	}
 }

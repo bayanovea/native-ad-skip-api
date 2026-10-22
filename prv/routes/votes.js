@@ -4,7 +4,11 @@ const validateRequest = require('../../middleware/validate-request');
 const verifyQueryToken = require('../../middleware/verify-query-token');
 const handler = require('../../middleware/handler');
 const { lockVideoCalculated, recomputeSegmentRating, recomputeAiSegmentRating } = require('../../lib/segment-rating');
-const { findAiCalculated } = require('../../lib/find-ai-calculated');
+const { lockAiCalculated, servesAi } = require('../../lib/find-ai-calculated');
+
+// The vote as the markup authors see it: a vote on an AI entry is about no human's interval,
+// even one with the same bounds, so it moves no author's rating.
+const authorsVote = (vote) => (vote && !vote.ai ? vote.vote : 0);
 
 module.exports = function createVoteRoutes(models, { videoRepository, userService }) {
     const router = express.Router();
@@ -28,12 +32,15 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         if (!video) { res.status(404).send('Not found'); return; }
 
         // The segment comes from what GET /video-calculated serves: the AI row
-        // when it is active, else VideoCalculated. The row lock serialises votes
-        // on the video with each other, with a recalculation (`calculate`,
-        // `--recompute-ratings`) or with a publish / withdraw of the AI row.
+        // when it is active and the vote carries a duration (the write lookup
+        // then lands within ±2 s, as a served `match` / `backfilled` does), else
+        // VideoCalculated. The row locks serialise votes on the video with each
+        // other, with a recalculation (`calculate`, `--recompute-ratings`) and
+        // with a withdraw / review change of the AI row.
         const found = await sequelize.transaction(async (transaction) => {
-            const aiRow = await findAiCalculated(models, video.id, { transaction, lock: transaction.LOCK.UPDATE });
-            const calculatedVideo = aiRow || await lockVideoCalculated(models, video.id, { transaction });
+            const aiRow = await lockAiCalculated(models, video.id, { transaction });
+            const onAi = duration != null && servesAi(aiRow);
+            const calculatedVideo = onAi ? aiRow : await lockVideoCalculated(models, video.id, { transaction });
             if (!calculatedVideo) return false;
 
             const segment = (calculatedVideo.data || []).find(item =>
@@ -53,14 +60,16 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                 start,
                 end,
                 vote,
+                ai: onAi,
             }, { transaction });
 
             if (prevVote) await prevVote.destroy({ transaction });
 
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, { categoryId, start, end }, { transaction });
-            else await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
+            if (!onAi) await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
 
-            await userService.updateRatingByVote(voteObj, prevVote, { transaction });
+            await userService.updateRatingByVote({ ...voteObj.get({ plain: true }), vote: authorsVote(voteObj) },
+                { vote: authorsVote(prevVote) }, { transaction });
             return true;
         });
         if (!found) { res.status(404).send('Not found'); return; }
@@ -79,7 +88,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // the AI row, so both are recomputed; the AI row is locked before
         // VideoCalculated (no writer takes them the other way round).
         const deleted = await sequelize.transaction(async (transaction) => {
-            const aiRow = await findAiCalculated(models, vote.video_id, { transaction, lock: transaction.LOCK.UPDATE });
+            const aiRow = await lockAiCalculated(models, vote.video_id, { transaction });
             const calculatedVideo = await lockVideoCalculated(models, vote.video_id, { transaction });
 
             const count = await models.Vote.destroy({ where: { id: vote.id }, transaction });
@@ -89,7 +98,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, segment, { transaction });
             if (calculatedVideo) await recomputeSegmentRating(models, segment, { transaction });
 
-            await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, vote, { transaction });
+            await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, { vote: authorsVote(vote) }, { transaction });
             return true;
         });
         if (!deleted) { res.status(404).send('Vote not found'); return; }

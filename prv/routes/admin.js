@@ -332,7 +332,8 @@ ${ai}
     }));
 
     router.get('/admin/video/:video_id/ai/withdraw', handler(async (req, res) => {
-        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
+        // State-changing, so an unset AUTH_TOKEN refuses every request (as admin-review.js does).
+        if (!process.env.AUTH_TOKEN || req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
             res.status(401).send('Unauthorized');
             return;
         }

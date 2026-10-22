@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"database/sql"
-	"math"
 
 	"odedohbest/video-calculate/ai/vtt"
 )
@@ -14,10 +13,8 @@ const maxOverrun = 3.0
 // durationTolerance is lib/duration-tolerance.js DURATION_TOLERANCE.
 const durationTolerance = 2
 
+// overrun needs at least one cue (fetch treats an empty track as no track).
 func overrun(cues []vtt.Cue, duration float64) float64 {
-	if len(cues) == 0 {
-		return 0
-	}
 	return cues[len(cues)-1].End - duration
 }
 
@@ -59,5 +56,3 @@ func durationVariants(db *sql.DB, nativeID string, duration float64) (int, error
 		nativeID, duration, durationTolerance).Scan(&n)
 	return n, err
 }
-
-func roundDuration(d float64) int { return int(math.Round(d)) }
