@@ -339,11 +339,11 @@ Key decisions:
 - Modify: `prv/db/index.js` (`AiVideo` model → `prv_ai_videos`), `lib/schema.js`, `prv/routes/videos.js`, `api/doc/openapi.yaml`
 - Modify: `test/e2e.js`
 
-- [ ] `AiVideo` model + `lib/schema.js` (sync; `status` default `seen`)
-- [ ] `GET /video-calculated`: `views` optional int ≥ 0 (express-validator); after `res.send`, `aiRepository.seen(native_id, views)` with errors logged, never thrown (a failed upsert never fails the read)
-- [ ] `openapi.yaml`: document `views`
-- [ ] e2e: a request with `views` creates the row; a second with a smaller `views` keeps the max and bumps `requests`; a request without `views` leaves `views_max` NULL; the legacy branch (`!v`) writes nothing
-- [ ] run `make test-e2e` — must pass before task 2
+- [x] `AiVideo` model + `lib/schema.js` (sync; `status` default `seen`) (new table, so `sync()` alone creates it: no ALTER in `lib/schema.js`; all columns of Technical Details defined now, timestamps with DB-side defaults)
+- [x] `GET /video-calculated`: `views` optional int ≥ 0 (express-validator); after `res.send`, `aiRepository.seen(native_id, views)` with errors logged, never thrown (a failed upsert never fails the read) (`res.once('finish')`, so every return of the `v` path counts, 204 included; `views` capped at the INTEGER max, above it 400)
+- [x] `openapi.yaml`: document `views`
+- [x] e2e: a request with `views` creates the row; a second with a smaller `views` keeps the max and bumps `requests`; a request without `views` leaves `views_max` NULL; the legacy branch (`!v`) writes nothing
+- [x] run `make test-e2e` — must pass before task 2
 
 ### Task 2: Detector code in this repo, yt-dlp in the image
 

@@ -892,6 +892,58 @@ test('prv GET /video-calculated: falls back to any video when duration is far of
     assert.equal(res.status, 200, 'should fall back to any video with matching native_id');
 });
 
+// ── AI queue: views on the read path ──────────────────────────────────────────
+
+// The upsert runs after the response is sent, so the row is polled for.
+async function waitAiVideo(nativeId, requests) {
+    const c = adminClient(TEST_DB);
+    await c.connect();
+    try {
+        for (let i = 0; i < 40; i++) {
+            const { rows } = await c.query('SELECT * FROM prv_ai_videos WHERE native_id = $1', [nativeId]);
+            if (rows[0] && rows[0].requests >= requests) return rows[0];
+            await sleep(50);
+        }
+        return null;
+    } finally {
+        await c.end();
+    }
+}
+
+test('ai: GET /video-calculated with views upserts prv_ai_videos, keeps the max and counts requests', async () => {
+    const vid = '-1_456000101';
+    assert.equal((await getCalculated('', vid, { v: '1', views: 500 })).status, 204);
+    let row = await waitAiVideo(vid, 1);
+    assert.ok(row, 'the first request creates the row');
+    assert.deepEqual([row.views_max, row.requests, row.status, row.attempts], [500, 1, 'seen', 0]);
+
+    assert.equal((await getCalculated('', vid, { v: '1', views: 200 })).status, 204);
+    row = await waitAiVideo(vid, 2);
+    assert.deepEqual([row.views_max, row.requests], [500, 2], 'a smaller views keeps the max');
+
+    assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
+    row = await waitAiVideo(vid, 3);
+    assert.deepEqual([row.views_max, row.requests], [500, 3], 'a request without views keeps views_max');
+    assert.ok(row.last_seen_at >= row.first_seen_at);
+    assert.equal(await countVideos('', vid), 0, 'the read path still creates no Video row');
+});
+
+test('ai: a request without views leaves views_max NULL; the legacy branch and bad views write nothing', async () => {
+    const vid = '-1_456000102';
+    const legacy = '-1_456000103';
+    assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
+    const row = await waitAiVideo(vid, 1);
+    assert.equal(row.views_max, null);
+
+    assert.equal((await getCalculated('', legacy, { views: 900 })).status, 204);
+    assert.equal((await getCalculated('', legacy, { v: '1', views: -1 })).status, 400);
+    assert.equal((await getCalculated('', legacy, { v: '1', views: 'many' })).status, 400);
+    // A later request's row landing means the earlier ones had their chance to write.
+    assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
+    await waitAiVideo(vid, 2);
+    assert.equal(await waitAiVideo(legacy, 1), null);
+});
+
 // RT: GET must not create a Video row when the video doesn't exist
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';

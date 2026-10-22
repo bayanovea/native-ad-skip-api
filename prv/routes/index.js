@@ -10,6 +10,7 @@ const videoRepository = require('../repository/video')(models);
 const moderationRepository = require('../repository/moderation')(models, sequelize);
 // Assessor review (/admin/review).
 const reviewRepository = require('../repository/review')(models, sequelize);
+const aiRepository = require('../repository/ai')(models, sequelize);
 const userService = require('../service/user')(models, {
     markupRepository,
     markupTimeIntervalRepository,
@@ -19,7 +20,7 @@ const userService = require('../service/user')(models, {
 const router = express.Router();
 
 router.use('/', require('./markups')(models, { markupRepository, markupTimeIntervalRepository, videoRepository }));
-router.use('/', require('./videos')(models, { videoRepository, durationLogRepository }));
+router.use('/', require('./videos')(models, { videoRepository, durationLogRepository, aiRepository }));
 router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('./users')(models));
 router.use('/', require('./events')(models));

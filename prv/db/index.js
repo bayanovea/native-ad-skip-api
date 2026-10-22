@@ -204,6 +204,23 @@ module.exports = function(sequelize) {
         indexes: [{ fields: [{ name: 'native_id' }, { name: 'flag' }, { name: 'created_at', order: 'DESC' }] }],
     });
 
+    // AI detection queue, one row per native_id: GET /video-calculated upserts views_max / requests, only the detector moves `status`.
+    const AiVideo = sequelize.define('ai_video', {
+        native_id: { type: DataTypes.STRING, primaryKey: true },
+        views_max: { type: DataTypes.INTEGER, allowNull: true },
+        requests: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+        first_seen_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+        last_seen_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+        status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'seen' },
+        attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+        next_attempt_at: { type: DataTypes.DATE, allowNull: true },
+        batch_id: { type: DataTypes.TEXT, allowNull: true },
+        last_error: { type: DataTypes.TEXT, allowNull: true },
+        judged_at: { type: DataTypes.DATE, allowNull: true },
+        judge_counters: { type: DataTypes.JSONB, allowNull: true },
+        updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_ai_videos', timestamps: false });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -218,5 +235,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo };
 };

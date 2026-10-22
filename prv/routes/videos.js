@@ -5,12 +5,13 @@ const { findVideoForReadWithOutcome } = require('../../lib/find-video-for-read')
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
 
-module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository }) {
+module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository, aiRepository }) {
     const router = express.Router();
 
     router.get('/video-calculated', [
         query('video_id').isString(),
         query('duration').optional().isInt().toInt(),
+        query('views').optional().isInt({ min: 0, max: 2147483647 }).toInt(),
         query('user_id').optional().isString(),
         query('prv_user_id').optional().isInt({ min: 1 }).toInt(),
         validateRequest,
@@ -34,6 +35,11 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
             res.status(200).send(videoCalculated.data);
             return;
         }
+
+        res.once('finish', () => {
+            aiRepository.seen(nativeFullVideoId, req.query.views)
+                .catch(err => console.error('ai: seen failed:', nativeFullVideoId, err.message));
+        });
 
         let { video, outcome } = await findVideoForReadWithOutcome(models, nativeFullVideoId, duration);
 
