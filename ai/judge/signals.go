@@ -1,6 +1,6 @@
 // Package judge re-examines published AI rows (prv_ai_video_calculateds) on the
 // user signals the product already stores: cheap rules first, the LLM judge
-// (Task 6) only when the rules do not decide.
+// only when the rules do not decide.
 package judge
 
 import (
@@ -32,9 +32,10 @@ type Counters struct {
 // Signals is what a judgement sees, stored in prv_ai_judgements.signals.
 type Signals struct {
 	Counters
-	ViewsMax *int64  `json:"views_max"`
-	Requests int     `json:"requests"`
-	AgeH     float64 `json:"age_h"`
+	ViewsMax *int64      `json:"views_max"`
+	Requests int         `json:"requests"`
+	AgeH     float64     `json:"age_h"`
+	humans   []humanNote // the intervals behind HumanMarkups, for the LLM judge's request
 }
 
 // Entry is one AI segment of prv_ai_video_calculateds.data.
@@ -79,8 +80,14 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, now time.Tim
 	if s.Clicks, err = events(db, "prv_events_interval_click", v); err != nil {
 		return s, fmt.Errorf("clicks: %w", err)
 	}
-	if s.HumanMarkups, s.ConflictingMarkups, err = humanMarkups(db, v, categories); err != nil {
+	if s.humans, err = humanMarkups(db, v, categories); err != nil {
 		return s, fmt.Errorf("human markups: %w", err)
+	}
+	s.HumanMarkups = len(s.humans)
+	for _, h := range s.humans {
+		if h.Conflicting {
+			s.ConflictingMarkups++
+		}
 	}
 	if s.DurationVariants, s.DurationRecut, err = durationVariants(db, v); err != nil {
 		return s, fmt.Errorf("duration variants: %w", err)
@@ -108,35 +115,38 @@ func events(db *sql.DB, table string, v Video) (n int, err error) {
 	return
 }
 
-// humanMarkups counts the live human intervals on the AI row's videos row posted
-// since publish, and those that conflict with the AI (see conflicts).
-func humanMarkups(db *sql.DB, v Video, categories map[int]string) (total, conflicting int, err error) {
+// humanMarkups lists the live human intervals on the AI row's videos row posted
+// since publish, each marked when it conflicts with the AI (see conflicts).
+func humanMarkups(db *sql.DB, v Video, categories map[int]string) ([]humanNote, error) {
 	rows, err := db.Query(`SELECT m.category_id, i.start, i."end", COALESCE(u.rating, 0)
 		FROM markups m
 		JOIN markup_time_intervals i ON i.markup_id = m.id AND i.deleted_at IS NULL
 		LEFT JOIN users u ON u.id = m.internal_user_id
 		WHERE m.video_id = $1 AND m.deleted_at IS NULL AND m."createdAt" >= $2`, v.VideoID, v.PublishedAt)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	defer rows.Close()
+	var out []humanNote
 	for rows.Next() {
 		var h humanInterval
 		if err := rows.Scan(&h.CategoryID, &h.Start, &h.End, &h.AuthorRating); err != nil {
-			return 0, 0, err
+			return nil, err
 		}
-		total++
-		if conflicts(h, v.Entries, categories) {
-			conflicting++
-		}
+		out = append(out, humanNote{h, conflicts(h, v.Entries, categories)})
 	}
-	return total, conflicting, rows.Err()
+	return out, rows.Err()
 }
 
 type humanInterval struct {
 	CategoryID   int
 	Start, End   float64
 	AuthorRating int
+}
+
+type humanNote struct {
+	humanInterval
+	Conflicting bool
 }
 
 // conflicts: a human interval of a category the detector produces whose IoU is

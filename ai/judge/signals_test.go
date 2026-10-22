@@ -78,9 +78,14 @@ func TestHumanMarkupsSincePublish(t *testing.T) {
 			AddRow(2, 100.0, 120.0, 5).  // a sponsor the AI does not have
 			AddRow(2, 200.0, 230.0, -3). // the same, by an author rated down
 			AddRow(1, 0.0, 15.0, 0))     // intro: the detector never marks it
-	total, conflicting, err := humanMarkups(db, testVideo, testCategories)
-	if err != nil || total != 4 || conflicting != 1 {
-		t.Fatalf("got %d %d %v", total, conflicting, err)
+	hs, err := humanMarkups(db, testVideo, testCategories)
+	if err != nil || len(hs) != 4 {
+		t.Fatalf("got %+v %v", hs, err)
+	}
+	for i, want := range []bool{false, true, false, false} {
+		if hs[i].Conflicting != want {
+			t.Errorf("interval %d: conflicting %v, want %v", i, hs[i].Conflicting, want)
+		}
 	}
 }
 
@@ -113,61 +118,10 @@ func TestCollectSignals(t *testing.T) {
 	}
 }
 
-func expectSignals(mock sqlmock.Sqlmock, undo int) {
+func expectSignals(mock sqlmock.Sqlmock, undo, recut int) {
 	mock.ExpectQuery("FROM votes").WillReturnRows(sqlmock.NewRows([]string{"up", "down"}).AddRow(0, 0))
 	mock.ExpectQuery("prv_events_interval_undo").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(undo))
 	mock.ExpectQuery("prv_events_interval_click").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("FROM markups").WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating"}))
-	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(0, 0))
-}
-
-func TestJudgeVideoSkipsAJudgedVideoWhoseCountersDidNotMove(t *testing.T) {
-	db, mock := newMock(t)
-	v := testVideo
-	v.JudgedAt = sql.NullTime{Time: published.Add(25 * time.Hour), Valid: true}
-	v.JudgeCounters = []byte(`{"undo":1}`)
-	expectSignals(mock, 1)
-	if err := judgeVideo(db, v, testCategories, published.Add(30*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestJudgeVideoRecordsAReviewWhileTheLLMIsMissing(t *testing.T) {
-	db, mock := newMock(t)
-	v := testVideo
-	v.JudgedAt = sql.NullTime{Time: published.Add(25 * time.Hour), Valid: true}
-	v.JudgeCounters = []byte(`{"undo":1}`)
-	expectSignals(mock, 2)
-	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
-		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(nil))
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO prv_ai_judgements (video_id, decision, "by", reason, signals) VALUES ($1, $2, 'rules', $3, $4)`)).
-		WithArgs(7, "review", "needs_llm: undo=2", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET judged_at = NOW(), judge_counters = $2")).
-		WithArgs("-1_456000001", []byte(`{"votes_up":0,"votes_down":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":0,"duration_recut":0}`)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	if err := judgeVideo(db, v, testCategories, published.Add(30*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestJudgeVideoWithdrawsARecut(t *testing.T) {
-	db, mock := newMock(t)
-	mock.ExpectQuery("FROM votes").WillReturnRows(sqlmock.NewRows([]string{"up", "down"}).AddRow(0, 0))
-	mock.ExpectQuery("prv_events_interval_undo").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery("prv_events_interval_click").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery("FROM markups").WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating"}))
-	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(1, 1))
-	mock.ExpectBegin()
-	mock.ExpectQuery("FOR UPDATE").WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(nil))
-	mock.ExpectExec("INSERT INTO prv_ai_judgements").WithArgs(7, "withdraw", sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(regexp.QuoteMeta("withdrawn_by = 'duration'")).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = 'withdrawn'")).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("judged_at = NOW()").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	if err := judgeVideo(db, testVideo, testCategories, published.Add(30*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(recut, recut))
 }

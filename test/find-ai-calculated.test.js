@@ -69,3 +69,8 @@ test('transaction and lock are passed through', async () => {
     assert.equal(calls[0].transaction, transaction);
     assert.equal(calls[0].lock, 'UPDATE');
 });
+
+test('the AI row is served only when the player duration fits the videos row', () => {
+    const { AI_LOOKUP_OUTCOMES } = require('../lib/find-ai-calculated');
+    assert.deepEqual([...AI_LOOKUP_OUTCOMES].sort(), ['backfilled', 'match']);
+});

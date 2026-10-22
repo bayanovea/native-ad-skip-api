@@ -1138,6 +1138,13 @@ test('ai-first: the AI row is served over video_calculateds with AI_FIRST=on, th
 
     res = await getCalculatedOn(AI_PORT, vid, { duration: 601 });
     assert.deepEqual(res.body.map(({ start }) => start), [100], 'the legacy branch (no v) stays human');
+
+    // The AI row is timed for the 600-s cut: a player off by more than 2 s, or one without a duration, may be on another cut.
+    for (const extra of [{ duration: 605 }, {}]) {
+        res = await getCalculatedOn(AI_PORT, vid, { v: '1', ...extra });
+        assert.equal(res.status, 200);
+        assert.deepEqual(res.body.map(({ start }) => start), [100], `human path for ${JSON.stringify(extra)}`);
+    }
 });
 
 test('ai-first: votes on AI entries rate the AI row; a human segment of the video is 404; vote delete is symmetric', async () => {
@@ -1204,7 +1211,13 @@ test('ai-first: the admin withdraw link unpublishes the AI row and the human pat
     assert.doesNotMatch(html, /withdrawAi\(this\)/);
 });
 
-// ── AI judge (ai/judge): signals and rules; the LLM judge is not built yet ─────
+// ── AI judge (ai/judge): signals, rules, the fixture LLM judge (test/fixtures/ai/<native_id>.judge.json) ──
+
+const AI_TRANSCRIPT = { meta: {}, cues: [
+    { start: 28, end: 33, text: 'Этот выпуск спонсирует сервис' },
+    { start: 33, end: 40, text: 'переходите по ссылке в описании' },
+    { start: 300, end: 305, text: 'далее по теме' },
+] };
 
 // A published AI row (sponsor 30–70) on a 600-s videos row, published `hoursAgo` (the judge waits 24 h for a first judgement).
 async function aiPublished(nativeId, hoursAgo = 25) {
@@ -1212,7 +1225,7 @@ async function aiPublished(nativeId, hoursAgo = 25) {
         VALUES ($1, 600, NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days') RETURNING id`, [nativeId]);
     const [run] = await dbQuery(
         `INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
-         VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', '{}', 0, 600) RETURNING id`, [nativeId, videoId]);
+         VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', $3, 0, 600) RETURNING id`, [nativeId, videoId, JSON.stringify(AI_TRANSCRIPT)]);
     const data = [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }];
     await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at)
         VALUES ($1, $2, $3, $4, NOW() - make_interval(hours => $5))`, [videoId, nativeId, run.id, JSON.stringify(data), hoursAgo]);
@@ -1227,10 +1240,16 @@ async function postUndo(nativeId, userId, start, end) {
 }
 
 async function judgements(videoId) {
-    return dbQuery(`SELECT decision, "by", reason, signals FROM prv_ai_judgements WHERE video_id = $1 ORDER BY id`, [videoId]);
+    return dbQuery(`SELECT decision, "by", reason, signals, model, cost_usd FROM prv_ai_judgements WHERE video_id = $1 ORDER BY id`, [videoId]);
 }
 
-test('ai judge: off by default; no signal → ok, an undo → review by rules; not due before 24 h; unmoved counters are not re-judged', async () => {
+async function aiItems(videoId) {
+    return dbQuery(`SELECT * FROM prv_review_items WHERE video_id = $1 ORDER BY id`, [videoId]);
+}
+
+const fixtureReason = nativeId => JSON.parse(fs.readFileSync(path.join(APP_DIR, 'test/fixtures/ai', `${nativeId}.judge.json`), 'utf8')).reason;
+
+test('ai judge: off by default; no signal → ok by rules, an undo → the LLM says review (items, row served); not due before 24 h; one LLM call per interval', async () => {
     const quiet = await aiPublished('-1_456000401');
     const undone = await aiPublished('-1_456000402');
     const fresh = await aiPublished('-1_456000403', 1);
@@ -1250,14 +1269,27 @@ test('ai judge: off by default; no signal → ok, an undo → review by rules; n
     assert.equal(r.status, 0, out);
 
     let [j] = await judgements(quiet.videoId);
-    assert.deepEqual([j.decision, j.by, j.reason], ['ok', 'rules', 'no negative signal']);
+    assert.deepEqual([j.decision, j.by, j.reason, j.model, j.cost_usd], ['ok', 'rules', 'no negative signal', null, null]);
     const js = await judgements(undone.videoId);
     assert.equal(js.length, 1);
-    assert.deepEqual([js[0].decision, js[0].by, js[0].reason], ['review', 'rules', 'needs_llm: undo=1']);
+    const reason = fixtureReason('-1_456000402');
+    assert.deepEqual([js[0].decision, js[0].by, js[0].reason, js[0].model, js[0].cost_usd], ['review', 'llm', reason, 'claude-sonnet-5-5', 0]);
     assert.deepEqual([js[0].signals.undo, js[0].signals.votes_down, js[0].signals.requests], [1, 0, 1]);
     assert.ok(js[0].signals.age_h > 24.9 && js[0].signals.age_h < 25.5, `age_h ${js[0].signals.age_h}`);
-    assert.match(out, new RegExp(`ai judge: ${undone.videoId} review rules: needs_llm: undo=1`));
+    assert.match(out, new RegExp(`ai judge: ${undone.videoId} review llm: `));
     assert.deepEqual(await judgements(fresh.videoId), [], 'published 1 h ago: not due');
+    assert.deepEqual(await aiItems(quiet.videoId), [], 'ok: nobody is asked');
+
+    let items = await aiItems(undone.videoId);
+    assert.equal(items.length, 1);
+    const [it] = items;
+    assert.match(it.batch, /^ai-judge-\d{4}-\d\d-\d\d$/);
+    assert.deepEqual([it.sheet, it.kind, it.item_code, it.native_id, it.start, it.end, it.proposed],
+        [it.batch, 'ai', 'A1', '-1_456000402', 30, 70, 'sponsor']);
+    assert.equal(it.cues, 'Этот выпуск спонсирует сервис\nпереходите по ссылке в описании');
+    assert.equal(it.link, 'https://example.invalid/video-1_456000402?t=28s');
+    assert.deepEqual(it.flagged_by, [`judge review by llm: ${reason}`, 'signals: undo=1', 'keep: true']);
+    assert.match(out, new RegExp(`ai judge: ${undone.videoId} sent 1 items to review batch ${it.batch}`));
 
     const v = await aiVideo('-1_456000402');
     assert.ok(v.judged_at);
@@ -1276,16 +1308,21 @@ test('ai judge: off by default; no signal → ok, an undo → review by rules; n
     await postUndo('-1_456000402', 'judge-u2', 30, 70);
     r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await judgements(undone.videoId)).length, 1, 'counters moved, but the last LLM call is within AI_JUDGE_MIN_INTERVAL');
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
     [, j] = await judgements(undone.videoId);
-    assert.deepEqual([j.decision, j.reason], ['review', 'needs_llm: undo=2']);
+    assert.deepEqual([j.decision, j.by, j.signals.undo], ['review', 'llm', 2]);
+    assert.match(r.stdout + r.stderr, new RegExp(`ai judge: ${undone.videoId} already waits for a review verdict, no new items`));
+    assert.equal((await aiItems(undone.videoId)).length, 1, 'no duplicate item while one is open');
     assert.equal((await judgements(quiet.videoId)).length, 1);
 
     const html = (await request('GET', `/admin/video/${undone.videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
     assert.equal((html.match(/class="ai-judgement"/g) || []).length, 2);
-    assert.match(html, /<td><strong>review<\/strong><\/td>\s*<td>rules<\/td>\s*<td>needs_llm: undo=2<\/td>/);
+    assert.match(html, /<td><strong>review<\/strong><\/td>\s*<td>llm<\/td>/);
 });
 
-test('ai judge: a videos row of another cut requested after publish withdraws by duration; the human path is served', async () => {
+test('ai judge: the fixture LLM says ok on a conflicting markup → nothing changes; a videos row of another cut requested after publish withdraws by duration, no review', async () => {
     await aiFirstServer();
     const vid = '-1_456000404';
     const { videoId, data } = await aiPublished(vid);
@@ -1303,19 +1340,22 @@ test('ai judge: a videos row of another cut requested after publish withdraws by
     let r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     let [j] = await judgements(videoId);
-    assert.deepEqual([j.decision, j.reason], ['review', 'needs_llm: conflicting_markups=1'], 'the 100–120 sponsor disagrees with the AI');
-    assert.deepEqual([j.signals.duration_variants, j.signals.duration_recut], [1, 0]);
+    assert.deepEqual([j.decision, j.by, j.reason], ['ok', 'llm', fixtureReason(vid)], 'the 100–120 sponsor disagrees: the LLM decides');
+    assert.deepEqual([j.signals.conflicting_markups, j.signals.duration_variants, j.signals.duration_recut], [1, 1, 0]);
+    assert.equal((await aiCalculated(vid)).withdrawn_at, null);
+    assert.deepEqual(await aiItems(videoId), []);
 
     await getCalculated('', vid, { v: '1', duration: 900 });
     await waitAiVideo(vid, 3);
-    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_AUTO_WITHDRAW: 'off' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     [, j] = await judgements(videoId);
     assert.deepEqual([j.decision, j.by, j.reason], ['withdraw', 'rules', 'duration: 1 videos rows of another cut requested after publish']);
     const row = await aiCalculated(vid);
-    assert.ok(row.withdrawn_at);
+    assert.ok(row.withdrawn_at, 'a re-cut is a fact: withdrawn even with AI_JUDGE_AUTO_WITHDRAW=off');
     assert.deepEqual([row.withdrawn_by, row.withdrawn_reason], ['duration', j.reason]);
     assert.equal((await aiVideo(vid)).status, 'withdrawn');
+    assert.deepEqual(await aiItems(videoId), [], 'a verdict on the old cut’s timing would put it back: no review');
 
     res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
     assert.deepEqual(res.body.map(({ category_id, start, end }) => ({ category_id, start, end })),
@@ -1323,6 +1363,49 @@ test('ai judge: a videos row of another cut requested after publish withdraws by
     r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal((await judgements(videoId)).length, 2, 'a withdrawn row is not judged');
+});
+
+test('ai judge: the fixture LLM says withdraw → the row is withdrawn, the human path served, the items are on /admin/review', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000405';
+    const { videoId } = await aiPublished(vid);
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'judge-human-405', category_id: cats.prv.sponsor,
+        duration: 600, data: { intervals: [{ start: 100, end: 120 }] } });
+    runCalc('prv');
+    await postUndo(vid, 'judge-u1', 30, 70);
+    await postUndo(vid, 'judge-u2', 30, 70);
+
+    const r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const reason = fixtureReason(vid);
+    const [j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.by, j.reason], ['withdraw', 'llm', reason]);
+    const row = await aiCalculated(vid);
+    assert.ok(row.withdrawn_at);
+    assert.deepEqual([row.withdrawn_by, row.withdrawn_reason, row.data.length], ['judge', reason, 1]);
+    assert.equal((await aiVideo(vid)).status, 'withdrawn');
+    const res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
+    assert.deepEqual(res.body.map(({ start, end }) => [start, end]), [[100, 120]], 'the human path');
+
+    const [it] = await aiItems(videoId);
+    assert.deepEqual([it.kind, it.item_code, it.proposed], ['ai', 'A2', 'sponsor'], 'the day’s sheet already has A1 (-1_456000402)');
+    const q = `reviewer=bayanovea&verifyBearerToken=${MOD_AUTH}`;
+    const list = await request('GET', `/admin/review?format=json&${q}`, null);
+    assert.equal(list.status, 200);
+    const b = list.body.batches.find(x => x.batch === it.batch);
+    assert.deepEqual([b.total, b.decided, b.state, b.reviews_needed], [2, 0, 'available', 1]);
+
+    const page = await request('GET', `/admin/review/${encodeURIComponent(it.batch)}?item=A2&format=json&${q}`, null);
+    assert.equal(page.status, 200, JSON.stringify(page.body));
+    assert.deepEqual([page.body.item.kind, page.body.item.video_id, page.body.item.native_id, page.body.item.cues],
+        ['ai', videoId, vid, it.cues]);
+    assert.equal(page.body.item.player_link, 'https://example.invalid/video-1_456000405?t=28s');
+    assert.equal(page.body.item.flagged_by, undefined, 'blind until decided');
+    assert.ok(page.body.signals.markups.some(m => m.start === 100 && m.end === 120), 'the signals panel shows the human markup');
+    const html = await request('GET', `/admin/review/${encodeURIComponent(it.batch)}?item=A2&${q}`, null);
+    assert.equal(html.status, 200);
+    assert.ok(html.body.includes('переходите по ссылке в описании'));
+    assert.ok(!html.body.includes(reason), 'the judge’s reason is blind too');
 });
 
 // RT: GET must not create a Video row when the video doesn't exist

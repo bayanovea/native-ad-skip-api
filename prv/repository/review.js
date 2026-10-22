@@ -39,7 +39,7 @@ function validItemId(id) {
 
 const ITEM_COLUMNS = `
     i.id, i.batch, i.item_code, i.position, i.native_id, i.start, i."end",
-    i.proposed, i.cues, i.link, i.flagged_by, i.created_at
+    i.proposed, i.cues, i.link, i.flagged_by, i.kind, i.video_id, i.created_at
 `;
 
 // "Has a verdict" = at least one verdict row (verdicts are append-only and

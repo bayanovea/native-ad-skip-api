@@ -30,7 +30,11 @@ func main() {
 			log.Fatalf("ai detect: %v", err)
 		}
 	case len(args) == 1 && args[0] == "judge":
-		if err := judge.Run(judge.ConfigFromEnv()); err != nil {
+		cfg, err := judge.ConfigFromEnv()
+		if err != nil {
+			log.Fatalf("ai judge: %v", err)
+		}
+		if err := judge.Run(cfg); err != nil {
 			log.Fatalf("ai judge: %v", err)
 		}
 	default:

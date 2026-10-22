@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Rule outcomes. needsLLM is not a stored decision: Task 6's LLM judge takes it.
+// Rule outcomes. needsLLM is not a stored decision: the LLM judge takes it.
 const (
 	decisionOK       = "ok"
 	decisionWithdraw = "withdraw"

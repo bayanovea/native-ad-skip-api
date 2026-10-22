@@ -147,6 +147,9 @@ module.exports = function(sequelize) {
         cues: { type: DataTypes.TEXT, allowNull: true },
         link: { type: DataTypes.TEXT, allowNull: true },
         flagged_by: { type: DataTypes.JSONB, allowNull: true },
+        // 'sheet' (imported) or 'ai' (sent by the AI judge; video_id is its prv_ai_video_calculateds row).
+        kind: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'sheet' },
+        video_id: { type: DataTypes.INTEGER, allowNull: true },
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, {
         tableName: 'prv_review_items',
