@@ -2190,6 +2190,35 @@ test('prv vote: re-vote applies diff to rating', async () => {
     assert.equal(await getJsonRating('', vid, cat, 1, 11), -1, 'JSON rating');
 });
 
+// The same vote twice: one row (its time kept), the author moved once, a drifted rating repaired;
+// the delete then takes the author back to the start.
+test('prv vote: a repeated identical vote is a no-op that still repairs the segment rating', async () => {
+    const vid = '__e2e__prv_vote_repeat';
+    const cat = cats.prv.intro;
+    const author = 'prv-repeat-author';
+    await postMarkup('', { video_id: vid, v: '1', user_id: author, category_id: cat, data: { intervals: [{ start: 1, end: 11 }] } });
+    runCalc('prv');
+
+    const authorBefore = await userRating('', author);
+    const voteBody = { video_id: vid, user_id: 'prv-repeat-voter', category_id: cat, start: 1, end: 11, vote: 1 };
+    await postVote('', voteBody);
+    const rowsOf = () => dbQuery(
+        `SELECT vt.id, vt."createdAt" FROM votes vt JOIN videos v ON v.id = vt.video_id WHERE v.native_id = $1`, [vid]);
+    const rows = await rowsOf();
+    await dbQuery(
+        'UPDATE prv_calculated_segments s SET rating = 5 FROM videos v WHERE v.id = s.video_id AND v.native_id = $1', [vid]);
+
+    await postVote('', voteBody);
+    assert.deepEqual(await rowsOf(), rows, 'one vote row, its time kept');
+    assert.equal(await userRating('', author), authorBefore + 1, 'the author moved once');
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 1, 'the drifted rating repaired');
+
+    const res = await request('GET', `/votes/${rows[0].id}/delete?verifyBearerToken=${VOTE_AUTH}`, null);
+    assert.equal(res.status, 201);
+    assert.equal(await userRating('', author), authorBefore, 'the delete takes the author back');
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 0);
+});
+
 // independent users stack: +1 +1 -1 ⇒ rating=1
 test('prv vote: ratings stack across users', async () => {
     const vid = '__e2e__prv_vote_multi';

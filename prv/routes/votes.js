@@ -51,26 +51,28 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                 where: { user_id: userId, video_id: video.id, category_id: categoryId, start, end },
                 transaction,
             });
-            // The same vote again changes no rating; keeping the row keeps its time, which the AI
-            // judge reads as when the user said it (a repeat is no new evidence).
-            if (prevVote && prevVote.vote === Number(vote)) return true;
-
-            const voteObj = await models.Vote.create({
-                user_id: userId,
-                prv_user_id: req.body.prv_user_id,
-                video_id: video.id,
-                category_id: categoryId,
-                start,
-                end,
-                vote,
-            }, { transaction });
-
-            if (prevVote) await prevVote.destroy({ transaction });
+            // The same vote again keeps its row, so its time stays when the user said it (the AI
+            // judge reads a repeat as no new evidence) and no author rating moves; the segment
+            // ratings are still recomputed, so a repeat repairs a drifted one.
+            const repeat = prevVote && prevVote.vote === Number(vote);
+            let voteObj;
+            if (!repeat) {
+                voteObj = await models.Vote.create({
+                    user_id: userId,
+                    prv_user_id: req.body.prv_user_id,
+                    video_id: video.id,
+                    category_id: categoryId,
+                    start,
+                    end,
+                    vote,
+                }, { transaction });
+                if (prevVote) await prevVote.destroy({ transaction });
+            }
 
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, { categoryId, start, end }, { transaction });
             if (calculatedVideo) await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
 
-            await userService.updateRatingByVote(voteObj, prevVote, { transaction });
+            if (!repeat) await userService.updateRatingByVote(voteObj, prevVote, { transaction });
             return true;
         });
         if (!found) { res.status(404).send('Not found'); return; }

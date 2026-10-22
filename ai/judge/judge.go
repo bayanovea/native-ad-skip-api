@@ -53,6 +53,9 @@ func env(name, def string) string {
 	return def
 }
 
+// commitSettle outlasts the signal writes' transactions (votes, undo events, markups: milliseconds).
+const commitSettle = time.Second
+
 // run is one tick's state.
 type run struct {
 	cfg        Config
@@ -90,6 +93,10 @@ func Run(cfg Config) error {
 	if r.categories, err = loadCategories(r.db); err != nil {
 		return err
 	}
+	// Signals are counted up to r.now and the next tick takes what came after, by "createdAt",
+	// which the writer sets before its commit: waiting lets a write stamped before r.now commit
+	// first, so the tick never misses one that the next tick would then call old.
+	time.Sleep(commitSettle)
 	// A failed video (an API error, say) is retried next tick and fires CalculatorFailedVideos;
 	// the success, which CalculatorStale watches, needs only the tick's own query.
 	failed, err := r.tick()
