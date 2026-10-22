@@ -1,4 +1,23 @@
+const { QueryTypes } = require('sequelize');
+const { voteRating } = require('../../lib/segment-rating');
+
+const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
+// A keep verdict never restores a row withdrawn by `duration` (timed for the old cut) or `admin` (the operator's switch).
+const RESTORABLE_BY = new Set(['judge', 'review']);
+
 module.exports = function createAiRepository(models, sequelize) {
+    // Every entry of the row has a keep verdict as its latest one, decided after the row was withdrawn.
+    async function allKept(row, data, transaction) {
+        const latest = await sequelize.query(
+            `SELECT DISTINCT ON (i.start, i."end") i.start, i."end", v.verdict, v.decided_at
+               FROM prv_review_items i JOIN prv_review_verdicts v ON v.item_id = i.id
+              WHERE i.kind = 'ai' AND i.video_id = :videoId
+              ORDER BY i.start, i."end", v.decided_at DESC, v.id DESC`,
+            { replacements: { videoId: row.video_id }, type: QueryTypes.SELECT, transaction });
+        return data.every(e => latest.some(l => l.start === e.start && l.end === e.end
+            && KEEP_VERDICTS.has(l.verdict) && l.decided_at >= row.withdrawn_at));
+    }
+
     return {
         // GREATEST skips NULL, so a request without `views` never lowers or clears views_max.
         async seen(nativeId, views) {
@@ -29,6 +48,50 @@ module.exports = function createAiRepository(models, sequelize) {
                 return true;
             };
             return transaction ? run(transaction) : sequelize.transaction(run);
+        },
+
+        /**
+         * Apply a review verdict on a kind='ai' item to its AI row (the entry with the item's bounds), under the
+         * row's lock in the caller's `transaction`: not_ad / unclear remove the entry (the row is withdrawn by
+         * `review` when none is left); sponsor / self_promotion keep it, or put it back, with that category. A row
+         * withdrawn by judge or review is served again once every entry has a keep verdict. Idempotent; returns
+         * true when the row changed.
+         */
+        async applyVerdict(item, verdict, { transaction }) {
+            if (item.kind !== 'ai' || item.video_id == null) return false;
+            const row = await models.AiVideoCalculated.findOne({
+                where: { video_id: item.video_id }, lock: transaction.LOCK.UPDATE, transaction });
+            if (!row) return false;
+            const at = row.data.findIndex(e => e.start === item.start && e.end === item.end);
+            let data = row.data;
+            if (KEEP_VERDICTS.has(verdict)) {
+                const category = await models.MarkupCategory.findOne({ where: { category: verdict }, transaction });
+                const old = at === -1 ? { start: item.start, end: item.end, source: 'ai' } : data[at];
+                if (old.category_id !== category.id) {
+                    const { rating: _, ...rest } = old;
+                    const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: item.start, end: item.end }, { transaction });
+                    const entry = { ...rest, category_id: category.id, ...(rating ? { rating } : {}) };
+                    data = at === -1
+                        ? [...data, entry].sort((a, b) => a.start - b.start)
+                        : data.map((e, i) => (i === at ? entry : e));
+                }
+            } else if (at !== -1) {
+                data = data.filter((_, i) => i !== at);
+            }
+            let changed = data !== row.data;
+            if (changed) await row.update({ data, updated_at: sequelize.fn('NOW') }, { transaction });
+
+            if (!row.withdrawn_at && data.length === 0) {
+                return (await this.withdraw(row.video_id, 'review', `review: ${verdict} on ${item.batch} ${item.item_code}`, { transaction })) || changed;
+            }
+            if (row.withdrawn_at && RESTORABLE_BY.has(row.withdrawn_by) && data.length > 0 && await allKept(row, data, transaction)) {
+                await row.update({ withdrawn_at: null, withdrawn_by: null, withdrawn_reason: null, updated_at: sequelize.fn('NOW') }, { transaction });
+                await sequelize.query(
+                    `UPDATE prv_ai_videos SET status = 'published', updated_at = NOW() WHERE native_id = :nativeId`,
+                    { replacements: { nativeId: row.native_id }, transaction });
+                changed = true;
+            }
+            return changed;
         },
     };
 };

@@ -26,6 +26,6 @@ router.use('/', require('./users')(models));
 router.use('/', require('./events')(models));
 router.use('/', require('./admin')(models, { markupRepository, aiRepository }));
 router.use('/', require('./admin-moderation')(models, { markupRepository, moderationRepository }));
-router.use('/', require('./admin-review')(models, { reviewRepository }));
+router.use('/', require('./admin-review')(models, { reviewRepository, aiRepository }));
 
 module.exports = router;

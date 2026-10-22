@@ -49,6 +49,8 @@
   "current_verdict": "Current verdict:",
   "current_legacy_wrong_text": "(legacy \"Wrong text\": re-decide with the track flag)",
   "current_by": "by {reviewer} ({source}), {date}",
+  "ai_badge": "AI segment",
+  "ai_judge_reason": "Judge:",
   "current_flagged_by": "Flagged by:",
   "history_when": "When",
   "history_verdict": "Verdict",

@@ -292,9 +292,18 @@ Key decisions:
 - `reviewRepository.recordVerdict` is unchanged; the decide route calls
   `aiRepository.applyVerdict(item, verdict, { transaction })` when `item.kind === 'ai'`, inside
   the same transaction: `not_ad` / `unclear` → the entry is removed from `data` (row `withdrawn_by
-  = review` when `data` is empty); `sponsor` / `self_promotion` → the entry kept (or put back
-  with that `category_id` if the judge withdrew the row: `withdrawn_at = NULL` when every entry
-  of the row has a keep verdict). Import of md sheets never produces ai items.
+  = review` when `data` is empty); `sponsor` / `self_promotion` → the entry kept with that
+  `category_id` (put back from the item's bounds when an earlier verdict removed it; its `rating`
+  recomputed from the votes for the new category). The entry is matched by the item's
+  `(start, end)` under the AI row's `FOR UPDATE`.
+- Restore: a withdrawn row is served again (`withdrawn_at/by/reason = NULL`, `prv_ai_videos.status
+  = 'published'`) only when it was withdrawn by `judge` or `review` and every entry left in `data`
+  has a keep verdict as its latest one, decided after `withdrawn_at` (so a keep verdict from an
+  earlier judge round does not count). A row withdrawn by `duration` (a re-cut: the timing is for
+  the old cut) or `admin` (the operator's manual switch) is never restored by a verdict.
+- The hook runs only when the decide route appends a verdict row (a same-verdict re-save appends
+  nothing), and is idempotent; the response's `ai_applied` says whether the AI row changed.
+  Import of md sheets never produces ai items.
 - Admin: `prv_ai_video_calculateds` rows and judgements visible on `/admin/video/:video_id`
   (read-only block) with a "withdraw" link (`withdrawn_by = admin`) — the operator's manual switch
   per video.
@@ -450,11 +459,11 @@ Key decisions:
 - Modify: `prv/repository/ai.js` (`applyVerdict`), `prv/routes/admin-review.js` (decide route), `prv/repository/review.js` (item `kind` in `hydrate`), `prv/locales/review/{ru,en}.json` (an "AI segment" badge on ai items, the signals panel already shows votes/undo)
 - Modify: `test/e2e.js`, `test/i18n.test.js` (parity is automatic)
 
-- [ ] `applyVerdict(item, verdict, {transaction})`: `not_ad`/`unclear` remove the entry (withdraw row when empty, `withdrawn_by='review'`); `sponsor`/`self_promotion` keep/restore with the verdict's category; idempotent (a second identical verdict changes nothing)
-- [ ] decide route: call it inside `withBatchLock()`'s transaction for `kind='ai'` items; `format=json` response gets `ai_applied: true|false`
-- [ ] item page: badge + the judge's reason shown only after the verdict (blind rule, with `flagged_by`)
-- [ ] e2e: `not_ad` on one of two entries → the other still served; `not_ad` on the last → human path; `sponsor` on a judge-withdrawn row → served again; sheet items (`kind='sheet'`) untouched by the hook
-- [ ] run tests — must pass before task 8
+- [x] `applyVerdict(item, verdict, {transaction})`: `not_ad`/`unclear` remove the entry (withdraw row when empty, `withdrawn_by='review'`); `sponsor`/`self_promotion` keep/restore with the verdict's category; idempotent (a second identical verdict changes nothing) (restore rules and the re-added entry: see Technical Details → Applying verdicts; `voteRating` exported from `lib/segment-rating.js`; `item.kind` / `video_id` were already in `hydrate` since Task 6)
+- [x] decide route: call it inside `withBatchLock()`'s transaction for `kind='ai'` items; `format=json` response gets `ai_applied: true|false` (the decide route always answers JSON, so every 201 carries `ai_applied`: true when the AI row changed; lock order batch row → AI row, the judge never locks a held or started batch, so no cycle)
+- [x] item page: badge + the judge's reason shown only after the verdict (blind rule, with `flagged_by`) (both in the decided block, the reason parsed from the `judge …: <reason>` line of `flagged_by`; keys `ai_badge`, `ai_judge_reason`)
+- [x] e2e: `not_ad` on one of two entries → the other still served; `not_ad` on the last → human path; `sponsor` on a judge-withdrawn row → served again; sheet items (`kind='sheet'`) untouched by the hook (also: category change to `self_promotion`, idempotent re-saves, a changed mind restores a review-withdrawn row, a judge-withdrawn row waits for every entry, `duration` / `admin` rows never restored, `prv_ai_videos.status` back to `published`, badge and reason blind before the verdict)
+- [x] run tests — must pass before task 8
 
 ### Task 8: Metrics, alerts, Grafana
 

@@ -1408,6 +1408,125 @@ test('ai judge: the fixture LLM says withdraw → the row is withdrawn, the huma
     assert.ok(!html.body.includes(reason), 'the judge’s reason is blind too');
 });
 
+// ── Review verdicts applied to the AI row (aiRepository.applyVerdict via POST /admin/review/decide) ──
+
+// An AI row with sponsor `entries` ([start, end]) on a 600-s videos row, withdrawn an hour ago by `withdrawnBy`
+// (null: served), and one kind='ai' item per entry in `batch` (codes from A`firstPos`), flagged by the judge.
+async function aiReviewSeed(nativeId, batch, entries, { withdrawnBy = null, firstPos = 1 } = {}) {
+    const [{ id: videoId }] = await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt")
+        VALUES ($1, 600, NOW(), NOW()) RETURNING id`, [nativeId]);
+    const [run] = await dbQuery(
+        `INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
+         VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', '{}', 0, 600) RETURNING id`, [nativeId, videoId]);
+    const data = entries.map(([start, end]) => ({ category_id: cats.prv.sponsor, start, end, confidence: 'high', source: 'ai' }));
+    await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, withdrawn_at, withdrawn_by, withdrawn_reason)
+        VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() - INTERVAL '1 hour' END, $5::text, $5::text)`,
+    [videoId, nativeId, run.id, JSON.stringify(data), withdrawnBy]);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, status) VALUES ($1, $2)`, [nativeId, withdrawnBy ? 'withdrawn' : 'published']);
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING', [batch]);
+    const items = [];
+    for (const [i, [start, end]] of entries.entries()) {
+        const [it] = await dbQuery(
+            `INSERT INTO prv_review_items (sheet, batch, item_code, position, native_id, start, "end", proposed, link, flagged_by, kind, video_id)
+             VALUES ($1, $1, $2, $3, $4, $5, $6, 'sponsor', $7, $8, 'ai', $9) RETURNING id, item_code`,
+            [batch, `A${firstPos + i}`, firstPos + i, nativeId, start, end, `https://example.invalid/video${nativeId}?t=${start - 2}s`,
+                JSON.stringify([`judge withdraw by llm: e2e reason ${nativeId}`, 'keep: false']), videoId]);
+        items.push(it);
+    }
+    return { videoId, items };
+}
+
+async function decideAi(item, verdict, comment = null) {
+    const res = await decideReview({ item_id: item.id, verdict, comment, reviewer: REVIEWER });
+    assert.equal(res.status, 201, `${item.item_code} ${verdict}: ${JSON.stringify(res.body)}`);
+    return res.body;
+}
+
+const servedBounds = async (nativeId) => (await getCalculatedOn(AI_PORT, nativeId, { v: '1', duration: 600 })).body
+    .map(({ category_id, start, end }) => [category_id, start, end]);
+
+test('ai review: not_ad removes the entry, the last one withdraws the row (human path); a keep verdict sets the category or puts the entry back; sheet items untouched', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000501';
+    const batch = 'e2e-ai-apply';
+    const { videoId, items: [a1, a2] } = await aiReviewSeed(vid, batch, [[30, 70], [200, 230]]);
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'ai-apply-human', category_id: cats.prv.sponsor,
+        duration: 600, data: { intervals: [{ start: 100, end: 120 }] } });
+    runCalc('prv');
+    const sp = cats.prv.sponsor;
+    const self = cats.prv.self_promotion;
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 200, 230]]);
+
+    // A sheet item on the same stretch of the same video: the hook leaves the AI row alone.
+    const sheetBatch = 'e2e-ai-apply-sheet';
+    const [sheetItem] = await dbQuery(`INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, link)
+        VALUES ($1, 'C1', 1, $2, 200, 230, 'sponsor', 'https://example.invalid/video-1_456000501?t=198s') RETURNING id, item_code`, [sheetBatch, vid]);
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1)', [sheetBatch]);
+    await takeReview(sheetBatch);
+    assert.equal((await decideAi(sheetItem, 'not_ad')).ai_applied, false);
+    assert.equal((await aiData(videoId)).length, 2);
+
+    await takeReview(batch);
+    const q = `reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
+    const itemHtml = async (code) => (await request('GET', `/admin/review/${batch}?item=${code}&${q}`, null)).body;
+    let html = await itemHtml('A1');
+    assert.ok(!html.includes(RU.text('ai_badge')) && !html.includes(`e2e reason ${vid}`), 'badge and reason blind before the verdict');
+
+    let res = await decideAi(a1, 'not_ad');
+    assert.equal(res.ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]], 'the other entry is still served');
+    html = await itemHtml('A1');
+    assert.ok(html.includes(RU.text('ai_badge')), 'the AI badge after the verdict');
+    assert.ok(html.includes(`${RU.text('ai_judge_reason')}</span> e2e reason ${vid}`), 'the judge’s reason after the verdict');
+    assert.equal((await decideAi(a1, 'unclear')).ai_applied, false, 'the entry is already gone');
+
+    res = await decideAi(a2, 'self_promotion');
+    assert.equal(res.ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[self, 200, 230]], 'kept with the verdict’s category');
+    assert.equal((await decideAi(a2, 'self_promotion', 'same verdict, new comment')).ai_applied, false, 'idempotent');
+
+    assert.equal((await decideAi(a2, 'not_ad')).ai_applied, true);
+    let row = await aiCalculated(vid);
+    assert.ok(row.withdrawn_at);
+    assert.deepEqual([row.withdrawn_by, row.withdrawn_reason, row.data], ['review', `review: not_ad on ${batch} A2`, []]);
+    assert.equal((await aiVideo(vid)).status, 'withdrawn');
+    assert.deepEqual(await servedBounds(vid), [[sp, 100, 120]], 'the human path');
+
+    assert.equal((await decideAi(a2, 'sponsor')).ai_applied, true);
+    row = await aiCalculated(vid);
+    assert.deepEqual([row.withdrawn_at, row.withdrawn_by, row.data], [null, null, [{ category_id: sp, start: 200, end: 230, source: 'ai' }]],
+        'a changed mind puts the entry back and serves a row withdrawn by review again');
+    assert.equal((await aiVideo(vid)).status, 'published');
+    assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]]);
+});
+
+test('ai review: keep verdicts restore a judge-withdrawn row once every entry is kept, never a row withdrawn by duration or admin', async () => {
+    await aiFirstServer();
+    const batch = 'e2e-ai-restore';
+    const judge = await aiReviewSeed('-1_456000502', batch, [[30, 70], [200, 230]], { withdrawnBy: 'judge', firstPos: 1 });
+    const duration = await aiReviewSeed('-1_456000503', batch, [[30, 70]], { withdrawnBy: 'duration', firstPos: 3 });
+    const admin = await aiReviewSeed('-1_456000504', batch, [[30, 70]], { withdrawnBy: 'admin', firstPos: 4 });
+    await takeReview(batch);
+
+    assert.equal((await decideAi(judge.items[0], 'sponsor')).ai_applied, false, 'one entry still waits');
+    assert.ok((await aiCalculated('-1_456000502')).withdrawn_at);
+    assert.equal((await decideAi(judge.items[1], 'sponsor')).ai_applied, true);
+    const row = await aiCalculated('-1_456000502');
+    assert.deepEqual([row.withdrawn_at, row.withdrawn_by, row.withdrawn_reason], [null, null, null]);
+    assert.equal((await aiVideo('-1_456000502')).status, 'published');
+    const sp = cats.prv.sponsor;
+    assert.deepEqual(await servedBounds('-1_456000502'), [[sp, 30, 70], [sp, 200, 230]], 'served again');
+
+    for (const [vid, seed, by] of [['-1_456000503', duration, 'duration'], ['-1_456000504', admin, 'admin']]) {
+        assert.equal((await decideAi(seed.items[0], 'sponsor')).ai_applied, false, by);
+        const r = await aiCalculated(vid);
+        assert.ok(r.withdrawn_at, `withdrawn by ${by} stays withdrawn`);
+        assert.equal(r.withdrawn_by, by);
+        assert.equal((await aiVideo(vid)).status, 'withdrawn');
+        assert.equal((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).status, 204, `${by}: no AI row served`);
+    }
+});
+
 // RT: GET must not create a Video row when the video doesn't exist
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';
@@ -4246,7 +4365,7 @@ test('review page: default item is the first open one, blind until decided, deci
     await takeReview(batch);
     const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: REVIEWER });
     assert.equal(d.status, 201, JSON.stringify(d.body));
-    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null });
+    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null, ai_applied: false });
 
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'self_promotion');

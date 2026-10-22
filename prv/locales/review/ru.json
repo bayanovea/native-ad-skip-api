@@ -49,6 +49,8 @@
   "current_verdict": "Текущий вердикт:",
   "current_legacy_wrong_text": "(старый вердикт «Текст не тот»: решите заново и отметьте «Субтитры ≠ видео»)",
   "current_by": "{reviewer} ({source}), {date}",
+  "ai_badge": "AI-сегмент",
+  "ai_judge_reason": "Судья:",
   "current_flagged_by": "Кто отметил:",
   "history_when": "Когда",
   "history_verdict": "Вердикт",

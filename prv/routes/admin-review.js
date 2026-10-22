@@ -152,6 +152,13 @@ function beyondVideo(item, videos) {
     return Number(item.start) > longest ? longest : null;
 }
 
+// The judge's reason from an ai item's `flagged_by` ("judge <decision> by <by>: <reason>"), or null;
+// undecided items carry no `flagged_by` (blind rule), so neither the badge nor the reason shows before a verdict.
+function judgeReason(item) {
+    const line = (item.flagged_by || []).find(f => typeof f === 'string' && f.startsWith('judge '));
+    return line && line.includes(': ') ? line.slice(line.indexOf(': ') + 2) : null;
+}
+
 // `reviewer`'s latest verdict on a repository item (its history is newest first), or null.
 function ownVerdict(item, reviewer) {
     return item.history.find(h => h.reviewer === reviewer) || null;
@@ -185,6 +192,7 @@ const STYLE = `
         td.num { font-variant-numeric: tabular-nums; }
         .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: #fff; }
         .badge-banned { background: #7f1d1d; color: #fecaca; margin-left: 6px; }
+        .ai-badge { background: #7c3aed; }
         .verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
         .verdict-btn { display: inline-flex; align-items: center; gap: 8px; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 6px 12px 6px 8px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
         .verdict-btn .icon { width: 16px; height: 16px; color: #94a3b8; }
@@ -437,6 +445,7 @@ function renderItemPage(payload, token, t, langLink) {
         <div class="current">${t('current_verdict')} ${badge(current.verdict, t)}${isLegacyWrongText(current) ? ` <span class="warn">${t('current_legacy_wrong_text')}</span>` : ''}
             <span class="muted">${t('current_by', { reviewer: current.reviewer, source: current.source, date: formatDate(current.decided_at) })}</span></div>
         ${current.comment ? `<blockquote>${escapeHtml(current.comment)}</blockquote>` : ''}
+        ${item.kind === 'ai' ? `<div class="current ai-judge" style="margin-top:10px"><span class="badge ai-badge">${t('ai_badge')}</span>${judgeReason(item) ? ` <span class="muted">${t('ai_judge_reason')}</span> ${escapeHtml(judgeReason(item))}` : ''}</div>` : ''}
         <div class="current flagged-by" style="margin-top:10px">${t('current_flagged_by')} ${(item.flagged_by || []).map(r => `<code>${escapeHtml(r)}</code>`).join(' ') || '<span class="muted">—</span>'}</div>
         <table>
             <thead><tr><th>${t('history_when')}</th><th>${t('history_verdict')}</th><th>${t('history_reviewer')}</th><th>${t('history_source')}</th><th>${t('history_comment')}</th></tr></thead>
@@ -761,7 +770,7 @@ function renderItemPage(payload, token, t, langLink) {
 }
 
 // `models` is unused here; kept for the shared route-factory signature (see index.js).
-module.exports = function createAdminReviewRoutes(models, { reviewRepository }) {
+module.exports = function createAdminReviewRoutes(models, { reviewRepository, aiRepository }) {
     const router = express.Router();
 
     // The reviewer travels in `?reviewer=` for the whole session (links and
@@ -828,7 +837,8 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
     }));
 
     // POST /admin/review/decide — append a verdict from the page, and the video
-    // flag when it changed. Validation lives in the repository
+    // flag when it changed. A verdict on a kind='ai' item is applied to the AI
+    // row in the same transaction (`ai_applied`: the row changed). Validation lives in the repository
     // (ReviewInputError → 400). Only the batch holder, or a reviewer who has
     // finished it, may decide (else 409); the last verdict releases the lock.
     // The check and the writes run under the batch row lock, so a force release
@@ -845,6 +855,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
         }
         let item;
         let reviewer;
+        let aiApplied = false;
         try {
             if (!(await reviewRepository.isReviewer(typeof body.reviewer === 'string' ? body.reviewer.trim() : ''))) {
                 throw new ReviewInputError(`unknown reviewer ${body.reviewer}`);
@@ -866,6 +877,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
                 if (!mayDecide(progress.state)) throw new ReviewConflictError(progress.state, progress.locked_by);
                 if (!same) {
                     await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', transaction });
+                    if (before.kind === 'ai') aiApplied = await aiRepository.applyVerdict(before, body.verdict, { transaction });
                 }
                 if (body.track_mismatch !== undefined) {
                     const current = await reviewRepository.getVideoFlag(before.native_id, TRACK_FLAG, { transaction });
@@ -894,6 +906,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository }) 
             flagged_by: item.flagged_by || [],
             next_item: next ? next.item_code : null,
             next_player_link: next ? safeLink(next.link) : null,
+            ai_applied: aiApplied,
         });
     }));
 
