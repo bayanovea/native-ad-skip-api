@@ -123,6 +123,7 @@ jobs:
         # AI switches: repository variables; unset is empty, which docker-compose.yml turns into off / the code default.
         AI_FIRST: ${{ vars.AI_FIRST }}
         AI_DETECT_ENABLED: ${{ vars.AI_DETECT_ENABLED }}
+        AI_JUDGE_ENABLED: ${{ vars.AI_JUDGE_ENABLED }}
         AI_MIN_VIEWS: ${{ vars.AI_MIN_VIEWS }}
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
         HOST_IP: ${{ secrets.HOST_IP }}
@@ -149,6 +150,7 @@ jobs:
             ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
             AI_FIRST "$AI_FIRST" \
             AI_DETECT_ENABLED "$AI_DETECT_ENABLED" \
+            AI_JUDGE_ENABLED "$AI_JUDGE_ENABLED" \
             AI_MIN_VIEWS "$AI_MIN_VIEWS" \
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
             HOST_IP "$HOST_IP" \

@@ -254,7 +254,8 @@ Key decisions:
   entries' exact `(category_id, start, end)` where the signal carries bounds:
   `votes_up`, `votes_down` (distinct users, latest vote), `undo` (`prv_events_interval_undo`),
   `clicks`, `human_markups` (live markups since `published_at`: intervals, author rating, IoU
-  with every AI entry), `duration_variants`, `views_max`, `requests`, `age_h`, `time_saved`.
+  with every AI entry), `duration_variants`, `duration_recut`, `views_max`, `requests`, `age_h`
+  (`time_saved` events carry no video, so they are not a per-video signal).
 - Rules (no call): all of `votes_down`, `undo`, conflicting `human_markups` (IoU < 0.5 with every
   AI entry of the same category, author rating ≥ 0) are 0 → `ok`; a `videos` row with a duration
   that differs by > 2 s appeared after publish and now receives requests → `withdraw` by
@@ -403,13 +404,14 @@ Key decisions:
 - Modify: `prv/db/index.js` (`AiJudgement`), `lib/schema.js`, `prv/commands/ai/main.go` (`judge` subcommand, heartbeat `ai_judge`), `crontab`
 - Modify: `test/e2e.js`
 
-- [ ] `signals.go`: the counters from Technical Details, one query per signal, restricted to the AI entries' bounds; `duration_variants` includes the "new videos row receiving requests after publish" fact
-- [ ] `rules.go`: `ok` when nothing negative; `withdraw` by `duration`; else `needs_llm`; movement check against `judge_counters`
-- ➕ `/admin/video/:video_id` AI block: list the row's `prv_ai_judgements` (Task 4 left them out, the table arrives here)
-- [ ] `judge` subcommand: due rows (published, `withdrawn_at IS NULL`, counters moved or never judged and ≥ 24 h old), rules, `prv_ai_judgements` row, `judged_at` + `judge_counters` update; `AI_JUDGE_ENABLED` gate; hourly cron line
-- [ ] unit tests: each counter (sqlmock), rules table (no signals / dislikes / undo / conflicting markup with negative-rating author ignored / duration withdraw), movement
-- [ ] e2e: published video + an undo event → judgement `needs_llm` recorded as `review` with `by=rules` while the LLM is off (Task 6 replaces this); a new `videos` row with another duration + request → `withdrawn_by = duration`, human path served
-- [ ] run tests — must pass before task 6
+- [x] `signals.go`: the counters from Technical Details, one query per signal, restricted to the AI entries' bounds; `duration_variants` includes the "new videos row receiving requests after publish" fact (separate counter `duration_recut`: a row off by > 2 s created after publish with a request for the native_id since (`prv_ai_videos.last_seen_at`), because the GET path records no videos row; `time_saved` dropped: the event carries no video; conflicts count only sponsor / self_promotion markups, the detector never marks intro / credits; votes, undo and clicks are not limited to after publish, like the rating rule)
+- [x] `rules.go`: `ok` when nothing negative; `withdraw` by `duration`; else `needs_llm`; movement check against `judge_counters` (the re-cut check runs first; the duration withdraw is a fact, not gated by `AI_JUDGE_AUTO_WITHDRAW`; `judge_counters` is replaced by the judged counters, views / requests / age are in `signals` only)
+- [x] ➕ `/admin/video/:video_id` AI block: list the row's `prv_ai_judgements` (Task 4 left them out, the table arrives here)
+- [x] `judge` subcommand: due rows (published, `withdrawn_at IS NULL`, counters moved or never judged and ≥ 24 h old), rules, `prv_ai_judgements` row, `judged_at` + `judge_counters` update; `AI_JUDGE_ENABLED` gate; hourly cron line (`ai/judge/judge.go`; rows with empty `data` are skipped; the judgement is written under the AI row's `FOR UPDATE`, a row withdrawn meanwhile is left alone; heartbeat `ai_judge`, exit 1 on a failed video; cron at minute 30; `AI_JUDGE_ENABLED` in `docker-compose.yml` (default `off`) and the deploy workflow's variable list, `init_env.sh` already copies every `AI_*`; new table, so `lib/schema.js` needs nothing)
+- [x] unit tests: each counter (sqlmock), rules table (no signals / dislikes / undo / conflicting markup with negative-rating author ignored / duration withdraw), movement (also `judgeVideo`: unmoved skip, review write, re-cut withdraw)
+- [x] e2e: published video + an undo event → judgement `needs_llm` recorded as `review` with `by=rules` while the LLM is off (Task 6 replaces this); a new `videos` row with another duration + request → `withdrawn_by = duration`, human path served (also: off by default, `ok` without signals, not due before 24 h, unmoved counters not re-judged, the new row without a request is not a re-cut, judgements on `/admin/video`)
+- [x] run tests — must pass before task 6
+- ⚠️ found while building the re-cut rule: `GET /video-calculated` serves the AI row also on a `mismatch` / `no_duration` lookup (`findVideoForRead` falls back to any row of the native_id), so a player on another cut can get the old cut's AI segments until the judge withdraws the row; serving AI only on `match` / `backfilled` would close it. Not changed here (Task 4 behaviour, owner decision).
 
 ### Task 6: LLM judge, withdraw, review batches
 
@@ -482,9 +484,9 @@ Key decisions:
   (Settings → Secrets and variables → Actions). Without it `AI_DETECT_ENABLED=on` has no key and
   every detect tick exits 1 (`AI_CLIENT=anthropic` refuses to start without a key).
 - Secrets: `ANTHROPIC_API_KEY` as a GitHub Actions secret; `AI_FIRST`, `AI_DETECT_ENABLED`,
-  `AI_MIN_VIEWS`, `AI_DAILY_BUDGET_VIDEOS` as repository variables (unset = off / code default).
-  `.github/workflows/deploy.yml` exports them to the remote compose (Task 4); a flag added later
-  (`AI_JUDGE_ENABLED`, …) goes into that list, `docker-compose.yml` and nothing else. Deploy
+  `AI_JUDGE_ENABLED`, `AI_MIN_VIEWS`, `AI_DAILY_BUDGET_VIDEOS` as repository variables (unset = off /
+  code default). `.github/workflows/deploy.yml` exports them to the remote compose; a flag added
+  later goes into that list, `docker-compose.yml` and nothing else. Deploy
   with every `AI_*` flag off.
 - Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS=10000`: the
   detector publishes, nobody is served; compare `prv_ai_video_calculateds` with the human

@@ -251,6 +251,18 @@ module.exports = function(sequelize) {
         updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_video_calculateds', timestamps: false });
 
+    // Append-only: one row per judgement of an AI row by `ai judge` (decision ok | withdraw | review, by rules | llm).
+    const AiJudgement = sequelize.define('ai_judgement', {
+        video_id: { type: DataTypes.INTEGER, allowNull: false },
+        decision: { type: DataTypes.TEXT, allowNull: false },
+        by: { type: DataTypes.TEXT, allowNull: false },
+        reason: { type: DataTypes.TEXT, allowNull: true },
+        signals: { type: DataTypes.JSONB, allowNull: false },
+        model: { type: DataTypes.TEXT, allowNull: true },
+        cost_usd: { type: DataTypes.FLOAT, allowNull: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_ai_judgements', timestamps: false, indexes: [{ fields: ['video_id'] }] });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -265,5 +277,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement };
 };

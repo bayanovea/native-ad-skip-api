@@ -3,3 +3,5 @@
 * * * * * sleep 40 && flock -n /tmp/calculate-yt.lock /app/yt/commands/calculate >> /proc/1/fd/1 2>&1
 # AI detection: exits at once unless AI_DETECT_ENABLED=on (/app/.env)
 */5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1
+# AI judge: exits at once unless AI_JUDGE_ENABLED=on (/app/.env)
+30 * * * * flock -n /tmp/ai-judge.lock /app/prv/commands/ai/ai judge >> /proc/1/fd/1 2>&1

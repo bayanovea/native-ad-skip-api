@@ -1204,6 +1204,127 @@ test('ai-first: the admin withdraw link unpublishes the AI row and the human pat
     assert.doesNotMatch(html, /withdrawAi\(this\)/);
 });
 
+// ── AI judge (ai/judge): signals and rules; the LLM judge is not built yet ─────
+
+// A published AI row (sponsor 30–70) on a 600-s videos row, published `hoursAgo` (the judge waits 24 h for a first judgement).
+async function aiPublished(nativeId, hoursAgo = 25) {
+    const [{ id: videoId }] = await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt")
+        VALUES ($1, 600, NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days') RETURNING id`, [nativeId]);
+    const [run] = await dbQuery(
+        `INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
+         VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', '{}', 0, 600) RETURNING id`, [nativeId, videoId]);
+    const data = [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }];
+    await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at)
+        VALUES ($1, $2, $3, $4, NOW() - make_interval(hours => $5))`, [videoId, nativeId, run.id, JSON.stringify(data), hoursAgo]);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, status, requests) VALUES ($1, 'published', 1)`, [nativeId]);
+    return { videoId, data };
+}
+
+async function postUndo(nativeId, userId, start, end) {
+    const res = await request('POST', '/events', [{ type: 'interval_undo', user_id: userId, video_native_id: nativeId,
+        category_id: cats.prv.sponsor, start, end }]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+}
+
+async function judgements(videoId) {
+    return dbQuery(`SELECT decision, "by", reason, signals FROM prv_ai_judgements WHERE video_id = $1 ORDER BY id`, [videoId]);
+}
+
+test('ai judge: off by default; no signal → ok, an undo → review by rules; not due before 24 h; unmoved counters are not re-judged', async () => {
+    const quiet = await aiPublished('-1_456000401');
+    const undone = await aiPublished('-1_456000402');
+    const fresh = await aiPublished('-1_456000403', 1);
+    await postUndo('-1_456000402', 'judge-u1', 30, 70);
+    await postUndo('-1_456000402', 'judge-u1', 100, 120); // not an AI entry's bounds
+    await postUndo('-1_456000403', 'judge-u1', 30, 70);
+
+    let r = runAi(['judge']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout + r.stderr, '', 'silent when off');
+    assert.equal(await heartbeat('ai_judge'), null);
+    assert.deepEqual(await judgements(undone.videoId), []);
+
+    const before = Date.now() - 1000;
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+
+    let [j] = await judgements(quiet.videoId);
+    assert.deepEqual([j.decision, j.by, j.reason], ['ok', 'rules', 'no negative signal']);
+    const js = await judgements(undone.videoId);
+    assert.equal(js.length, 1);
+    assert.deepEqual([js[0].decision, js[0].by, js[0].reason], ['review', 'rules', 'needs_llm: undo=1']);
+    assert.deepEqual([js[0].signals.undo, js[0].signals.votes_down, js[0].signals.requests], [1, 0, 1]);
+    assert.ok(js[0].signals.age_h > 24.9 && js[0].signals.age_h < 25.5, `age_h ${js[0].signals.age_h}`);
+    assert.match(out, new RegExp(`ai judge: ${undone.videoId} review rules: needs_llm: undo=1`));
+    assert.deepEqual(await judgements(fresh.videoId), [], 'published 1 h ago: not due');
+
+    const v = await aiVideo('-1_456000402');
+    assert.ok(v.judged_at);
+    assert.deepEqual([v.status, v.judge_counters.undo, v.judge_counters.duration_recut], ['published', 1, 0]);
+    assert.equal((await aiCalculated('-1_456000402')).withdrawn_at, null, 'review keeps the row served');
+    const hb = await heartbeat('ai_judge');
+    assert.equal(hb.failed_videos, 0);
+    assert.ok(hb.last_run_at.getTime() >= before);
+    assert.match(await fetchMetrics(), /^calculator_last_success_timestamp_seconds\{provider="ai_judge"\} \d/m);
+
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await judgements(undone.videoId)).length, 1, 'counters unchanged: not judged again');
+    assert.equal((await judgements(quiet.videoId)).length, 1);
+
+    await postUndo('-1_456000402', 'judge-u2', 30, 70);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    [, j] = await judgements(undone.videoId);
+    assert.deepEqual([j.decision, j.reason], ['review', 'needs_llm: undo=2']);
+    assert.equal((await judgements(quiet.videoId)).length, 1);
+
+    const html = (await request('GET', `/admin/video/${undone.videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    assert.equal((html.match(/class="ai-judgement"/g) || []).length, 2);
+    assert.match(html, /<td><strong>review<\/strong><\/td>\s*<td>rules<\/td>\s*<td>needs_llm: undo=2<\/td>/);
+});
+
+test('ai judge: a videos row of another cut requested after publish withdraws by duration; the human path is served', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000404';
+    const { videoId, data } = await aiPublished(vid);
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'judge-human', category_id: cats.prv.sponsor,
+        duration: 600, data: { intervals: [{ start: 100, end: 120 }] } });
+    runCalc('prv');
+    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
+    assert.deepEqual(res.body, data);
+    await waitAiVideo(vid, 2);
+
+    // A user marks the re-cut: a new videos row, but no request for the video since.
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'judge-recut', category_id: cats.prv.sponsor,
+        duration: 900, data: { intervals: [{ start: 10, end: 40 }] } });
+    assert.equal(await countVideos('', vid), 2);
+    let r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    let [j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.reason], ['review', 'needs_llm: conflicting_markups=1'], 'the 100–120 sponsor disagrees with the AI');
+    assert.deepEqual([j.signals.duration_variants, j.signals.duration_recut], [1, 0]);
+
+    await getCalculated('', vid, { v: '1', duration: 900 });
+    await waitAiVideo(vid, 3);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    [, j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.by, j.reason], ['withdraw', 'rules', 'duration: 1 videos rows of another cut requested after publish']);
+    const row = await aiCalculated(vid);
+    assert.ok(row.withdrawn_at);
+    assert.deepEqual([row.withdrawn_by, row.withdrawn_reason], ['duration', j.reason]);
+    assert.equal((await aiVideo(vid)).status, 'withdrawn');
+
+    res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
+    assert.deepEqual(res.body.map(({ category_id, start, end }) => ({ category_id, start, end })),
+        [{ category_id: cats.prv.sponsor, start: 100, end: 120 }]);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await judgements(videoId)).length, 2, 'a withdrawn row is not judged');
+});
+
 // RT: GET must not create a Video row when the video doesn't exist
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';

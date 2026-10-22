@@ -27,9 +27,10 @@ services:
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
-      # AI detection (prv/commands/ai) and AI-first serving (Node): off unless the deploy env turns them on
+      # AI detection and judge (prv/commands/ai) and AI-first serving (Node): off unless the deploy env turns them on
       - AI_FIRST=${AI_FIRST:-off}
       - AI_DETECT_ENABLED=${AI_DETECT_ENABLED:-off}
+      - AI_JUDGE_ENABLED=${AI_JUDGE_ENABLED:-off}
       - AI_MIN_VIEWS=${AI_MIN_VIEWS:-}
       - AI_DAILY_BUDGET_VIDEOS=${AI_DAILY_BUDGET_VIDEOS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

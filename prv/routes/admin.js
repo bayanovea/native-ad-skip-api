@@ -15,11 +15,12 @@ function scriptString(value) {
 // The video's AI detection state and published entries, or '' when the
 // detector never saw it.
 async function aiBlock(models, video, token) {
-    const [aiVideo, aiRow, served, categories] = await Promise.all([
+    const [aiVideo, aiRow, served, categories, judgements] = await Promise.all([
         models.AiVideo.findByPk(video.native_id),
         models.AiVideoCalculated.findByPk(video.id),
         findAiCalculated(models, video.id),
         models.MarkupCategory.findAll(),
+        models.AiJudgement.findAll({ where: { video_id: video.id }, order: [['id', 'DESC']] }),
     ]);
     if (!aiVideo && !aiRow) return '';
 
@@ -57,6 +58,19 @@ async function aiBlock(models, video, token) {
         <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th></tr></thead>
         <tbody>${entries}</tbody>
     </table>` : '<div class="no-calc">Nothing passed the thresholds.</div>'}`;
+    }
+    if (judgements.length) {
+        row += `
+    <table style="margin-bottom:28px">
+        <thead><tr><th>Judged</th><th>Decision</th><th>By</th><th>Reason</th></tr></thead>
+        <tbody>${judgements.map(j => `
+            <tr class="ai-judgement">
+                <td class="muted">${escapeHtml(formatDate(j.created_at))}</td>
+                <td><strong>${escapeHtml(j.decision)}</strong></td>
+                <td>${escapeHtml(j.by)}</td>
+                <td>${escapeHtml(j.reason ?? '')}</td>
+            </tr>`).join('')}</tbody>
+    </table>`;
     }
     return `
     <h2>AI</h2>
