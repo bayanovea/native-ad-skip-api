@@ -6,7 +6,7 @@ Crowdsourced ad/segment skipping for prv, rt and yt videos: users submit time-in
 
 A conceptual, non-technical explanation of how segments reach viewers before and after AI-first (detector, shifted subtitles, judge, assessor and frontend roles), for a frontend developer or an assessor:
 
-- Русский: [docs/ai-first-overview/ru.html](docs/ai-first-overview/ru.html)
-- English: [docs/ai-first-overview/en.html](docs/ai-first-overview/en.html)
+- Русский: https://claude.ai/artifact/6NZNwDcYKbLV5MUgKPwc8n
+- English: https://claude.ai/artifact/SQhQy8xEPoY8XaxvKL4d6o
 
-Open the file in a browser (GitHub shows the source). Both pages must say the same thing: a change in the AI-first behaviour updates both and the "updated" date in their header. Decisions and trade-offs: [docs/plans/completed/20261022-ai-first-segments.md](docs/plans/completed/20261022-ai-first-segments.md).
+The pages are private; ask the owner for access. Their source lives in [docs/ai-first-overview/](docs/ai-first-overview/) (`ru.html`, `en.html`, shared `style.css`); a change in the AI-first behaviour updates both files and the "updated" date in their header, then the two pages are republished from them. Decisions and trade-offs: [docs/plans/completed/20261022-ai-first-segments.md](docs/plans/completed/20261022-ai-first-segments.md).
