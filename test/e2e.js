@@ -31,6 +31,7 @@ const APP_DIR = process.env.APP_DIR || '/app';
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let serverProc;
+let aiFirstProc; // a second app with AI_FIRST=on, started by the first AI-first test
 let cats = {}; // { prv: { intro, sponsor }, rt: { intro, sponsor }, yt: { intro } }
 
 // ── Setup / Teardown ──────────────────────────────────────────────────────────
@@ -47,6 +48,7 @@ before(async () => {
 
 after(async () => {
     stopServer();
+    if (aiFirstProc) aiFirstProc.kill();
     await dropDb();
 });
 
@@ -81,18 +83,21 @@ async function loadCats(prefix) {
 
 // ── Server helpers ────────────────────────────────────────────────────────────
 
-function startServer() {
-    serverProc = spawn('node', ['server.js'], {
+function startServer(port = E2E_PORT, env = {}, tag = 'server') {
+    const proc = spawn('node', ['server.js'], {
         cwd: APP_DIR,
         env: {
             ...process.env,
             DB_NAME: TEST_DB,
-            NODE_APP_PORT: String(E2E_PORT),
+            NODE_APP_PORT: String(port),
+            ...env,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
-    serverProc.stdout.on('data', d => process.stdout.write(`[server] ${d}`));
-    serverProc.stderr.on('data', d => process.stderr.write(`[server] ${d}`));
+    proc.stdout.on('data', d => process.stdout.write(`[${tag}] ${d}`));
+    proc.stderr.on('data', d => process.stderr.write(`[${tag}] ${d}`));
+    if (port === E2E_PORT) serverProc = proc;
+    return proc;
 }
 
 function stopServer() {
@@ -116,27 +121,31 @@ async function waitForSchema() {
 // server.js calls listen() only after bootstrap() resolves, so the schema poll
 // above can succeed while port 3099 is still closed (ECONNREFUSED on a loaded
 // machine). Poll the health check until it answers.
-async function waitForListen() {
+async function waitForListen(port = E2E_PORT) {
     for (let i = 0; i < 60; i++) {
         try {
-            await request('GET', '/');
+            await requestOn(port, 'GET', '/');
             return;
         } catch (_) {}
         await sleep(500);
     }
-    throw new Error(`server did not listen on ${E2E_PORT} within 30 s`);
+    throw new Error(`server did not listen on ${port} within 30 s`);
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 // A string body is sent as is (pass its Content-Type in `headers`).
 function request(method, path, body, headers = {}) {
+    return requestOn(E2E_PORT, method, path, body, headers);
+}
+
+function requestOn(port, method, path, body, headers = {}) {
     return new Promise((resolve, reject) => {
         const data = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
         const req = http.request(
             {
                 hostname: 'localhost',
-                port: E2E_PORT,
+                port,
                 path,
                 method,
                 headers: {
@@ -1069,6 +1078,130 @@ test('ai detect: a yt-dlp failure is retried later, counted in the heartbeat, an
     assert.deepEqual([v.status, v.attempts], ['queued', 1]);
     assert.match(v.last_error, /This video is unavailable/);
     assert.equal((await heartbeat('ai_detect')).failed_videos, 1);
+});
+
+// ── AI-first serving (lib/find-ai-calculated.js): AI_FIRST is read at boot ──
+// The main app runs with the default (off); a second app on AI_PORT runs with AI_FIRST=on against the same DB.
+
+const AI_PORT = 3098;
+
+async function aiFirstServer() {
+    if (!aiFirstProc) {
+        aiFirstProc = startServer(AI_PORT, { AI_FIRST: 'on' }, 'ai-first');
+        await waitForListen(AI_PORT);
+    }
+}
+
+// A human segment (sponsor 100–120 from one markup) and a published AI row (sponsor 30–70) on the same videos row.
+async function aiFirstVideo(nativeId) {
+    await postMarkup('', { video_id: nativeId, v: '1', user_id: `${nativeId}-author`, category_id: cats.prv.sponsor,
+        duration: 600, data: { intervals: [{ start: 100, end: 120 }] } });
+    runCalc('prv');
+    const videoId = await prvVideoId(nativeId);
+    const [run] = await dbQuery(
+        `INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
+         VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', '{}', 0, 600) RETURNING id`, [nativeId, videoId]);
+    const data = [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }];
+    await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data) VALUES ($1, $2, $3, $4)`,
+        [videoId, nativeId, run.id, JSON.stringify(data)]);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, status) VALUES ($1, 'published')
+        ON CONFLICT (native_id) DO UPDATE SET status = 'published'`, [nativeId]);
+    return { videoId, ai: data, human: [{ category_id: cats.prv.sponsor, start: 100, end: 120 }] };
+}
+
+async function aiData(videoId) {
+    return (await dbQuery(`SELECT data FROM prv_ai_video_calculateds WHERE video_id = $1`, [videoId]))[0].data;
+}
+
+function getCalculatedOn(port, videoId, extra = {}) {
+    return requestOn(port, 'GET', `/video-calculated?${new URLSearchParams({ video_id: videoId, ...extra })}`);
+}
+
+test('ai-first: the AI row is served over video_calculateds with AI_FIRST=on, the human one with the default', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000301';
+    const { ai, human } = await aiFirstVideo(vid);
+
+    const lookup = async () => parseCounter(
+        (await requestOn(AI_PORT, 'GET', '/metrics')).body, 'video_calculated_lookup_total',
+        { outcome: 'match', provider: 'prv', source: 'ai' });
+    const before = await lookup();
+    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 601 });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, ai);
+    assert.equal(await lookup() - before, 1, 'counted with source="ai"');
+
+    res = await getCalculated('', vid, { v: '1', duration: 601 });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.map(({ category_id, start, end }) => ({ category_id, start, end })), human);
+    assert.match(await fetchMetrics(), /video_calculated_lookup_total\{outcome="match",provider="prv",source="human"\} [1-9]/);
+
+    res = await getCalculatedOn(AI_PORT, vid, { duration: 601 });
+    assert.deepEqual(res.body.map(({ start }) => start), [100], 'the legacy branch (no v) stays human');
+});
+
+test('ai-first: votes on AI entries rate the AI row; a human segment of the video is 404; vote delete is symmetric', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000302';
+    const { videoId } = await aiFirstVideo(vid);
+    const author = `${vid}-author`;
+    const authorBefore = await userRating('', author);
+    const vote = (port, userId, start, end, value) => requestOn(port, 'POST', '/vote', {
+        video_id: vid, user_id: userId, category_id: cats.prv.sponsor, start, end, vote: value, duration: 600 });
+
+    assert.equal((await vote(AI_PORT, 'ai-voter-1', 30, 70, 1)).status, 204);
+    assert.equal((await vote(AI_PORT, 'ai-voter-2', 30, 70, 1)).status, 204);
+    assert.equal((await aiData(videoId))[0].rating, 2);
+    assert.equal((await vote(AI_PORT, 'ai-voter-2', 30, 70, -1)).status, 204, 'a changed vote replaces the earlier one');
+    assert.equal((await aiData(videoId))[0].rating, undefined, '1 − 1 = 0: rating omitted');
+    assert.equal(await userRating('', author), authorBefore, 'no markup author has the AI bounds');
+
+    assert.equal((await vote(AI_PORT, 'ai-voter-1', 100, 120, 1)).status, 404, 'not served, so not votable');
+    assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 100, 120), 0);
+    assert.equal((await vote(E2E_PORT, 'ai-voter-1', 30, 70, 1)).status, 404, 'AI_FIRST off: the AI entry is not served');
+    assert.equal((await vote(E2E_PORT, 'ai-voter-1', 100, 120, 1)).status, 204, 'AI_FIRST off: the human path as before');
+    assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 100, 120), 1);
+    assert.equal(await userRating('', author), authorBefore + 1);
+
+    const del = async userId => {
+        const [{ id }] = await dbQuery(`SELECT id FROM votes WHERE user_id = $1 AND video_id = $2 AND start = 30`, [userId, videoId]);
+        return requestOn(AI_PORT, 'GET', `/votes/${id}/delete?verifyBearerToken=${VOTE_AUTH}`);
+    };
+    assert.equal((await del('ai-voter-2')).status, 201);
+    assert.equal((await aiData(videoId))[0].rating, 1, 'without voter 2’s −1');
+    assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 100, 120), 1, 'the human segment is untouched');
+});
+
+test('ai-first: the admin withdraw link unpublishes the AI row and the human path is served again', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000303';
+    const { videoId, human } = await aiFirstVideo(vid);
+    const page = async () => (await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    const withdraw = token => requestOn(AI_PORT, 'GET', `/admin/video/${videoId}/ai/withdraw?verifyBearerToken=${token}`);
+
+    let html = await page();
+    assert.match(html, /<h2>AI<\/h2>/);
+    assert.match(html, /Status: <strong>published<\/strong>/);
+    assert.match(html, /Served: <strong id="ai-served">yes<\/strong>/);
+    assert.match(html, /withdrawAi\(this\)/);
+    assert.match(html, /data-start="30" data-end="70"/);
+    assert.doesNotMatch(await (await requestOn(AI_PORT, 'GET', `/admin/video/${await prvVideoId('__e2e__prv_basic')}?verifyBearerToken=${VOTE_AUTH}`)).body,
+        /<h2>AI<\/h2>/, 'no AI block for a video the detector never saw');
+
+    assert.equal((await withdraw('wrong')).status, 401);
+    assert.equal((await withdraw(VOTE_AUTH)).status, 200);
+    const [row] = await dbQuery(`SELECT * FROM prv_ai_video_calculateds WHERE video_id = $1`, [videoId]);
+    assert.ok(row.withdrawn_at);
+    assert.deepEqual([row.withdrawn_by, row.withdrawn_reason, row.data.length], ['admin', 'withdrawn on /admin/video', 1]);
+    assert.equal((await aiVideo(vid)).status, 'withdrawn');
+    assert.equal((await withdraw(VOTE_AUTH)).status, 404, 'already withdrawn');
+
+    const res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
+    assert.deepEqual(res.body.map(({ category_id, start, end }) => ({ category_id, start, end })), human);
+    html = await page();
+    assert.match(html, /withdrawn \d{4}-\d\d-\d\d [\d:]+ by admin: withdrawn on \/admin\/video/);
+    assert.match(html, /Served: <strong id="ai-served">no<\/strong>/);
+    assert.doesNotMatch(html, /withdrawAi\(this\)/);
 });
 
 // RT: GET must not create a Video row when the video doesn't exist

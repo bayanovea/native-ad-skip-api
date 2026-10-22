@@ -1,6 +1,7 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
-const { CATEGORY_COLORS, escapeHtml, urlToken } = require('../../lib/admin-html');
+const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
+const { findAiCalculated } = require('../../lib/find-ai-calculated');
 
 // `videoId` is matched against native_id, which any client sets through
 // POST /markup, so every value goes through escapeHtml (URL parts through
@@ -11,7 +12,67 @@ function scriptString(value) {
     return JSON.stringify(String(value)).replace(/</g, '\\u003c');
 }
 
-module.exports = function createAdminRoutes(models, { markupRepository }) {
+// The video's AI detection state and published entries, or '' when the
+// detector never saw it.
+async function aiBlock(models, video, token) {
+    const [aiVideo, aiRow, served, categories] = await Promise.all([
+        models.AiVideo.findByPk(video.native_id),
+        models.AiVideoCalculated.findByPk(video.id),
+        findAiCalculated(models, video.id),
+        models.MarkupCategory.findAll(),
+    ]);
+    if (!aiVideo && !aiRow) return '';
+
+    const categoryName = Object.fromEntries(categories.map(c => [c.id, c.category]));
+    const queue = aiVideo ? `
+        <span>Status: <strong>${escapeHtml(aiVideo.status)}</strong></span>
+        <span>Views: ${escapeHtml(aiVideo.views_max ?? '—')}</span>
+        <span>Requests: ${escapeHtml(aiVideo.requests)}</span>
+        <span>Attempts: ${escapeHtml(aiVideo.attempts)}</span>
+        ${aiVideo.last_error ? `<span>Last error: ${escapeHtml(aiVideo.last_error)}</span>` : ''}` : '';
+    let row = '';
+    if (aiRow) {
+        const state = aiRow.withdrawn_at
+            ? `withdrawn ${escapeHtml(formatDate(aiRow.withdrawn_at))} by ${escapeHtml(aiRow.withdrawn_by)}${aiRow.withdrawn_reason ? `: ${escapeHtml(aiRow.withdrawn_reason)}` : ''}`
+            : `published ${escapeHtml(formatDate(aiRow.published_at))}`;
+        const entries = (aiRow.data || []).map(e => {
+            const name = categoryName[e.category_id] || e.category_id;
+            return `
+            <tr>
+                <td><span class="badge" style="background:${CATEGORY_COLORS[name] || '#64748b'}">${escapeHtml(name)}</span></td>
+                <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span></td>
+                <td class="muted">${escapeHtml(e.confidence)}</td>
+                <td class="muted">${escapeHtml(e.rating ?? 0)}</td>
+            </tr>`;
+        }).join('');
+        row = `
+    <div class="meta">
+        <span>Run: ${escapeHtml(aiRow.run_id)}</span>
+        <span>${state}</span>
+        <span>Served: <strong id="ai-served">${served ? 'yes' : 'no'}</strong></span>
+        ${aiRow.withdrawn_at ? '' : '<button class="delete-btn" onclick="withdrawAi(this)">Withdraw</button>'}
+    </div>
+    ${entries ? `
+    <table style="margin-bottom:28px">
+        <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th></tr></thead>
+        <tbody>${entries}</tbody>
+    </table>` : '<div class="no-calc">Nothing passed the thresholds.</div>'}`;
+    }
+    return `
+    <h2>AI</h2>
+    <div class="meta">${queue}</div>${row}
+    <script>
+        async function withdrawAi(btn) {
+            if (!confirm('Withdraw the AI segments of this video? Clients get the human ones.')) return;
+            btn.disabled = true;
+            const res = await fetch('/admin/video/${video.id}/ai/withdraw?verifyBearerToken=' + encodeURIComponent(${scriptString(token)}));
+            if (res.ok) location.reload();
+            else { btn.disabled = false; alert('Error: ' + res.status); }
+        }
+    </script>`;
+}
+
+module.exports = function createAdminRoutes(models, { markupRepository, aiRepository }) {
     const router = express.Router();
 
     router.get('/admin/video/:video_id', handler(async (req, res) => {
@@ -116,6 +177,8 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         </tbody>`;
         }).join('');
 
+        const ai = await aiBlock(models, video, token);
+
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -126,6 +189,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
         h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
+        h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
         .meta { color: #94a3b8; font-size: 0.85rem; margin-bottom: 28px; }
         .meta span { margin-right: 16px; }
         table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; }
@@ -166,6 +230,7 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
         ${video.duration ? `<span>Duration: ${escapeHtml(video.duration)}s</span>` : ''}
         <span>Calculated segments: ${calculatedSegments.length}</span>
     </div>
+${ai}
 
     ${calculatedSegments.length === 0 ? '<div class="no-calc">No calculated data for this video yet.</div>' : ''}
 
@@ -250,6 +315,19 @@ module.exports = function createAdminRoutes(models, { markupRepository }) {
 
         res.setHeader('Content-Type', 'text/html');
         res.send(html);
+    }));
+
+    router.get('/admin/video/:video_id/ai/withdraw', handler(async (req, res) => {
+        if (req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
+            res.status(401).send('Unauthorized');
+            return;
+        }
+        const videoId = Number(req.params.video_id);
+        if (!Number.isInteger(videoId)) { res.status(400).send('Bad video id'); return; }
+
+        const withdrawn = await aiRepository.withdraw(videoId, 'admin', 'withdrawn on /admin/video');
+        if (!withdrawn) { res.status(404).send('No published AI row'); return; }
+        res.status(200).send('Withdrawn');
     }));
 
     router.get('/admin/video/:video_id/user/:prv_user_id', handler(async (req, res) => {

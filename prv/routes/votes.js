@@ -3,7 +3,8 @@ const { body, query } = require('express-validator');
 const validateRequest = require('../../middleware/validate-request');
 const verifyQueryToken = require('../../middleware/verify-query-token');
 const handler = require('../../middleware/handler');
-const { lockVideoCalculated, recomputeSegmentRating } = require('../../lib/segment-rating');
+const { lockVideoCalculated, recomputeSegmentRating, recomputeAiSegmentRating } = require('../../lib/segment-rating');
+const { findAiCalculated } = require('../../lib/find-ai-calculated');
 
 module.exports = function createVoteRoutes(models, { videoRepository, userService }) {
     const router = express.Router();
@@ -26,10 +27,13 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         const video = await videoRepository.findByNativeIdAndDuration(req.body.video_id, duration);
         if (!video) { res.status(404).send('Not found'); return; }
 
-        // The VideoCalculated row lock serialises votes on the video with each
-        // other, with a recalculation and with `calculate --recompute-ratings`.
+        // The segment comes from what GET /video-calculated serves: the AI row
+        // when it is active, else VideoCalculated. The row lock serialises votes
+        // on the video with each other, with a recalculation (`calculate`,
+        // `--recompute-ratings`) or with a publish / withdraw of the AI row.
         const found = await sequelize.transaction(async (transaction) => {
-            const calculatedVideo = await lockVideoCalculated(models, video.id, { transaction });
+            const aiRow = await findAiCalculated(models, video.id, { transaction, lock: transaction.LOCK.UPDATE });
+            const calculatedVideo = aiRow || await lockVideoCalculated(models, video.id, { transaction });
             if (!calculatedVideo) return false;
 
             const segment = (calculatedVideo.data || []).find(item =>
@@ -53,7 +57,8 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
 
             if (prevVote) await prevVote.destroy({ transaction });
 
-            await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
+            if (aiRow) await recomputeAiSegmentRating(models, aiRow, { categoryId, start, end }, { transaction });
+            else await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
 
             await userService.updateRatingByVote(voteObj, prevVote, { transaction });
             return true;
@@ -70,14 +75,18 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
 
         // Undo what POST /vote did: the segment rating is recomputed without the
         // vote, and the authors' rating change is reversed (the voter's own
-        // rating was never touched, so it is left alone).
+        // rating was never touched, so it is left alone). The vote may predate
+        // the AI row, so both are recomputed; the AI row is locked before
+        // VideoCalculated (no writer takes them the other way round).
         const deleted = await sequelize.transaction(async (transaction) => {
+            const aiRow = await findAiCalculated(models, vote.video_id, { transaction, lock: transaction.LOCK.UPDATE });
             const calculatedVideo = await lockVideoCalculated(models, vote.video_id, { transaction });
 
             const count = await models.Vote.destroy({ where: { id: vote.id }, transaction });
             if (!count) return false; // deleted concurrently: nothing left to undo
 
             const segment = { videoId: vote.video_id, categoryId: vote.category_id, start: vote.start, end: vote.end };
+            if (aiRow) await recomputeAiSegmentRating(models, aiRow, segment, { transaction });
             if (calculatedVideo) await recomputeSegmentRating(models, segment, { transaction });
 
             await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, vote, { transaction });

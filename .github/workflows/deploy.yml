@@ -119,6 +119,12 @@ jobs:
         GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # AI switches: repository variables; unset is empty, which docker-compose.yml turns into off / the code default.
+        AI_FIRST: ${{ vars.AI_FIRST }}
+        AI_DETECT_ENABLED: ${{ vars.AI_DETECT_ENABLED }}
+        AI_MIN_VIEWS: ${{ vars.AI_MIN_VIEWS }}
+        AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
         GHCR_USER: ${{ github.actor }}
@@ -140,6 +146,11 @@ jobs:
             GF_ADMIN_PASSWORD "$GF_ADMIN_PASSWORD" \
             TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" \
             TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID" \
+            ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
+            AI_FIRST "$AI_FIRST" \
+            AI_DETECT_ENABLED "$AI_DETECT_ENABLED" \
+            AI_MIN_VIEWS "$AI_MIN_VIEWS" \
+            AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
             HOST_IP "$HOST_IP" \
             IMAGE_NAME "$IMAGE_NAME" \
             IMAGE_TAG "$IMAGE_TAG" \

@@ -38,14 +38,17 @@ components:
     Segment:
       type: object
       description: |
-        Aggregated segment served from `video_calculateds.data`.
-        `rating` starts at 0 when the calculator emits the segment and is incremented/decremented
-        as users vote on it.
+        Aggregated segment served from `video_calculateds.data`, or (prv, `AI_FIRST=on`, the video
+        has an active AI row) from `prv_ai_video_calculateds.data`, whose entries also carry
+        `confidence` and `source: "ai"`. `rating` is the sum of the users' latest votes on the
+        segment, omitted when 0.
       properties:
         category_id: { type: integer, example: 1 }
         start:       { type: integer, example: 5 }
         end:         { type: integer, example: 30 }
         rating:      { type: integer, example: 0 }
+        confidence:  { type: string, example: high, description: "AI entries only" }
+        source:      { type: string, enum: [ai], description: "AI entries only" }
 
     Interval:
       type: object
@@ -385,7 +388,8 @@ paths:
       description: |
         Replaces the user's previous vote on the segment and recomputes the segment's
         `rating` (in `prv_calculated_segments` and the matching `video_calculateds.data` entry,
-        omitted there when 0) from the votes table: the sum of each user's latest vote on the
+        omitted there when 0; for a video served from its AI row only that row's `data` entry,
+        and a segment the AI row does not serve is 404) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
         previous vote the user `rating` of every author whose markup has an interval with
         the exact `(start, end)`.

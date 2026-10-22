@@ -33,6 +33,19 @@ test('incrementVideoCalculatedLookup increments by outcome and provider', async 
     assert.equal(await counterValue('video_calculated_lookup_total', { outcome: 'mismatch', provider: 'yt' }), 0);
 });
 
+test('incrementVideoCalculatedLookup labels the served table: human by default, ai when given', async () => {
+    const wrapper = require('../prometheus-wrapper.js');
+
+    wrapper.incrementVideoCalculatedLookup('match', 'prv');
+    wrapper.incrementVideoCalculatedLookup('match', 'prv', 'ai');
+    wrapper.incrementVideoCalculatedLookup('match', 'prv', 'ai');
+
+    assert.equal(await counterValue('video_calculated_lookup_total', { outcome: 'match', provider: 'prv', source: 'human' }), 1);
+    assert.equal(await counterValue('video_calculated_lookup_total', { outcome: 'match', provider: 'prv', source: 'ai' }), 2);
+    const output = await client.register.metrics();
+    assert.match(output, /video_calculated_lookup_total\{outcome="match",provider="prv",source="ai"\} 2/);
+});
+
 test('incrementRequestWithoutVersion increments by method and provider', async () => {
     const wrapper = require('../prometheus-wrapper.js');
 

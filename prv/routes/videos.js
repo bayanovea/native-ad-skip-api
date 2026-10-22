@@ -2,6 +2,7 @@ const express = require('express');
 const { query } = require('express-validator');
 const prometheusWrapper = require('../../prometheus-wrapper');
 const { findVideoForReadWithOutcome } = require('../../lib/find-video-for-read');
+const { findAiCalculated } = require('../../lib/find-ai-calculated');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
 
@@ -56,6 +57,13 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
         if (!video) {
             prometheusWrapper.incrementVideoCalculatedLookup(outcome, 'prv');
             res.status(204).send();
+            return;
+        }
+
+        const aiCalculated = await findAiCalculated(models, video.id);
+        if (aiCalculated) {
+            prometheusWrapper.incrementVideoCalculatedLookup(outcome, 'prv', 'ai');
+            res.status(200).send(aiCalculated.data);
             return;
         }
 

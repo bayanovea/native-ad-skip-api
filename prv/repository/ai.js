@@ -11,5 +11,24 @@ module.exports = function createAiRepository(models, sequelize) {
                      last_seen_at = CURRENT_TIMESTAMP`,
                 { replacements: { nativeId, views: views ?? null } });
         },
+
+        // Unpublish the video's AI row (`by`: judge | review | admin | duration); `data` stays for the record.
+        // Returns false when there is no row or it is already withdrawn.
+        async withdraw(videoId, by, reason, { transaction } = {}) {
+            const run = async (t) => {
+                const [rows] = await sequelize.query(
+                    `UPDATE prv_ai_video_calculateds
+                     SET withdrawn_at = NOW(), withdrawn_by = :by, withdrawn_reason = :reason, updated_at = NOW()
+                     WHERE video_id = :videoId AND withdrawn_at IS NULL
+                     RETURNING native_id`,
+                    { replacements: { videoId, by, reason: reason ?? null }, transaction: t });
+                if (!rows.length) return false;
+                await sequelize.query(
+                    `UPDATE prv_ai_videos SET status = 'withdrawn', updated_at = NOW() WHERE native_id = :nativeId`,
+                    { replacements: { nativeId: rows[0].native_id }, transaction: t });
+                return true;
+            };
+            return transaction ? run(transaction) : sequelize.transaction(run);
+        },
     };
 };

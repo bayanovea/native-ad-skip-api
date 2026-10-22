@@ -2,8 +2,8 @@ const client = require('prom-client');
 
 const videoCalculatedLookupTotal = new client.Counter({
     name: 'video_calculated_lookup_total',
-    help: 'GET /video-calculated outcomes by lookup state and provider',
-    labelNames: ['outcome', 'provider'],
+    help: 'GET /video-calculated outcomes by lookup state, provider and the table served (ai | human)',
+    labelNames: ['outcome', 'provider', 'source'],
 });
 
 const requestWithoutVersionTotal = new client.Counter({
@@ -67,8 +67,8 @@ function registerCalculatorHeartbeat(sequelize) {
     failedVideos.collect = collect;
 }
 
-function incrementVideoCalculatedLookup(outcome, provider) {
-    videoCalculatedLookupTotal.inc({ outcome, provider });
+function incrementVideoCalculatedLookup(outcome, provider, source = 'human') {
+    videoCalculatedLookupTotal.inc({ outcome, provider, source });
 }
 
 function incrementRequestWithoutVersion(method, provider) {

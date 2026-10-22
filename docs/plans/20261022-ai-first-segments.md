@@ -387,14 +387,14 @@ Key decisions:
 - Modify: `prv/routes/videos.js`, `prv/routes/votes.js`, `lib/segment-rating.js` (`recomputeAiSegmentRating`), `prometheus-wrapper.js` (`source` label), `prv/repository/ai.js`
 - Modify: `test/e2e.js`, `test/prometheus-wrapper.test.js`
 
-- [ ] `findAiCalculated`: `AI_FIRST` on, row for `video.id` with `withdrawn_at IS NULL` and non-empty `data` → `{data}`; else null
-- [ ] `GET /video-calculated`: AI row first; `video_calculated_lookup_total` gets `source`
-- [ ] votes: segment resolution by the same rule; AI path locks the AI row and recomputes the entry's `rating` from `votes` (same SUM rule); vote delete symmetric; 404 unchanged when the segment is in neither
-- [ ] `prv/repository/ai.js`: `withdraw(video_id, by, reason)` (used by the admin link now, the judge later)
-- [ ] `/admin/video/:video_id`: AI block (status, entries, judgements) + withdraw link (`?verifyBearerToken=`)
-- [ ] unit tests: `find-ai-calculated` (flag off, withdrawn, empty data), `prometheus-wrapper` label
-- [ ] e2e: AI row served over an existing human `video_calculateds`; `AI_FIRST=off` serves the human one (the e2e app is started twice with different env, or the flag is read per request from a test-only override — pick the simpler at implementation and note it here); a vote on an AI entry updates its `rating`, the vote's author-rating path is a no-op; vote on a human segment of an AI-first video → 404; withdraw link → human path again
-- [ ] run `make test-unit` and `make test-e2e` — must pass before task 5
+- [x] `findAiCalculated`: `AI_FIRST` on, row for `video.id` with `withdrawn_at IS NULL` and non-empty `data` → `{data}`; else null (returns the model row; `{ transaction, lock }` pass through, so the vote handler locks with the same rule)
+- [x] `GET /video-calculated`: AI row first; `video_calculated_lookup_total` gets `source` (`human` by default, also for `not_found` / `not_calculated` and rt/yt; legacy `!v` branch untouched)
+- [x] votes: segment resolution by the same rule; AI path locks the AI row and recomputes the entry's `rating` from `votes` (same SUM rule); vote delete symmetric; 404 unchanged when the segment is in neither (a segment only in `video_calculateds` of an AI-first video is 404 too; delete recomputes both tables, since the vote may predate the AI row, locking the AI row before `VideoCalculated`)
+- [x] `prv/repository/ai.js`: `withdraw(video_id, by, reason)` (used by the admin link now, the judge later) (also sets `prv_ai_videos.status = 'withdrawn'`; false when no row or already withdrawn; optional `{ transaction }`)
+- [x] `/admin/video/:video_id`: AI block (status, entries, judgements) + withdraw link (`?verifyBearerToken=`) (`GET /admin/video/:id/ai/withdraw`, numeric `videos.id`, from a confirm button as the markup delete; judgements wait for their table, ➕ in Task 5)
+- [x] unit tests: `find-ai-calculated` (flag off, withdrawn, empty data), `prometheus-wrapper` label
+- [x] e2e: AI row served over an existing human `video_calculateds`; `AI_FIRST=off` serves the human one (picked: a second app with `AI_FIRST=on` on port 3098 next to the default one, same DB; the flag stays read once at boot); a vote on an AI entry updates its `rating`, the vote's author-rating path is a no-op; vote on a human segment of an AI-first video → 404; withdraw link → human path again
+- [x] run `make test-unit` and `make test-e2e` — must pass before task 5
 
 ### Task 5: Signals and rule-based judge
 
@@ -405,6 +405,7 @@ Key decisions:
 
 - [ ] `signals.go`: the counters from Technical Details, one query per signal, restricted to the AI entries' bounds; `duration_variants` includes the "new videos row receiving requests after publish" fact
 - [ ] `rules.go`: `ok` when nothing negative; `withdraw` by `duration`; else `needs_llm`; movement check against `judge_counters`
+- ➕ `/admin/video/:video_id` AI block: list the row's `prv_ai_judgements` (Task 4 left them out, the table arrives here)
 - [ ] `judge` subcommand: due rows (published, `withdrawn_at IS NULL`, counters moved or never judged and ≥ 24 h old), rules, `prv_ai_judgements` row, `judged_at` + `judge_counters` update; `AI_JUDGE_ENABLED` gate; hourly cron line
 - [ ] unit tests: each counter (sqlmock), rules table (no signals / dislikes / undo / conflicting markup with negative-rating author ignored / duration withdraw), movement
 - [ ] e2e: published video + an undo event → judgement `needs_llm` recorded as `review` with `by=rules` while the LLM is off (Task 6 replaces this); a new `videos` row with another duration + request → `withdrawn_by = duration`, human path served
@@ -477,16 +478,21 @@ Key decisions:
 ## Post-Completion
 
 **Deploy order and rollout**
-- Secrets: `ANTHROPIC_API_KEY` in GitHub Actions → compose env. Deploy with every `AI_*` flag off.
-  `.github/workflows/deploy.yml` does not export `ANTHROPIC_API_KEY` or any `AI_*` to the remote
-  compose yet (Task 3 wired `docker-compose.yml` and `init_env.sh` only): add them to its
-  `printf 'export …'` list before week 1.
+- ⚠️ **Owner, before week 1:** add the `ANTHROPIC_API_KEY` repository secret in GitHub Actions
+  (Settings → Secrets and variables → Actions). Without it `AI_DETECT_ENABLED=on` has no key and
+  every detect tick exits 1 (`AI_CLIENT=anthropic` refuses to start without a key).
+- Secrets: `ANTHROPIC_API_KEY` as a GitHub Actions secret; `AI_FIRST`, `AI_DETECT_ENABLED`,
+  `AI_MIN_VIEWS`, `AI_DAILY_BUDGET_VIDEOS` as repository variables (unset = off / code default).
+  `.github/workflows/deploy.yml` exports them to the remote compose (Task 4); a flag added later
+  (`AI_JUDGE_ENABLED`, …) goes into that list, `docker-compose.yml` and nothing else. Deploy
+  with every `AI_*` flag off.
 - Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS=10000`: the
   detector publishes, nobody is served; compare `prv_ai_video_calculateds` with the human
   segments on the same videos from the DB (precision check on live data, no viewer affected).
 - Week 2: `AI_FIRST=on` + `AI_JUDGE_ENABLED=on`; watch `ai_judgements_total`, the review
   queue and the undo rate per 1k views against the human-path baseline. Kill switch: `AI_FIRST=off`
-  (one env change + `up -d`).
+  (set the repository variable, then Run workflow with `image_tag` = the running sha: no build,
+  only the container swap).
 - Later: `AI_JUDGE_AUTO_WITHDRAW` stays on; a judge-closes-cases flag only after the review
   verdicts show the judge's `withdraw` precision over a few weeks.
 
