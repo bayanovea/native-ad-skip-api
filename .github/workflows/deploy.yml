@@ -42,7 +42,7 @@ jobs:
       run: make test-unit
 
     - name: Go unit tests
-      run: go test -mod=vendor ./calculator
+      run: go test -mod=vendor ./calculator ./ai/...
 
     - name: E2E tests (Docker)
       run: make test-e2e

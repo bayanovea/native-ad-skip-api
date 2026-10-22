@@ -1,6 +1,6 @@
 # AI-first segments: spikes (Task 0)
 
-Date: 2026-10-22. Plan: `docs/plans/20261022-ai-first-segments.md`, Task 0.
+Date: 2026-10-22. Plan: `docs/plans/completed/20261022-ai-first-segments.md`, Task 0.
 
 > **Status: local part done, prod-host part deferred.** The build check below was measured on the
 > owner's Mac (Docker, arm64 images; Go binaries also cross-built for linux/amd64). Everything that

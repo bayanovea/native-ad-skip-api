@@ -37,8 +37,7 @@ correctly, even at the cost of missed ads.
   response. `internal/provider/platform.go` picks the auto track from yt-dlp output and builds player
   links (`LinkAt`, start − 2 s). `internal/ytdlp` wraps the `yt-dlp` binary with retries.
   `internal/netguard` refuses to fetch from a listed home IP (privacy of the eval data set, not a
-  platform rule). All `internal/`: not importable from another module as is; the eval repo has no
-  git remote.
+  platform rule). All `internal/`: not importable from another module as is.
 - **Timing facts** (eval README, `docs/iterations.md` step 13, `~/Web/data/audit/drift.jsonl`):
   ~1 video in 5 has a subtitle timeline off by > 2 s (steps and offsets of 15–90 s). The cheap gate
   (last cue end − duration > 3 s) catches 13 of 15 bad videos in the 31-video audit, misses 2, and
@@ -111,7 +110,7 @@ cron (every 5 min, flock)  prv/commands/ai/ai detect
    queue: prv_ai_videos.status='seen' AND views_max ≥ AI_MIN_VIEWS (or fallback, see Trigger)
    → yt-dlp info + auto subs (ru)      → no track: retry 6 h / 24 h / 72 h, then no_track
    → timeline gate                     → timeline_unreliable (nothing published)
-   → Batches API submit (AnthropicBatch) → status detecting, batch_id; next tick polls
+   → Batches API submit (AnthropicBatch) → status detecting, batch_id; polled once per tick
    → Validate + Resolve + thresholds   → prv_ai_runs (raw) + prv_ai_video_calculateds (published)
 
 cron (hourly, flock)  prv/commands/ai/ai judge
@@ -138,13 +137,13 @@ Key decisions:
   rule). A client whose player reports a different duration lands on another row or none and
   gets the human path: a re-cut video never serves segments timed for the old cut. This is the
   "different durations" signal turned into a guarantee rather than a heuristic.
-- **Detector code is copied, not imported.** `internal/` packages cannot be imported, the eval
-  repo has no remote, and CI builds from this repo's tarball. `scripts/sync-detector.sh` copies
+- **Detector code is copied, not imported.** `internal/` packages cannot be imported and CI builds
+  from this repo's tarball alone. `scripts/sync-detector.sh` copies
   `detector`, `transcript`, `vtt`, `provider`, `ytdlp` from the eval checkout into `ai/` and
   writes the source commit into `ai/SOURCE`; the eval repo keeps being the place where prompts
   and the detector change (eval first, then sync). `prompts/v2.2.md` is copied the same way to
-  `ai/prompts/`. Rejected: moving the packages to a published module (needs a private Go module
-  proxy or CI token for a repo that must stay private; revisit if a third consumer appears).
+  `ai/prompts/`. Rejected: moving the packages to a published module (a second repo in every
+  build and its access from CI for one consumer; revisit if a third consumer appears).
 - **Batches API in the product.** Detection latency is irrelevant (the video has no AI row yet
   and serves the human path meanwhile), and batches halve the cost ($0.025 vs $0.05 per video).
   The detect cron submits one batch per tick and resolves finished batches on the next ticks.
@@ -230,8 +229,8 @@ Key decisions:
   `ai/prompts/v2.2.md`; the prompt sha goes into every run row, so a prompt change is visible per
   video.
 - Batches: tick 1 submits up to `AI_BATCH_MAX` queued videos as one batch (`status=detecting`,
-  `batch_id`); later ticks `Wait` with a zero timeout (poll once), resolve finished results,
-  `failed` after `AI_BATCH_MAX_AGE` (24 h). `AI_CLIENT=messages` uses the synchronous client
+  `batch_id`); every tick polls each waiting batch once (`Poll`), resolves finished results,
+  `failed` after 24 h without a result (a constant, not an env variable). `AI_CLIENT=messages` uses the synchronous client
   (for a single-video manual run: `ai detect <native_id>`).
 
 ### Serving and votes (Node)
@@ -440,7 +439,7 @@ Key decisions:
 ### Task 6: LLM judge, withdraw, review batches
 
 **Files:**
-- Create: `ai/judge/llm.go`, `ai/prompts/judge-v1.md`, `ai/judge/review.go` (items + batch via SQL identical to `reviewRepository.insertItems` / `createBatch` — or, simpler and preferred, a Node script is not wanted here: keep the Go binary and mirror the two INSERTs; add a test in `test/e2e.js` that the page lists and opens the items)
+- Create: `ai/judge/llm.go`, `ai/prompts/judge-v1.md`, `ai/judge/review.go` (items + batch with the same INSERTs as `reviewRepository.insertItems` / `createBatch`, from the Go binary; `test/e2e.js` checks the page lists and opens the items)
 - Modify: `prv/db/index.js` (`ReviewItem.kind`, `video_id`), `lib/schema.js` (ALTERs), `prv/repository/review.js` (`hydrate` exposes `kind`, `video_id`)
 - Create: `test/fixtures/ai/*.judge.json`
 - Modify: `test/e2e.js`
@@ -495,14 +494,14 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] every flag default leaves the product as before the plan (fresh e2e run with no `AI_*` env: identical behaviour, the only diff is the `views` param accepted) (e2e `ai defaults`: an app started without any `AI_*` / `YTDLP_BIN` / key env serves the stored human `video_calculateds.data` for a video with a live AI row, the same as the default test app, while the `AI_FIRST=on` app serves the AI row; the AI entry is 404 for votes, the human one votes as before; `ai detect` / `ai judge` exit 0 silently with a queued video and a judge-due row waiting, and clear their heartbeats; every `prv_ai_*` and review table is unchanged except `prv_ai_videos`' read-path columns. Other visible diffs besides `views`: that upsert, the `source` label on `video_calculated_lookup_total`, yt-dlp in the image)
 - [x] the full path in one e2e scenario: `views` request → detect → served → vote → undo → judge `withdraw` → review item → `sponsor` verdict → served again → admin withdraw → human path (e2e `ai full path`, fixtures `-1_456000601.*`; the queue tick, not the manual run; `published_at` backdated 25 h for the judge's first-judgement wait; the vote's rating survives the withdraw and the restore)
 - [x] run full test suite: `make test-unit && go test ./calculator ./ai/... && make test-e2e` (locally `./calculator` with `-run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, the integration test needs the CI DB; e2e 175 of 175)
-- [x] `go vet ./...`, no video ids in tracked files (fixtures use placeholder ids like `-1_456000001`) (vet clean; the branch adds only `-1_456…` placeholders. ⚠️ 6 real-looking prv ids predate this plan (2026-10-15/17): the review-sheet fixtures and their tests, `test/e2e.js`, one completed plan, one backlog item; left as they are, Task 11 lists them in `docs/backlog/`)
+- [x] `go vet ./...`, no video ids in tracked files (fixtures use placeholder ids like `-1_456000001`) (vet clean; the branch adds only `-1_456…` placeholders. ⚠️ 6 real-looking prv ids predate this plan (2026-10-15/17): the review-sheet fixtures and their tests, `test/e2e.js`, one completed plan, one backlog item; left as they are: `docs/backlog/real-video-ids-in-tracked-files.md`)
 
 ### Task 11: [Final] Update documentation
-- [ ] CLAUDE.md: new binary, tables, flags, serving rule, judge, review `kind`, ops commands (`ai detect <native_id>`, `scripts/sync-detector.sh`), the "eval first, then sync" rule
-- [ ] eval repo README/CLAUDE.md: the product consumes `internal/detector` via copy; prompt changes land there first
-- [ ] `docs/backlog/`: items this plan leaves open (judge autonomy flag, views from old clients, phase-3 plan pointer, the pre-plan real video ids in tests and docs found in Task 10)
-- [ ] move this plan to `docs/plans/completed/`
-- [ ] cleanup pass before commit (residue / transient state / open questions)
+- [x] CLAUDE.md: new binary, tables, flags, serving rule, judge, review `kind`, ops commands (`ai detect <native_id>`, `scripts/sync-detector.sh`), the "eval first, then sync" rule (new section "AI-first segments"; the manual run is documented with `AI_CLIENT=messages`: with the default Batches client a second manual run cannot claim the `detecting` row, so only a cron tick would resolve its batch)
+- [x] eval repo README/CLAUDE.md: the product consumes `internal/detector` via copy; prompt changes land there first (eval `92e89b5`)
+- [x] `docs/backlog/`: items this plan leaves open (`ai-judge-autonomy-flag.md`, `ai-views-from-clients.md`, `ai-timeline-phase-3.md`, `ai-detect-failed-videos-alert-window.md`, `real-video-ids-in-tracked-files.md`; the last one also lists `docs/plans/completed/20261015-assessor-review-page.md`, which repeats a fixture id)
+- [x] move this plan to `docs/plans/completed/`
+- [x] cleanup pass before commit (residue / transient state / open questions) (➕ CI's Go unit test step now runs `./ai/...` too, it ran only `./calculator`)
 
 ## Post-Completion
 
@@ -524,11 +523,12 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
   (set the repository variable, then Run workflow with `image_tag` = the running sha: no build,
   only the container swap).
 - Later: `AI_JUDGE_AUTO_WITHDRAW` stays on; a judge-closes-cases flag only after the review
-  verdicts show the judge's `withdraw` precision over a few weeks.
+  verdicts show the judge's `withdraw` precision over a few weeks (`docs/backlog/ai-judge-autonomy-flag.md`).
 
 **External system updates**
 - Extension (`~/Web/native-ad-skip`): send `views` (from the page counter) on `GET /video-calculated`;
-  until released, the server fallback (requests + yt-dlp `view_count`) carries the trigger.
+  until released, the server fallback (requests + yt-dlp `view_count`) carries the trigger
+  (`docs/backlog/ai-views-from-clients.md`).
   Planned next client signals (seeks / timeline clicks, views) feed `prv_ai_videos` and the judge
   the same way: new event types in `POST /events`, new counters in `signals.go`.
 - Eval repo: the judge prompt and the detector prompt are iterated there against the review
@@ -545,7 +545,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - Subtitle readiness: 10 fresh videos polled hourly for 3 days → the 6 h / 24 h / 72 h retry schedule.
 - Views: the counter in the prv page DOM, `info.json` `view_count` for prv.
 
-**Timeline spike (deferred from Task 9, owner runs it; the phase-3 plan starts from its note)**
+**Timeline spike (deferred from Task 9, owner runs it; the phase-3 plan starts from its note; `docs/backlog/ai-timeline-phase-3.md`)**
 - Where: the prod host or a VM of the same size (2 vCPU / 4 GB), host-only tools, nothing in the image.
 - Script: `scripts/timeline-spike/` (`README.md` with the install steps, `measure.py` =
   `~/Web/data/audit/audit.py` with whisper.cpp `small`, Russian, instead of its current ASR);
@@ -558,7 +558,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
   (bisection for steps, re-timing through `Resolve`, judge input).
 
 **Manual verification**
-- Prod: `ai detect <native_id>` on one known video; `docker logs` lines; `/metrics` gauges;
+- Prod: `AI_CLIENT=messages ai detect <native_id>` on one known video (inside the app container, under `flock /tmp/ai-detect.lock`); `docker logs` lines; `/metrics` gauges;
   `/admin/video/:id` block; a vote from the extension on an AI segment; `AI_FIRST=off` round trip.
 
 ## Open questions
@@ -570,6 +570,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - Timing gate threshold: 3 s (eval) vs 2 s; the spike's readiness data and week 1 counts decide.
 - `CalculatorFailedVideos` (`for: 3m`, sized for the one-minute calculator) fires on a single
   failed `ai detect` tick (every 5 min; one yt-dlp error counts as a failed video): keep it, or
-  give the ai providers a longer `for` once week 1 shows how often yt-dlp fails.
+  give the ai providers a longer `for` once week 1 shows how often yt-dlp fails
+  (`docs/backlog/ai-detect-failed-videos-alert-window.md`).
 - Judge model: Sonnet 5.5 is the default; if the review verdicts show it withdraws good segments,
   try Opus 5.5 on the judge only (small context, few calls).
