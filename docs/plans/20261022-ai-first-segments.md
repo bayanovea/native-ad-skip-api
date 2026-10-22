@@ -294,8 +294,7 @@ Key decisions:
 - Secrets: `ANTHROPIC_API_KEY` (GitHub secret → `docker-compose.yml` env of `app`); the key is
   read from the env only (the eval's `apiKeyPath` file lookup is dropped in the copy).
 - Flags (env, defaults in parentheses): `AI_FIRST` (off), `AI_DETECT_ENABLED` (off),
-  `AI_JUDGE_ENABLED` (off), `AI_JUDGE_AUTO_WITHDRAW` (on), `AI_MIN_VIEWS` (open question, start
-  10000), `AI_FALLBACK_REQUESTS` (3), `AI_DAILY_BUDGET_VIDEOS` (200 ≈ $5/day), `AI_BATCH_MAX`
+  `AI_JUDGE_ENABLED` (off), `AI_JUDGE_AUTO_WITHDRAW` (on), `AI_MIN_VIEWS` (10000, owner 2026-10-22), `AI_FALLBACK_REQUESTS` (3), `AI_DAILY_BUDGET_VIDEOS` (200 ≈ $5/day), `AI_BATCH_MAX`
   (100), `AI_MODEL`, `AI_JUDGE_MODEL`, `AI_CLIENT` (anthropic | fixture), `YTDLP_BIN`.
 
 ### Phase 3 design (audio drift) — built in a separate plan
@@ -475,7 +474,7 @@ Key decisions:
 
 **Deploy order and rollout**
 - Secrets: `ANTHROPIC_API_KEY` in GitHub Actions → compose env. Deploy with every `AI_*` flag off.
-- Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS` high (owner picks N): the
+- Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS=10000`: the
   detector publishes, nobody is served; compare `prv_ai_video_calculateds` with the human
   segments on the same videos from the DB (precision check on live data, no viewer affected).
 - Week 2: `AI_FIRST=on` + `AI_JUDGE_ENABLED=on`; watch `ai_judgements_total`, the review
@@ -502,7 +501,6 @@ Key decisions:
 
 ## Open questions
 
-- `AI_MIN_VIEWS` (N): the owner's number; it sets the daily cost with the budget cap.
 - Should a video with human markups *before* the detector runs be detected at all? This plan
   says yes (AI-first), the judge sees the markups as signals; the alternative (skip videos that
   already have ≥ 2 human markups with authors of rating ≥ 0) saves money and respects proven
