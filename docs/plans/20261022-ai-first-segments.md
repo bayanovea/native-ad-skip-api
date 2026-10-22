@@ -492,15 +492,15 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] no product code path changes; `make test-e2e` unaffected
 
 ### Task 10: Verify acceptance criteria
-- [ ] every flag default leaves the product as before the plan (fresh e2e run with no `AI_*` env: identical behaviour, the only diff is the `views` param accepted)
-- [ ] the full path in one e2e scenario: `views` request → detect → served → vote → undo → judge `withdraw` → review item → `sponsor` verdict → served again → admin withdraw → human path
-- [ ] run full test suite: `make test-unit && go test ./calculator ./ai/... && make test-e2e`
-- [ ] `go vet ./...`, no video ids in tracked files (fixtures use placeholder ids like `-1_456000001`)
+- [x] every flag default leaves the product as before the plan (fresh e2e run with no `AI_*` env: identical behaviour, the only diff is the `views` param accepted) (e2e `ai defaults`: an app started without any `AI_*` / `YTDLP_BIN` / key env serves the stored human `video_calculateds.data` for a video with a live AI row, the same as the default test app, while the `AI_FIRST=on` app serves the AI row; the AI entry is 404 for votes, the human one votes as before; `ai detect` / `ai judge` exit 0 silently with a queued video and a judge-due row waiting, and clear their heartbeats; every `prv_ai_*` and review table is unchanged except `prv_ai_videos`' read-path columns. Other visible diffs besides `views`: that upsert, the `source` label on `video_calculated_lookup_total`, yt-dlp in the image)
+- [x] the full path in one e2e scenario: `views` request → detect → served → vote → undo → judge `withdraw` → review item → `sponsor` verdict → served again → admin withdraw → human path (e2e `ai full path`, fixtures `-1_456000601.*`; the queue tick, not the manual run; `published_at` backdated 25 h for the judge's first-judgement wait; the vote's rating survives the withdraw and the restore)
+- [x] run full test suite: `make test-unit && go test ./calculator ./ai/... && make test-e2e` (locally `./calculator` with `-run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, the integration test needs the CI DB; e2e 175 of 175)
+- [x] `go vet ./...`, no video ids in tracked files (fixtures use placeholder ids like `-1_456000001`) (vet clean; the branch adds only `-1_456…` placeholders. ⚠️ 6 real-looking prv ids predate this plan (2026-10-15/17): the review-sheet fixtures and their tests, `test/e2e.js`, one completed plan, one backlog item; left as they are, Task 11 lists them in `docs/backlog/`)
 
 ### Task 11: [Final] Update documentation
 - [ ] CLAUDE.md: new binary, tables, flags, serving rule, judge, review `kind`, ops commands (`ai detect <native_id>`, `scripts/sync-detector.sh`), the "eval first, then sync" rule
 - [ ] eval repo README/CLAUDE.md: the product consumes `internal/detector` via copy; prompt changes land there first
-- [ ] `docs/backlog/`: items this plan leaves open (judge autonomy flag, views from old clients, phase-3 plan pointer)
+- [ ] `docs/backlog/`: items this plan leaves open (judge autonomy flag, views from old clients, phase-3 plan pointer, the pre-plan real video ids in tests and docs found in Task 10)
 - [ ] move this plan to `docs/plans/completed/`
 - [ ] cleanup pass before commit (residue / transient state / open questions)
 

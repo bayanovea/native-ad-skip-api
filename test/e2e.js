@@ -83,15 +83,13 @@ async function loadCats(prefix) {
 
 // ── Server helpers ────────────────────────────────────────────────────────────
 
+// An env value of undefined drops the variable.
 function startServer(port = E2E_PORT, env = {}, tag = 'server') {
+    const e = { ...process.env, DB_NAME: TEST_DB, NODE_APP_PORT: String(port), ...env };
+    for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
     const proc = spawn('node', ['server.js'], {
         cwd: APP_DIR,
-        env: {
-            ...process.env,
-            DB_NAME: TEST_DB,
-            NODE_APP_PORT: String(port),
-            ...env,
-        },
+        env: e,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     proc.stdout.on('data', d => process.stdout.write(`[${tag}] ${d}`));
@@ -1545,6 +1543,125 @@ test('ai review: keep verdicts restore a judge-withdrawn row once every entry is
         assert.equal(r.withdrawn_by, by);
         assert.equal((await aiVideo(vid)).status, 'withdrawn');
         assert.equal((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).status, 204, `${by}: no AI row served`);
+    }
+});
+
+// ── Acceptance (Task 10): the whole AI path in one scenario, and every flag at its default ──
+
+const entryTuples = body => body.map(({ category_id, start, end, rating }) => [category_id, start, end, rating]);
+
+test('ai full path: views request → detect → served → vote → undo → judge withdraw → review item → sponsor → served again → admin withdraw → human path', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000601';
+    const sp = cats.prv.sponsor;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'full-path-human', category_id: sp,
+        duration: 600, data: { intervals: [{ start: 100, end: 120 }] } });
+    runCalc('prv');
+    const human = [[sp, 100, 120, undefined]];
+    const served = async () => entryTuples((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).body);
+
+    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600, views: 50000 });
+    assert.deepEqual(entryTuples(res.body), human, 'not detected yet: the human path');
+    assert.deepEqual([(await waitAiVideo(vid, 1)).status, (await aiVideo(vid)).views_max], ['seen', 50000]);
+
+    // A huge fallback keeps rows that earlier tests requested without views out of this tick.
+    let r = runAi(['detect'], { AI_FALLBACK_REQUESTS: '1000000' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout + r.stderr, /ai detect: -1_456000601 published: 1 entries of 3 segments/);
+    const videoId = await prvVideoId(vid);
+    assert.equal((await aiCalculated(vid)).video_id, videoId, 'the human markup’s videos row');
+    assert.deepEqual(await served(), [[sp, 30, 70, undefined]]);
+
+    res = await requestOn(AI_PORT, 'POST', '/vote', { video_id: vid, user_id: 'full-path-voter', category_id: sp,
+        start: 30, end: 70, vote: 1, duration: 600 });
+    assert.equal(res.status, 204);
+    assert.deepEqual(await served(), [[sp, 30, 70, 1]]);
+    await postUndo(vid, 'full-path-undo', 30, 70);
+
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET published_at = NOW() - INTERVAL '25 hours' WHERE video_id = $1`, [videoId]);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const [j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.by, j.reason, j.signals.undo, j.signals.votes_up], ['withdraw', 'llm', fixtureReason(vid), 1, 1]);
+    assert.equal((await aiCalculated(vid)).withdrawn_by, 'judge');
+    assert.equal((await aiVideo(vid)).status, 'withdrawn');
+    assert.deepEqual(await served(), human, 'withdrawn by the judge: the human path');
+
+    const [it] = await aiItems(videoId);
+    assert.deepEqual([it.kind, it.start, it.end, it.proposed, it.flagged_by.at(-1)], ['ai', 30, 70, 'sponsor', 'keep: false']);
+    await takeReview(it.batch);
+    assert.equal((await decideAi(it, 'sponsor')).ai_applied, true);
+    assert.equal((await lockReview('release', it.batch, { reviewer: REVIEWER })).status, 200);
+    assert.deepEqual([(await aiCalculated(vid)).withdrawn_at, (await aiVideo(vid)).status], [null, 'published']);
+    assert.deepEqual(await served(), [[sp, 30, 70, 1]], 'served again, the vote kept');
+
+    res = await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}/ai/withdraw?verifyBearerToken=${VOTE_AUTH}`);
+    assert.equal(res.status, 200);
+    assert.equal((await aiCalculated(vid)).withdrawn_by, 'admin');
+    assert.deepEqual(await served(), human, 'the operator’s switch: the human path');
+});
+
+// Every AI_* variable (and the yt-dlp / key ones) dropped, as on a deploy that sets none of them.
+const NO_AI_ENV = Object.fromEntries([...Object.keys(process.env).filter(k => k.startsWith('AI_')),
+    'AI_DETECT_ENABLED', 'YTDLP_BIN', 'ANTHROPIC_API_KEY'].map(k => [k, undefined]));
+
+// What the detector, the judge and the review hook write; prv_ai_videos without the read path's upsert columns.
+async function aiSnapshot() {
+    const snap = {};
+    for (const t of ['prv_ai_runs', 'prv_ai_video_calculateds', 'prv_ai_judgements', 'prv_ai_timelines',
+        'prv_review_items', 'prv_review_verdicts', 'prv_review_batches']) snap[t] = await dbQuery(`SELECT * FROM ${t} ORDER BY 1`);
+    snap.prv_ai_videos = await dbQuery(`SELECT native_id, status, attempts, next_attempt_at, batch_id, last_error,
+        judged_at, judge_counters, first_seen_at FROM prv_ai_videos ORDER BY native_id`);
+    snap.heartbeats = await dbQuery(`SELECT * FROM calculator_heartbeats WHERE provider LIKE 'ai_%'`);
+    return snap;
+}
+
+test('ai defaults: with no AI_* env the app serves and votes as before the plan, ai detect / judge do nothing', async () => {
+    await aiFirstServer();
+    const port = 3097;
+    const plain = startServer(port, NO_AI_ENV, 'no-ai');
+    try {
+        await waitForListen(port);
+        const vid = '-1_456000602';
+        const { videoId, ai } = await aiFirstVideo(vid);
+        // Work for both commands if they ran: a queued video above AI_MIN_VIEWS, and this row due for the judge.
+        await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000603', 50000, 1)`);
+        await dbQuery(`UPDATE prv_ai_video_calculateds SET published_at = NOW() - INTERVAL '25 hours' WHERE video_id = $1`, [videoId]);
+        await postUndo(vid, 'defaults-undo', 30, 70);
+        await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
+            VALUES ('ai_detect', NOW(), NOW(), 0), ('ai_judge', NOW(), NOW(), 0)
+            ON CONFLICT (provider) DO UPDATE SET last_run_at = NOW(), last_success_at = NOW()`);
+        const before = await aiSnapshot();
+        const { requests } = await aiVideo(vid);
+
+        const stored = (await dbQuery(`SELECT data FROM video_calculateds WHERE video_id = $1`, [videoId]))[0].data;
+        for (const query of [{ v: '1', duration: 600, views: 50000 }, { v: '1', duration: 600 }, { duration: 600 }]) {
+            const res = await getCalculatedOn(port, vid, query);
+            assert.deepEqual([res.status, res.body], [200, stored], `the stored human data for ${JSON.stringify(query)}`);
+            assert.deepEqual((await getCalculatedOn(E2E_PORT, vid, query)).body, stored, 'the same as the default test app');
+        }
+        assert.deepEqual((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).body, ai, 'the AI row is live: AI_FIRST=on serves it');
+
+        const vote = (start, end) => requestOn(port, 'POST', '/vote', { video_id: vid, user_id: 'defaults-voter',
+            category_id: cats.prv.sponsor, start, end, vote: 1, duration: 600 });
+        assert.equal((await vote(30, 70)).status, 404, 'the AI entry is not served, so not votable');
+        assert.equal((await vote(100, 120)).status, 204);
+        assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 100, 120), 1);
+
+        for (const cmd of ['detect', 'judge']) {
+            const r = runAi([cmd], NO_AI_ENV);
+            assert.deepEqual([r.status, r.stdout + r.stderr], [0, ''], `ai ${cmd}: exit 0, silent`);
+        }
+
+        const row = await waitAiVideo(vid, requests + 5); // every GET with v above (the legacy ones write nothing)
+        assert.deepEqual([row.requests, row.views_max], [requests + 5, 50000], 'the read path’s upsert is the only AI write');
+        const after = await aiSnapshot();
+        assert.deepEqual(after.heartbeats, [], 'switched-off commands clear their heartbeats');
+        delete before.heartbeats;
+        delete after.heartbeats;
+        assert.deepEqual(after, before);
+    } finally {
+        plain.kill();
     }
 });
 
