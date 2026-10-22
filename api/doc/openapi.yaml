@@ -388,11 +388,13 @@ paths:
       description: |
         Replaces the user's previous vote on the segment and recomputes the segment's
         `rating` (in `prv_calculated_segments` and the matching `video_calculateds.data` entry,
-        omitted there when 0; for a video served from its AI row only that row's `data` entry,
-        and a segment the AI row does not serve is 404) from the votes table: the sum of each user's latest vote on the
-        exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
-        previous vote the user `rating` of every author whose markup has an interval with
-        the exact `(start, end)`.
+        omitted there when 0) from the votes table: the sum of each user's latest vote on the
+        exact `(category_id, start, end)`. With `AI_FIRST=on`, an active AI row and a `duration`
+        (the segments GET serves on a `match` / `backfilled` lookup), the segment comes from the
+        AI row's `data` and a segment it does not serve is 404; the AI row's matching entry is
+        recomputed on every vote. Also adjusts by the diff between the new and the previous vote
+        the user `rating` of every author whose markup has an interval with the exact
+        `(start, end)`; a vote on an AI entry moves no author's rating.
       requestBody:
         required: true
         content:
@@ -408,8 +410,9 @@ paths:
       summary: Delete a vote (Grafana-compatible)
       description: |
         Undoes the vote: deletes it, recomputes the segment's `rating` from the remaining
-        votes (`prv_calculated_segments` and `video_calculateds.data`) and reverses the change the vote
-        made to the markup authors' user `rating`. The voter's own rating is not changed.
+        votes (`prv_calculated_segments`, `video_calculateds.data` and the matching entry of the
+        video's AI row in any state) and reverses the change the vote made to the markup authors'
+        user `rating` (none for a vote on an AI entry). The voter's own rating is not changed.
       security:
         - tokenQuery: []
       parameters:
@@ -488,6 +491,21 @@ paths:
             text/html:
               schema: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /admin/video/{video_id}/ai/withdraw:
+    get:
+      tags: [Admin]
+      summary: Withdraw the video's AI row (the operator's per-video switch)
+      description: "Refuses every request when AUTH_TOKEN is unset. Sets withdrawn_by = admin; clients get the human segments again and no review verdict restores the row."
+      security:
+        - tokenQuery: []
+      parameters:
+        - { name: video_id, in: path, required: true, schema: { type: integer }, description: "videos.id" }
+      responses:
+        '200': { description: Withdrawn }
+        '400': { description: Non-numeric video id }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: No published AI row }
 
   /admin/video/{video_id}/user/{prv_user_id}:
     get:
@@ -623,7 +641,7 @@ paths:
     get:
       tags: [Admin]
       summary: Assessor review — item page
-      description: "Refuses every request when AUTH_TOKEN is unset. Needs a registered `reviewer` (HTML: 302 to the picker; JSON: 400). Without `item`: the reviewer's first open item by position, or the last item when they decided them all; open/decided and nav count the reviewer's own verdicts. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); `item.own_verdict` is the reviewer's latest verdict or null; nav entries are `{item_code, decided, player_link}`."
+      description: "Refuses every request when AUTH_TOKEN is unset. Needs a registered `reviewer` (HTML: 302 to the picker; JSON: 400). Without `item`: the reviewer's first open item by position, or the last item when they decided them all; open/decided and nav count the reviewer's own verdicts. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); `item.own_verdict` is the reviewer's latest verdict or null; `item.kind` is `sheet` or `ai` (an entry of an AI row sent by the judge) and `item.video_id` the AI row's videos.id (null for sheet items); nav entries are `{item_code, decided, player_link}`."
       security:
         - tokenQuery: []
       parameters:
@@ -649,7 +667,7 @@ paths:
     post:
       tags: [Admin]
       summary: Assessor review — append a verdict
-      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins; a verdict identical to the reviewer's own latest one is not appended again. Only the batch holder, or a reviewer who has finished the batch, may decide; the verdict on the reviewer's last open item releases their lock."
+      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins; a verdict identical to the reviewer's own latest one is not appended again. Only the batch holder, or a reviewer who has finished the batch, may decide; the verdict on the reviewer's last open item releases their lock. On an `ai` item an appended verdict is applied to the AI row in the same transaction: not_ad / unclear remove the entry (the row is withdrawn by review when none is left), sponsor / self_promotion keep it or put it back with that category; a row withdrawn by the judge or by review is served again once every entry's latest verdict, decided after the withdraw, keeps it."
       security:
         - tokenQuery: []
       requestBody:
@@ -680,6 +698,7 @@ paths:
                   flagged_by: { type: array, items: { type: string } }
                   next_item:  { type: string, nullable: true, description: "The reviewer's next open item after this one, wrapping round; null when they are done" }
                   next_player_link: { type: string, nullable: true }
+                  ai_applied: { type: boolean, description: "The AI row changed (ai items only; false otherwise)" }
         '400': { description: Invalid verdict, reviewer, comment, track_mismatch or unknown item }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { description: "The reviewer neither holds nor has finished the batch: `{reason: available | locked | closed, locked_by, message}`" }

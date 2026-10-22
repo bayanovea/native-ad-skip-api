@@ -57,5 +57,5 @@ plan run). Each one decides a constant that stays a placeholder until then.
 ## Constants (unchanged)
 
 `AI_MIN_VIEWS` 10000 (owner 2026-10-22), `AI_FALLBACK_REQUESTS` 3, `AI_DAILY_BUDGET_VIDEOS` 200,
-`AI_BATCH_MAX` 100, `AI_BATCH_MAX_AGE` 24 h, retry 6 h / 24 h / 72 h, timeline gate overrun > 3 s,
+`AI_BATCH_MAX` 100, a batch result waited for at most 24 h (a constant, not an env variable), retry 6 h / 24 h / 72 h, timeline gate overrun > 3 s,
 `AI_JUDGE_MIN_INTERVAL` 6 h.
