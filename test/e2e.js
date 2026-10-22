@@ -1256,7 +1256,7 @@ test('ai-first: votes on AI entries rate the AI row; a human segment of the vide
     assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 100, 120), 1, 'the human segment is untouched');
 });
 
-test('ai-first: a vote on an AI entry moves no author rating, even of a human interval with the same bounds; without a duration the vote takes the human path', async () => {
+test('ai-first: one interval, one vote: an AI-path vote on the bounds of a human interval rates its author and both segments; its delete reverses both', async () => {
     await aiFirstServer();
     const vid = '-1_456000304';
     const { videoId } = await aiFirstVideo(vid);
@@ -1267,23 +1267,21 @@ test('ai-first: a vote on an AI entry moves no author rating, even of a human in
     const before = await userRating('', twin);
     const vote = (userId, value, extra = { duration: 600 }) => requestOn(AI_PORT, 'POST', '/vote', {
         video_id: vid, user_id: userId, category_id: cats.prv.sponsor, start: 30, end: 70, vote: value, ...extra });
+    const ratings = async () => [(await aiData(videoId))[0].rating, await getJsonRating('', vid, cats.prv.sponsor, 30, 70),
+        (await getSegmentRow('', vid, cats.prv.sponsor, 30, 70)).rating];
 
     assert.equal((await vote('twin-voter-1', -1)).status, 204);
-    assert.equal((await aiData(videoId))[0].rating, -1);
-    assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 30, 70), 0, 'the human segment is not what was voted on');
-    assert.equal(await userRating('', twin), before, 'the AI entry is not the twin author’s interval');
-    const [{ id, ai }] = await dbQuery(`SELECT id, ai FROM votes WHERE user_id = 'twin-voter-1'`);
-    assert.equal(ai, true);
+    assert.deepEqual(await ratings(), [-1, -1, -1], 'AI entry, human JSON entry and segment row');
+    assert.equal(await userRating('', twin), before - 1, 'the AI path rates the interval’s author');
+    const [{ id }] = await dbQuery(`SELECT id FROM votes WHERE user_id = 'twin-voter-1'`);
     assert.equal((await requestOn(AI_PORT, 'GET', `/votes/${id}/delete?verifyBearerToken=${VOTE_AUTH}`)).status, 201);
-    assert.equal(await userRating('', twin), before, 'deleting it reverses nothing');
-    assert.equal((await aiData(videoId))[0].rating, undefined);
+    assert.equal(await userRating('', twin), before, 'the delete reverses it');
+    assert.deepEqual(await ratings(), [undefined, 0, 0]);
 
-    // Without a duration GET serves the human row (`no_duration`), so the vote goes there and rates the author.
+    // Without a duration GET serves the human row (`no_duration`): same interval, same effect.
     assert.equal((await vote('twin-voter-2', 1, {})).status, 204);
-    assert.equal((await dbQuery(`SELECT ai FROM votes WHERE user_id = 'twin-voter-2'`))[0].ai, false);
-    assert.equal(await getJsonRating('', vid, cats.prv.sponsor, 30, 70), 1);
+    assert.deepEqual(await ratings(), [1, 1, 1]);
     assert.equal(await userRating('', twin), before + 1);
-    assert.equal((await aiData(videoId))[0].rating, 1, 'the AI entry’s rating follows the votes table too');
 });
 
 test('ai-first: a videos row without a duration is backfilled by the player’s and its AI row served', async () => {

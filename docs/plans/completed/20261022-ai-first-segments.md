@@ -248,9 +248,12 @@ Key decisions:
   every vote and vote delete, whichever path the vote took (sum of each user's latest vote;
   `lib/segment-rating.js` has a variant that updates only the JSON, there are no
   `calculated_segments` rows for AI), so the ratings stay right through a withdraw / restore or an
-  `AI_FIRST` flip. A vote on an AI entry is stored with `votes.ai = true` and moves no markup
-  author's rating (a human interval with the same bounds is not what the voter saw); its delete
-  reverses nothing.
+  `AI_FIRST` flip. **One interval, one vote** (owner's decision, 2026-10-22): a vote belongs to
+  the `(category_id, start, end)` whatever source served it, so every vote and vote delete also
+  recomputes the human `video_calculateds` entry and `calculated_segments` row with those bounds
+  (when they exist) and adjusts the markup authors' rating exactly as a human-path vote does; a
+  vote and its delete stay symmetric with no extra column. The calculator, moderation, the review
+  signals panel and the judge already count every vote on the interval.
 - Legacy `!req.query.v` branch: unchanged (human only).
 
 ### Judge (`ai judge`)
@@ -425,7 +428,7 @@ Key decisions:
 - [x] `prv/repository/ai.js`: `withdraw(video_id, by, reason)` (used by the admin link now, the judge later) (also sets `prv_ai_videos.status = 'withdrawn'`; false when no row or already withdrawn; optional `{ transaction }`)
 - [x] `/admin/video/:video_id`: AI block (status, entries, judgements) + withdraw link (`?verifyBearerToken=`) (`GET /admin/video/:id/ai/withdraw`, numeric `videos.id`, from a confirm button as the markup delete; judgements wait for their table, ➕ in Task 5)
 - [x] unit tests: `find-ai-calculated` (flag off, withdrawn, empty data), `prometheus-wrapper` label
-- [x] e2e: AI row served over an existing human `video_calculateds`; `AI_FIRST=off` serves the human one (picked: a second app with `AI_FIRST=on` on port 3098 next to the default one, same DB; the flag stays read once at boot); a vote on an AI entry updates its `rating`, the vote's author-rating path is a no-op; vote on a human segment of an AI-first video → 404; withdraw link → human path again
+- [x] e2e: AI row served over an existing human `video_calculateds`; `AI_FIRST=off` serves the human one (picked: a second app with `AI_FIRST=on` on port 3098 next to the default one, same DB; the flag stays read once at boot); a vote on an AI entry updates its `rating` (no markup author has its bounds there); vote on a human segment of an AI-first video → 404; withdraw link → human path again
 
 ### Task 5: Signals and rule-based judge
 
@@ -513,15 +516,16 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] run rows before the batch submit, a rejected submit counts an attempt; heartbeats count infrastructure failures only (`calculator.WriteHeartbeatStatus`), a yt-dlp that cannot start spends no attempt; the shared `attempts` budget documented
 - [x] judge: due again only when a negative counter grows; `ok` by rules when every entry was kept on review since the last judgement; a re-cut → `review` by rules instead of a `duration` withdraw; `parseOutput` requires one keep per entry and no `ok` with `keep: false`
 - [x] fixture clients report usage (detect cost × 0.5 for a batch checked in e2e); tests: poll not ended / poll error / failed result, expiry, submit order and rejection, `anthropicJudge` over httptest, review parts (held, started, full), the restore rule's `decided_at ≥ withdrawn_at`, a category change with votes, the manual run's failed answer
-- [x] votes: a vote on an AI entry moves no author rating (`votes.ai`, ALTER in `lib/schema.js`; its delete reverses nothing); the AI path needs a `duration` on the vote, as GET's `match` / `backfilled`; the AI row is locked in any state and its entry's rating recomputed on every vote and delete
+- [x] votes: the AI path needs a `duration` on the vote, as GET's `match` / `backfilled`; the AI row is locked in any state and its entry's rating recomputed on every vote and delete
 - [x] only prv video ids (`^-?\d+_\d+$`) reach `prv_ai_videos` (`seen()`) and the claim (query filter, `claimOne`); a fallback without `view_count` is logged
 - [x] judge review items per entry: an entry with an open ai item is skipped, the others get items (a withdrawn row can always be restored)
 - [x] the admin withdraw link refuses every request when `AUTH_TOKEN` is unset; `normalizePath` rule for it
 - [x] `ai_cost_usd_24h{kind}` gauge, `AiCostDaily` and the Grafana cost panel on it; AI gauges from four plain queries (PromQL of the rules checked with `promtool`)
 - [x] simplification: the batch client interface lives in `ai/pipeline` (Submit / Poll; `FixtureClient.Wait` dropped), `ai/pipeline/gate.go` without the dead guard and wrapper
-- [x] tests: e2e twin-author vote, `backfilled` AI serving, withdraw 400 / escaping / unset token, `applyVerdict` (not_ad on a judge-withdrawn row, re-added entry order, no AI row), `views` upper bound, non-prv id; the AI e2e tests run alone (no order dependence, no UTC-date item codes); Go: gate `overrun == 3.0`, missing `.vtt` / no cues, row withdrawn before the judge's lock, min-interval boundary, one failing video in a tick, `renderRequest` without views
+- [x] tests: `backfilled` AI serving, withdraw 400 / escaping / unset token, `applyVerdict` (not_ad on a judge-withdrawn row, re-added entry order, no AI row), `views` upper bound, non-prv id; the AI e2e tests run alone (no order dependence, no UTC-date item codes); Go: gate `overrun == 3.0`, missing `.vtt` / no cues, row withdrawn before the judge's lock, min-interval boundary, one failing video in a tick, `renderRequest` without views
 - [x] docs: CLAUDE.md (kill switch, rollback heartbeat cleanup, heartbeat providers, status writers, `AI_JUDGE_MIN_INTERVAL`, v2.2 precondition), `api/doc/openapi.yaml` (AI withdraw, `ai_applied`, ai items, vote delete), this plan's template residue
 - [x] judge baseline after a human keep: signals counted up to the latest keep verdict, so negative signals after it make the video due (a kept video with nothing newer gets one `ok` by rules that re-baselines `judged_at` / `judge_counters`); a re-cut goes to `review` by rules only when no negative counter grew, else the LLM judges (auto withdraw reachable) and the re-cut still gets review items; `duration_recut` in the items' `flagged_by`
+- [x] one interval, one vote (owner, 2026-10-22): an AI-path vote rates the authors of a human interval with the same bounds like a human-path vote, and every vote / delete recomputes both the AI entry and the human segment of the interval (AI row → `VideoCalculated` → users lock order); e2e `one interval, one vote`
 - [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion

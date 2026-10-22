@@ -45,8 +45,6 @@ module.exports = function(sequelize) {
         start: DataTypes.FLOAT,
         end: DataTypes.FLOAT,
         vote: DataTypes.SMALLINT,
-        // Cast on an AI entry (POST /vote served from prv_ai_video_calculateds): moves no author's rating.
-        ai: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     }, { tableName: 'votes' });
 
     const User = sequelize.define('user', {

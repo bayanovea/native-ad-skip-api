@@ -391,10 +391,11 @@ paths:
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. With `AI_FIRST=on`, an active AI row and a `duration`
         (the segments GET serves on a `match` / `backfilled` lookup), the segment comes from the
-        AI row's `data` and a segment it does not serve is 404; the AI row's matching entry is
-        recomputed on every vote. Also adjusts by the diff between the new and the previous vote
-        the user `rating` of every author whose markup has an interval with the exact
-        `(start, end)`; a vote on an AI entry moves no author's rating.
+        AI row's `data` and a segment it does not serve is 404. A vote belongs to the interval
+        whatever source served it: every vote recomputes the AI row's matching entry and the
+        human segment with the same bounds. Also adjusts by the diff between the new and the
+        previous vote the user `rating` of every author whose markup has an interval with the
+        exact `(start, end)`, on either path.
       requestBody:
         required: true
         content:
@@ -412,7 +413,7 @@ paths:
         Undoes the vote: deletes it, recomputes the segment's `rating` from the remaining
         votes (`prv_calculated_segments`, `video_calculateds.data` and the matching entry of the
         video's AI row in any state) and reverses the change the vote made to the markup authors'
-        user `rating` (none for a vote on an AI entry). The voter's own rating is not changed.
+        user `rating`. The voter's own rating is not changed.
       security:
         - tokenQuery: []
       parameters:

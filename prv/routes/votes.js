@@ -6,10 +6,6 @@ const handler = require('../../middleware/handler');
 const { lockVideoCalculated, recomputeSegmentRating, recomputeAiSegmentRating } = require('../../lib/segment-rating');
 const { lockAiCalculated, servesAi } = require('../../lib/find-ai-calculated');
 
-// The vote as the markup authors see it: a vote on an AI entry is about no human's interval,
-// even one with the same bounds, so it moves no author's rating.
-const authorsVote = (vote) => (vote && !vote.ai ? vote.vote : 0);
-
 module.exports = function createVoteRoutes(models, { videoRepository, userService }) {
     const router = express.Router();
     const sequelize = models.Vote.sequelize;
@@ -34,16 +30,19 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // The segment comes from what GET /video-calculated serves: the AI row
         // when it is active and the vote carries a duration (the write lookup
         // then lands within ±2 s, as a served `match` / `backfilled` does), else
-        // VideoCalculated. The row locks serialise votes on the video with each
-        // other, with a recalculation (`calculate`, `--recompute-ratings`) and
-        // with a withdraw / review change of the AI row.
+        // VideoCalculated. A vote belongs to the interval whatever source served
+        // it, so every rating of these bounds is recomputed and the authors of
+        // the interval are rated as on the human path. The row locks (AI row
+        // first) serialise votes on the video with each other, with a
+        // recalculation (`calculate`, `--recompute-ratings`) and with a
+        // withdraw / review change of the AI row.
         const found = await sequelize.transaction(async (transaction) => {
             const aiRow = await lockAiCalculated(models, video.id, { transaction });
-            const onAi = duration != null && servesAi(aiRow);
-            const calculatedVideo = onAi ? aiRow : await lockVideoCalculated(models, video.id, { transaction });
-            if (!calculatedVideo) return false;
+            const calculatedVideo = await lockVideoCalculated(models, video.id, { transaction });
+            const served = duration != null && servesAi(aiRow) ? aiRow : calculatedVideo;
+            if (!served) return false;
 
-            const segment = (calculatedVideo.data || []).find(item =>
+            const segment = (served.data || []).find(item =>
                 item.category_id === categoryId && item.start === start && item.end === end);
             if (!segment) return false;
 
@@ -60,16 +59,14 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
                 start,
                 end,
                 vote,
-                ai: onAi,
             }, { transaction });
 
             if (prevVote) await prevVote.destroy({ transaction });
 
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, { categoryId, start, end }, { transaction });
-            if (!onAi) await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
+            if (calculatedVideo) await recomputeSegmentRating(models, { videoId: video.id, categoryId, start, end }, { transaction });
 
-            await userService.updateRatingByVote({ ...voteObj.get({ plain: true }), vote: authorsVote(voteObj) },
-                { vote: authorsVote(prevVote) }, { transaction });
+            await userService.updateRatingByVote(voteObj, prevVote, { transaction });
             return true;
         });
         if (!found) { res.status(404).send('Not found'); return; }
@@ -84,8 +81,8 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
 
         // Undo what POST /vote did: the segment rating is recomputed without the
         // vote, and the authors' rating change is reversed (the voter's own
-        // rating was never touched, so it is left alone). The vote may predate
-        // the AI row, so both are recomputed; the AI row is locked before
+        // rating was never touched, so it is left alone). Every rating of the
+        // interval is recomputed, as on POST; the AI row is locked before
         // VideoCalculated (no writer takes them the other way round).
         const deleted = await sequelize.transaction(async (transaction) => {
             const aiRow = await lockAiCalculated(models, vote.video_id, { transaction });
@@ -98,7 +95,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
             if (aiRow) await recomputeAiSegmentRating(models, aiRow, segment, { transaction });
             if (calculatedVideo) await recomputeSegmentRating(models, segment, { transaction });
 
-            await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, { vote: authorsVote(vote) }, { transaction });
+            await userService.updateRatingByVote({ ...vote.get({ plain: true }), vote: 0 }, vote, { transaction });
             return true;
         });
         if (!deleted) { res.status(404).send('Vote not found'); return; }
