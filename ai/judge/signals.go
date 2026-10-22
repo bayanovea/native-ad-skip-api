@@ -63,24 +63,26 @@ type Video struct {
 // entryBounds joins a signal table to the AI entries' exact bounds.
 const entryBounds = `jsonb_to_recordset($2::jsonb) AS e(category_id int, start int, "end" int)`
 
-// collectSignals runs one query per signal; every signal with bounds counts only
-// the AI entries' exact (category_id, start, end), the key votes and events carry.
-func collectSignals(db *sql.DB, v Video, categories map[int]string, now time.Time) (Signals, error) {
-	s := Signals{Requests: v.Requests, AgeH: now.Sub(v.PublishedAt).Hours()}
+// collectSignals runs one query per signal, counting the rows created up to asOf
+// (the tick's start, or the human verdicts a judgement compares against); every
+// signal with bounds counts only the AI entries' exact (category_id, start, end),
+// the key votes and events carry.
+func collectSignals(db *sql.DB, v Video, categories map[int]string, asOf time.Time) (Signals, error) {
+	s := Signals{Requests: v.Requests, AgeH: asOf.Sub(v.PublishedAt).Hours()}
 	if v.ViewsMax.Valid {
 		s.ViewsMax = &v.ViewsMax.Int64
 	}
 	var err error
-	if s.VotesUp, s.VotesDown, err = votes(db, v); err != nil {
+	if s.VotesUp, s.VotesDown, err = votes(db, v, asOf); err != nil {
 		return s, fmt.Errorf("votes: %w", err)
 	}
-	if s.Undo, err = events(db, "prv_events_interval_undo", v); err != nil {
+	if s.Undo, err = events(db, "prv_events_interval_undo", v, asOf); err != nil {
 		return s, fmt.Errorf("undo: %w", err)
 	}
-	if s.Clicks, err = events(db, "prv_events_interval_click", v); err != nil {
+	if s.Clicks, err = events(db, "prv_events_interval_click", v, asOf); err != nil {
 		return s, fmt.Errorf("clicks: %w", err)
 	}
-	if s.humans, err = humanMarkups(db, v, categories); err != nil {
+	if s.humans, err = humanMarkups(db, v, categories, asOf); err != nil {
 		return s, fmt.Errorf("human markups: %w", err)
 	}
 	s.HumanMarkups = len(s.humans)
@@ -89,7 +91,7 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, now time.Tim
 			s.ConflictingMarkups++
 		}
 	}
-	if s.DurationVariants, s.DurationRecut, err = durationVariants(db, v); err != nil {
+	if s.DurationVariants, s.DurationRecut, err = durationVariants(db, v, asOf); err != nil {
 		return s, fmt.Errorf("duration variants: %w", err)
 	}
 	return s, nil
@@ -97,32 +99,32 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, now time.Tim
 
 // votes counts distinct users whose latest vote on an AI entry is up / down
 // (the rating rule of lib/segment-rating.js).
-func votes(db *sql.DB, v Video) (up, down int, err error) {
+func votes(db *sql.DB, v Video, asOf time.Time) (up, down int, err error) {
 	err = db.QueryRow(`SELECT COUNT(DISTINCT user_id) FILTER (WHERE vote > 0), COUNT(DISTINCT user_id) FILTER (WHERE vote < 0)
 		FROM (SELECT DISTINCT ON (vt.user_id, vt.category_id, vt.start, vt."end") vt.user_id, vt.vote
 			FROM votes vt JOIN `+entryBounds+` ON vt.category_id = e.category_id AND vt.start = e.start AND vt."end" = e."end"
-			WHERE vt.video_id = $1
+			WHERE vt.video_id = $1 AND vt."createdAt" <= $3
 			ORDER BY vt.user_id, vt.category_id, vt.start, vt."end", vt."createdAt" DESC, vt.id DESC) latest`,
-		v.VideoID, v.Data).Scan(&up, &down)
+		v.VideoID, v.Data, asOf).Scan(&up, &down)
 	return
 }
 
 // events counts undo / click events on the AI entries; events carry the native_id, not the videos row.
-func events(db *sql.DB, table string, v Video) (n int, err error) {
+func events(db *sql.DB, table string, v Video, asOf time.Time) (n int, err error) {
 	err = db.QueryRow(`SELECT COUNT(*) FROM `+table+` ev JOIN `+entryBounds+`
 		ON ev.category_id = e.category_id AND ev.start = e.start AND ev."end" = e."end"
-		WHERE ev.video_native_id = $1`, v.NativeID, v.Data).Scan(&n)
+		WHERE ev.video_native_id = $1 AND ev."createdAt" <= $3`, v.NativeID, v.Data, asOf).Scan(&n)
 	return
 }
 
 // humanMarkups lists the live human intervals on the AI row's videos row posted
 // since publish, each marked when it conflicts with the AI (see conflicts).
-func humanMarkups(db *sql.DB, v Video, categories map[int]string) ([]humanNote, error) {
+func humanMarkups(db *sql.DB, v Video, categories map[int]string, asOf time.Time) ([]humanNote, error) {
 	rows, err := db.Query(`SELECT m.category_id, i.start, i."end", COALESCE(u.rating, 0)
 		FROM markups m
 		JOIN markup_time_intervals i ON i.markup_id = m.id AND i.deleted_at IS NULL
 		LEFT JOIN users u ON u.id = m.internal_user_id
-		WHERE m.video_id = $1 AND m.deleted_at IS NULL AND m."createdAt" >= $2`, v.VideoID, v.PublishedAt)
+		WHERE m.video_id = $1 AND m.deleted_at IS NULL AND m."createdAt" >= $2 AND m."createdAt" <= $3`, v.VideoID, v.PublishedAt, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -180,22 +182,23 @@ func iou(s1, e1, s2, e2 float64) float64 {
 // the ones created after publish with a request for the native_id since: the GET
 // path records no videos row, so a request after the row appeared is the
 // closest fact to "the new cut is being watched".
-func durationVariants(db *sql.DB, v Video) (variants, recut int, err error) {
+func durationVariants(db *sql.DB, v Video, asOf time.Time) (variants, recut int, err error) {
 	err = db.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE "createdAt" > $3 AND "createdAt" < $4)
-		FROM videos WHERE native_id = $1 AND id <> $2 AND ABS(duration - $5::int) > $6`,
-		v.NativeID, v.VideoID, v.PublishedAt, v.LastSeenAt, v.Duration, durationTolerance).Scan(&variants, &recut)
+		FROM videos WHERE native_id = $1 AND id <> $2 AND ABS(duration - $5::int) > $6 AND "createdAt" <= $7`,
+		v.NativeID, v.VideoID, v.PublishedAt, v.LastSeenAt, v.Duration, durationTolerance, asOf).Scan(&variants, &recut)
 	return
 }
 
-// keptSince: every AI entry's latest review verdict keeps it and came after the
-// last judgement (prv/repository/ai.js allKept matches the items the same way).
-func keptSince(db *sql.DB, v Video) (kept bool, err error) {
-	err = db.QueryRow(`SELECT COALESCE(bool_and(COALESCE(l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3, false)), false)
+// keptSince is the latest of the verdicts when every AI entry's latest review verdict
+// keeps it and came after the last judgement, else NULL (prv/repository/ai.js allKept
+// matches the items the same way).
+func keptSince(db *sql.DB, v Video) (keptAt sql.NullTime, err error) {
+	err = db.QueryRow(`SELECT CASE WHEN bool_and(COALESCE(l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3, false)) THEN MAX(l.decided_at) END
 		FROM `+entryBounds+`
 		LEFT JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
 			WHERE i.kind = 'ai' AND i.video_id = $1 AND i.start = e.start AND i."end" = e."end"
 			ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE`,
-		v.VideoID, v.Data, v.JudgedAt.Time).Scan(&kept)
+		v.VideoID, v.Data, v.JudgedAt.Time).Scan(&keptAt)
 	return
 }
 

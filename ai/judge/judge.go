@@ -121,7 +121,7 @@ func (r *run) tick() (failed int, err error) {
 }
 
 // dueVideos lists the published non-empty rows that were judged before (judgeVideo
-// skips them unless a negative counter grew) or were published 24 h ago, so a first
+// skips them unless a negative or the re-cut counter grew, or humans kept every entry since) or were published 24 h ago, so a first
 // judgement sees a day of signals.
 func dueVideos(db *sql.DB) ([]Video, error) {
 	rows, err := db.Query(`SELECT a.video_id, a.native_id, a.data, a.published_at, v.duration,
@@ -167,23 +167,33 @@ func (r *run) judgeVideo(v Video) error {
 	if err != nil {
 		return err
 	}
-	if v.JudgedAt.Valid && !worsened(v.JudgeCounters, s.Counters) {
-		return nil
-	}
-	decision, reason := rules(s)
-	j := judgement{Decision: decision, By: "rules", Reason: reason, Review: decision == decisionReview}
-	var cues []vtt.Cue
-	if decision != decisionOK && v.JudgedAt.Valid {
-		// Humans have the last word: the signals up to their verdicts are taken as seen, so only later ones count.
-		kept, err := keptSince(r.db, v)
+	var prev Counters // what the signals are compared against; zero for a first judgement
+	if v.JudgedAt.Valid {
+		keptAt, err := keptSince(r.db, v)
 		if err != nil {
 			return err
 		}
-		if kept {
-			decision = decisionOK
-			j = judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}
+		if keptAt.Valid {
+			// Humans have the last word: the signals up to their verdicts are taken as seen, only later ones count.
+			seen, err := collectSignals(r.db, v, r.categories, keptAt.Time)
+			if err != nil {
+				return err
+			}
+			prev = seen.Counters
+		} else {
+			prev = storedCounters(v.JudgeCounters)
+		}
+		if !worsened(prev, s.Counters) {
+			if !keptAt.Valid {
+				return nil
+			}
+			// Recording it moves judged_at past the verdicts and stores the baseline later signals are compared against.
+			return r.record(v, s, judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}, nil)
 		}
 	}
+	decision, reason := rules(s, prev)
+	j := judgement{Decision: decision, By: "rules", Reason: reason, Review: decision == decisionReview}
+	var cues []vtt.Cue
 	if decision == needsLLM {
 		if v.JudgedAt.Valid && r.now.Sub(v.JudgedAt.Time) < r.cfg.MinInterval {
 			return nil // the stored counters stay, so the video is due again after the interval
@@ -194,17 +204,15 @@ func (r *run) judgeVideo(v Video) error {
 		if j, err = r.askLLM(v, s, cues); err != nil {
 			return err
 		}
+		// A re-cut that came with the negative signals still reaches a human, whatever the LLM says.
+		j.Review = j.Review || s.DurationRecut > prev.DurationRecut
 	}
 	if j.Review && cues == nil {
 		if cues, err = runCues(r.db, v.VideoID); err != nil {
 			return err
 		}
 	}
-	if err := r.record(v, s, j, cues); err != nil {
-		return err
-	}
-	log.Printf("ai judge: %d %s %s: %s", v.VideoID, j.Decision, j.By, j.Reason)
-	return nil
+	return r.record(v, s, j, cues)
 }
 
 // askLLM makes the judge's call. A transport or API error fails the video (the
@@ -289,7 +297,11 @@ func (r *run) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 		v.NativeID, counters); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("ai judge: %d %s %s: %s", v.VideoID, j.Decision, j.By, j.Reason)
+	return nil
 }
 
 func loadCategories(db *sql.DB) (map[int]string, error) {

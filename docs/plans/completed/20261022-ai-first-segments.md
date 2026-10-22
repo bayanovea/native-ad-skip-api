@@ -261,14 +261,20 @@ Key decisions:
   `clicks`, `human_markups` (live markups since `published_at`: intervals, author rating, IoU
   with every AI entry), `duration_variants`, `duration_recut`, `views_max`, `requests`, `age_h`
   (`time_saved` events carry no video, so they are not a per-video signal).
-- Rules (no call): all of `votes_down`, `undo`, conflicting `human_markups` (IoU < 0.5 with every
-  AI entry of the same category, author rating ≥ 0) are 0 → `ok`; a `videos` row with a duration
-  that differs by > 2 s appeared after publish and now receives requests → `review` by `rules`
-  (the row stays served: anyone can create such a row with one request, and the AI row reaches only
-  players of its own cut anyway). Everything else → LLM judge, if a negative counter (`votes_down`,
-  `undo`, conflicting markups, `duration_recut`) grew since `judge_counters` and `judged_at` is older
-  than `AI_JUDGE_MIN_INTERVAL`; when every entry's latest ai-item verdict keeps it and came after
-  the last judgement, `ok` by `rules` instead (humans have the last word, only later signals count).
+- Due: a judged video only when a negative counter (`votes_down`, `undo`, conflicting markups) or
+  `duration_recut` grew since its baseline: `judge_counters`, or, when every entry's latest ai-item
+  verdict keeps it and came after the last judgement, the counters as of the latest of those
+  verdicts (signals counted up to that time; humans have the last word, only later signals count).
+  A video kept that way with nothing newer is recorded `ok` by `rules` once, which moves
+  `judged_at` past the verdicts and makes the current counters its baseline.
+- Rules (no call): `duration_recut` grew and no negative counter did (a `videos` row with a
+  duration that differs by > 2 s appeared after publish and now receives requests) → `review` by
+  `rules` (the row stays served: anyone can create such a row with one request, and the AI row
+  reaches only players of its own cut anyway); all of `votes_down`, `undo`, conflicting
+  `human_markups` (IoU < 0.5 with every AI entry of the same category, author rating ≥ 0) are 0 →
+  `ok`; everything else → LLM judge, once `judged_at` is older than `AI_JUDGE_MIN_INTERVAL`, re-cut
+  or not (a bogus duration never keeps a row from the judge and its withdraw); a re-cut that grew
+  with the negative counters still sends the entries to review whatever the LLM decides.
 - LLM judge: one Messages call (`AI_JUDGE_MODEL`, default `claude-sonnet-5-5`; `AI_CLIENT=anthropic`
   and `messages` both use the Messages API here, `fixture` reads `<native_id>.judge.json`), schema
   `{decision: ok|withdraw|review, reason, segments: [{index, keep: bool}]}`, prompt
@@ -515,6 +521,7 @@ to the prod-host spike (see Post-Completion), so the next plan starts from there
 - [x] simplification: the batch client interface lives in `ai/pipeline` (Submit / Poll; `FixtureClient.Wait` dropped), `ai/pipeline/gate.go` without the dead guard and wrapper
 - [x] tests: e2e twin-author vote, `backfilled` AI serving, withdraw 400 / escaping / unset token, `applyVerdict` (not_ad on a judge-withdrawn row, re-added entry order, no AI row), `views` upper bound, non-prv id; the AI e2e tests run alone (no order dependence, no UTC-date item codes); Go: gate `overrun == 3.0`, missing `.vtt` / no cues, row withdrawn before the judge's lock, min-interval boundary, one failing video in a tick, `renderRequest` without views
 - [x] docs: CLAUDE.md (kill switch, rollback heartbeat cleanup, heartbeat providers, status writers, `AI_JUDGE_MIN_INTERVAL`, v2.2 precondition), `api/doc/openapi.yaml` (AI withdraw, `ai_applied`, ai items, vote delete), this plan's template residue
+- [x] judge baseline after a human keep: signals counted up to the latest keep verdict, so negative signals after it make the video due (a kept video with nothing newer gets one `ok` by rules that re-baselines `judged_at` / `judge_counters`); a re-cut goes to `review` by rules only when no negative counter grew, else the LLM judges (auto withdraw reachable) and the re-cut still gets review items; `duration_recut` in the items' `flagged_by`
 - [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion

@@ -111,7 +111,7 @@ func reviewBatch(tx *sql.Tx, sheet string, n int) (string, error) {
 }
 
 // flaggedBy is the item's flagged_by, a list of strings like the sheets' run ids
-// (the page and the export read a list): the judgement, its negative counters and
+// (the page and the export read a list): the judgement, its signal counters and
 // the LLM's keep for this entry. Blind until the item has a verdict.
 func flaggedBy(j judgement, s Signals, entry int) []string {
 	out := []string{fmt.Sprintf("judge %s by %s: %s", j.Decision, j.By, j.Reason)}
@@ -120,7 +120,7 @@ func flaggedBy(j judgement, s Signals, entry int) []string {
 	for _, x := range []struct {
 		name string
 		n    int
-	}{{"votes_down", c.VotesDown}, {"undo", c.Undo}, {"conflicting_markups", c.ConflictingMarkups}, {"votes_up", c.VotesUp}, {"clicks", c.Clicks}} {
+	}{{"votes_down", c.VotesDown}, {"undo", c.Undo}, {"conflicting_markups", c.ConflictingMarkups}, {"duration_recut", c.DurationRecut}, {"votes_up", c.VotesUp}, {"clicks", c.Clicks}} {
 		if x.n > 0 {
 			counters = append(counters, fmt.Sprintf("%s=%d", x.name, x.n))
 		}

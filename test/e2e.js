@@ -1488,7 +1488,7 @@ test('ai judge: the fixture LLM says ok on a conflicting markup → nothing chan
     assert.equal((await aiVideo(vid)).status, 'published');
     const [it] = await aiItems(videoId);
     assert.deepEqual([it.kind, it.start, it.end, it.cues], ['ai', 30, 70, 'Этот выпуск спонсирует сервис\nпереходите по ссылке в описании']);
-    assert.deepEqual(it.flagged_by, [`judge review by rules: ${j.reason}`, 'signals: conflicting_markups=1']);
+    assert.deepEqual(it.flagged_by, [`judge review by rules: ${j.reason}`, 'signals: conflicting_markups=1 duration_recut=1']);
 
     res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 });
     assert.deepEqual(res.body, data, 'served to the 600-s cut it was timed for');
@@ -1759,6 +1759,44 @@ test('ai full path: views request → detect → served → vote → undo → ju
     assert.equal(res.status, 200);
     assert.equal((await aiCalculated(vid)).withdrawn_by, 'admin');
     assert.deepEqual(await served(), human, 'the operator’s switch: the human path');
+});
+
+test('ai judge: a human keep is a new baseline: only later signals count, a re-cut never keeps them from the LLM and its withdraw', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000406';
+    const { videoId } = await aiPublished(vid);
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'keep-recut', category_id: cats.prv.sponsor,
+        duration: 900, data: { intervals: [{ start: 10, end: 40 }] } });
+    await getCalculated('', vid, { v: '1', duration: 900 });
+    await waitAiVideo(vid, 2);
+
+    let r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    let js = await judgements(videoId);
+    assert.deepEqual(js.map(j => [j.decision, j.by, j.reason]), [['review', 'rules', 'duration: 1 videos rows of another cut requested after publish']]);
+    const [it] = await aiItems(videoId);
+    await postUndo(vid, 'keep-u1', 30, 70); // before the verdict: the reviewer has seen it
+    await takeReview(it.batch);
+    await decideAi(it, 'sponsor');
+    assert.equal((await lockReview('release', it.batch, { reviewer: REVIEWER })).status, 200);
+
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    js = await judgements(videoId);
+    assert.deepEqual(js.map(j => [j.decision, j.by, j.reason]).at(-1), ['ok', 'rules', 'every entry kept on review since the last judgement']);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on' });
+    assert.equal((await judgements(videoId)).length, js.length, 'recorded once: judged_at moved past the verdict');
+
+    await postUndo(vid, 'keep-u2', 30, 70);
+    r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const j = (await judgements(videoId)).at(-1);
+    assert.deepEqual([j.decision, j.by, j.reason, j.signals.undo, j.signals.duration_recut], ['withdraw', 'llm', fixtureReason(vid), 2, 1],
+        'the undo after the keep reaches the LLM despite the re-cut');
+    assert.equal((await aiCalculated(vid)).withdrawn_by, 'judge');
+    const items = await aiItems(videoId);
+    assert.equal(items.length, 2, 'a new item: the first one has its verdict');
+    assert.deepEqual(items[1].flagged_by, [`judge withdraw by llm: ${j.reason}`, 'signals: undo=2 duration_recut=1', 'keep: false']);
 });
 
 test('ai judge: review items go to the day’s newest part that nobody holds or has started, within 30 items', async () => {
