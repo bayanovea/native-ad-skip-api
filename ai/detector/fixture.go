@@ -15,6 +15,8 @@ type BatchClient interface {
 	Client
 	Submit(ctx context.Context, reqs []Request) (string, error)
 	Wait(ctx context.Context, batchID string, every time.Duration, progress func(string)) error
+	// Poll checks once; true when the batch has ended and its results are loaded.
+	Poll(ctx context.Context, batchID string) (bool, error)
 }
 
 var (
@@ -71,4 +73,9 @@ func (f *FixtureClient) Wait(_ context.Context, batchID string, _ time.Duration,
 		progress("batch " + batchID + ": ended")
 	}
 	return nil
+}
+
+// Poll implements BatchClient; a fixture batch has always ended.
+func (f *FixtureClient) Poll(ctx context.Context, batchID string) (bool, error) {
+	return true, f.Wait(ctx, batchID, 0, nil)
 }

@@ -1,4 +1,4 @@
-# GoLang build: the three calculator binaries, static (CGO off) so they run in
+# GoLang build: the three calculator binaries and the AI command, static (CGO off) so they run in
 # the Node image without a Go toolchain
 FROM golang:1.27-bookworm AS go-build
 
@@ -14,7 +14,8 @@ COPY ai/ ai/
 
 RUN CGO_ENABLED=0 go build -mod=vendor -o prv/commands/calculate ./prv/commands/ && \
     CGO_ENABLED=0 go build -mod=vendor -o rt/commands/calculate ./rt/commands/ && \
-    CGO_ENABLED=0 go build -mod=vendor -o yt/commands/calculate ./yt/commands/
+    CGO_ENABLED=0 go build -mod=vendor -o yt/commands/calculate ./yt/commands/ && \
+    CGO_ENABLED=0 go build -mod=vendor -o prv/commands/ai/ai ./prv/commands/ai/
 
 # yt-dlp: the standalone release build (bundles its own Python), pinned and checksummed
 FROM golang:1.27-bookworm AS ytdlp
@@ -57,6 +58,7 @@ RUN touch /tmp/supervisor.sock && chmod 700 /tmp/supervisor.sock
 COPY --from=go-build /src/prv/commands/calculate prv/commands/calculate
 COPY --from=go-build /src/rt/commands/calculate rt/commands/calculate
 COPY --from=go-build /src/yt/commands/calculate yt/commands/calculate
+COPY --from=go-build /src/prv/commands/ai/ai prv/commands/ai/ai
 
 # Cron
 COPY crontab /etc/cron.d/my-crontab

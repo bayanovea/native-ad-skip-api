@@ -201,7 +201,8 @@ Key decisions:
   requests + 1, last_seen_at = NOW()`. Errors are logged, never returned. Only the detector
   changes `status` away from `seen`.
 - Queue rule (`ai detect`): `status = 'seen' AND (views_max ≥ AI_MIN_VIEWS OR (views_max IS NULL
-  AND requests ≥ AI_FALLBACK_REQUESTS))`, oldest `first_seen_at` first, at most
+  AND requests ≥ AI_FALLBACK_REQUESTS))`, or a due retry (`status = 'queued' AND next_attempt_at ≤ NOW()`),
+  oldest `first_seen_at` first, at most
   `AI_DAILY_BUDGET_VIDEOS` per day (counted from `prv_ai_runs`). For the fallback rows the
   detector reads `view_count` from yt-dlp `info.json` and applies `AI_MIN_VIEWS` to it before
   fetching subtitles (sets `views_max` from it, so the row is not re-examined).
@@ -297,7 +298,8 @@ Key decisions:
   read from the env only (the eval's `apiKeyPath` file lookup is dropped in the copy).
 - Flags (env, defaults in parentheses): `AI_FIRST` (off), `AI_DETECT_ENABLED` (off),
   `AI_JUDGE_ENABLED` (off), `AI_JUDGE_AUTO_WITHDRAW` (on), `AI_MIN_VIEWS` (10000, owner 2026-10-22), `AI_FALLBACK_REQUESTS` (3), `AI_DAILY_BUDGET_VIDEOS` (200 ≈ $5/day), `AI_BATCH_MAX`
-  (100), `AI_MODEL`, `AI_JUDGE_MODEL`, `AI_CLIENT` (anthropic | fixture), `YTDLP_BIN`.
+  (100), `AI_MODEL`, `AI_JUDGE_MODEL`, `AI_CLIENT` (anthropic = Batches API | messages | fixture), `YTDLP_BIN`,
+  `AI_PROMPT` (`/app/ai/prompts/v2.2.md`), `AI_FIXTURE_DIR` (`/app/test/fixtures/ai`).
 
 ### Phase 3 design (audio drift) — built in a separate plan
 
@@ -362,21 +364,21 @@ Key decisions:
 ### Task 3: `ai detect`: queue → fetch → gate → detect → publish
 
 **Files:**
-- Create: `prv/commands/ai/main.go` (subcommands `detect [native_id]`, `judge`; flags from env), `ai/pipeline/detect.go`, `ai/pipeline/queue.go`, `ai/pipeline/gate.go`, `ai/pipeline/publish.go`, `ai/pipeline/*_test.go` (sqlmock, as `calculator/`)
-- Modify: `prv/db/index.js` (`AiRun`, `AiVideoCalculated` models), `lib/schema.js`, `crontab`, `Dockerfile`, `supervisord.conf` only if needed
+- Create: `prv/commands/ai/main.go` (subcommand `detect [native_id]`, Task 5 adds `judge`; flags from env), `ai/pipeline/detect.go`, `ai/pipeline/queue.go`, `ai/pipeline/gate.go`, `ai/pipeline/publish.go`, `ai/pipeline/*_test.go` (sqlmock, as `calculator/`)
+- Modify: `prv/db/index.js` (`AiRun`, `AiVideoCalculated` models; new tables, so `lib/schema.js` needs nothing), `crontab`, `Dockerfile`, `infrastructure/init/init_env.sh`, `docker-compose.yml`, `calculator/calculate.go` (`WriteHeartbeat` exported); `supervisord.conf` not needed
 - Create: `test/fixtures/ai/yt-dlp-stub.sh`, `test/fixtures/ai/*.info.json`, `*.ru.vtt`, `*.detect.json`
 - Modify: `test/e2e.js`, `docker-compose.e2e.yml` (`AI_*` env, `YTDLP_BIN`)
 
-- [ ] queue selection (`queue.go`): the rule from Technical Details, daily budget from `prv_ai_runs`, `FOR UPDATE SKIP LOCKED` on the `prv_ai_videos` row, status `fetching`
-- [ ] fetch (`detect.go`): `ytdlp.Info` → fallback views check → `PickTrack` → `WriteSubs` → collapse; no track → retry schedule / `no_track`; yt-dlp failure → `failed` with `last_error` after 3 attempts
-- [ ] gate (`gate.go`): overrun and duration-variants, `findByNativeIdAndDuration` port (same SQL as `prv/repository/video.js`, create when missing), `timeline_unreliable`
-- [ ] detect: request as the held-out run; batch submit / poll by `batch_id`; `prv_ai_runs` row with transcript, raw output, usage, cost (`detector.Price`)
-- [ ] publish (`publish.go`): thresholds, category ids by name, `prv_ai_video_calculateds` upsert (`published_at`, `withdrawn_at = NULL`), status `published`; no entry survives the thresholds → status `published` with empty `data` (the video is done, nothing to skip; serving treats empty as no AI row)
-- [ ] heartbeat row `ai_detect`; exit 1 when any video failed in the tick, as the calculator
-- [ ] crontab: `*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1` (the binary sits next to its `main.go`, as `calculate` does; `/app/prv/commands/ai` is the source directory), gated by `AI_DETECT_ENABLED` inside the binary (exit 0 silently when off)
-- [ ] unit tests (sqlmock): queue rule incl. budget and fallback, retry schedule, gate decisions (overrun 2.9 / 3.1, duration variants), threshold filter, category mapping error
-- [ ] e2e: stub yt-dlp + fixture client; one video → `published` with the expected entries; one without a ru track → `next_attempt_at` set; one with overrun 10 s → `timeline_unreliable`, no AI row; `ai detect <native_id>` single-video mode; heartbeat on `/metrics`
-- [ ] run `make test-e2e` and `go test ./ai/...` — must pass before task 4
+- [x] queue selection (`queue.go`): the rule from Technical Details, daily budget from `prv_ai_runs`, `FOR UPDATE SKIP LOCKED` on the `prv_ai_videos` row, status `fetching` (budget = runs in the last 24 h, rolling; the lock is held for the claim only, so the read path's upsert never waits on yt-dlp; a `fetching` row untouched for 1 h, a crashed tick, is claimed again)
+- [x] fetch (`detect.go`): `ytdlp.Info` → fallback views check → `PickTrack` → `WriteSubs` → collapse; no track → retry schedule / `no_track`; yt-dlp failure → `failed` with `last_error` after 3 attempts (a retry waits as status `queued` with `next_attempt_at`; both cases count `attempts`, a yt-dlp failure waits 6 h / 24 h; `view_count` is read from the raw info JSON, a missing count is 0)
+- [x] gate (`gate.go`): overrun and duration-variants, `findByNativeIdAndDuration` port (same SQL as `prv/repository/video.js`, create when missing), `timeline_unreliable` (the overrun check runs first, so a refused video gets no `videos` row)
+- [x] detect: request as the held-out run; batch submit / poll by `batch_id`; `prv_ai_runs` row with transcript, raw output, usage, cost (`detector.Price`) (effort `medium`, `NoTimes`, no thinking; batch cost × 0.5 as the eval; the run row is written at submit and gets the answer when the batch ends; a tick submits, then polls every waiting batch once, so a fixture batch publishes in the same tick; eval `e7710d0` adds `AnthropicBatch.Poll`, `BatchClient` and `FixtureClient` have it)
+- [x] publish (`publish.go`): thresholds, category ids by name, `prv_ai_video_calculateds` upsert (`published_at`, `withdrawn_at = NULL`), status `published`; no entry survives the thresholds → status `published` with empty `data` (the video is done, nothing to skip; serving treats empty as no AI row) (bounds are whole seconds inside the predicted span: start up, end down; the length floor applies after that)
+- [x] heartbeat row `ai_detect`; exit 1 when any video failed in the tick, as the calculator (`calculator.WriteHeartbeat` exported; `ai detect <native_id>` is a manual run: it ignores `AI_DETECT_ENABLED`, views and budget, and writes no heartbeat, so a manual run never feeds the cron's alert)
+- [x] crontab: `*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1` (the binary sits next to its `main.go`, as `calculate` does; `/app/prv/commands/ai` is the source directory), gated by `AI_DETECT_ENABLED` inside the binary (exit 0 silently when off) (cron sees only `/app/.env`: `init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY` there; `docker-compose.yml` passes `AI_DETECT_ENABLED` (default `off`), `AI_MIN_VIEWS`, `AI_DAILY_BUDGET_VIDEOS`, `ANTHROPIC_API_KEY`)
+- [x] unit tests (sqlmock): queue rule incl. budget and fallback, retry schedule, gate decisions (overrun 2.9 / 3.1, duration variants), threshold filter, category mapping error (also `findOrCreateVideo`'s three branches and the env defaults)
+- [x] e2e: stub yt-dlp + fixture client; one video → `published` with the expected entries; one without a ru track → `next_attempt_at` set; one with overrun 10 s → `timeline_unreliable`, no AI row; `ai detect <native_id>` single-video mode; heartbeat on `/metrics` (also: off by default, no key with `AI_CLIENT=anthropic` → exit 1, the fallback rows both ways, empty publish, a yt-dlp failure → `queued` + exit 1 + `failed_videos`)
+- [x] run `make test-e2e` and `go test ./ai/...` — must pass before task 4
 
 ### Task 4: AI-first serving, votes on AI segments, kill switch
 
@@ -476,6 +478,9 @@ Key decisions:
 
 **Deploy order and rollout**
 - Secrets: `ANTHROPIC_API_KEY` in GitHub Actions → compose env. Deploy with every `AI_*` flag off.
+  `.github/workflows/deploy.yml` does not export `ANTHROPIC_API_KEY` or any `AI_*` to the remote
+  compose yet (Task 3 wired `docker-compose.yml` and `init_env.sh` only): add them to its
+  `printf 'export …'` list before week 1.
 - Week 1: `AI_DETECT_ENABLED=on`, `AI_FIRST=off`, `AI_MIN_VIEWS=10000`: the
   detector publishes, nobody is served; compare `prv_ai_video_calculateds` with the human
   segments on the same videos from the DB (precision check on live data, no viewer affected).

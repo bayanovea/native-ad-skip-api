@@ -32,6 +32,10 @@ services:
       AUTH_TOKEN: test_token
       GOPATH: /go
       APP_DIR: /app
+      # ai detect: canned yt-dlp and model answers (test/fixtures/ai); test/e2e.js turns AI_DETECT_ENABLED on per run
+      YTDLP_BIN: /app/test/fixtures/ai/yt-dlp-stub.sh
+      AI_CLIENT: fixture
+      AI_FIXTURE_DIR: /app/test/fixtures/ai
     command: node --test test/e2e.js test/moderation-resolver.test.js test/review-export.test.js
     networks:
       - e2e-network

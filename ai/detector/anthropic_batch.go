@@ -109,6 +109,25 @@ func (b *AnthropicBatch) Wait(ctx context.Context, batchID string, every time.Du
 		case <-time.After(every):
 		}
 	}
+	return b.load(ctx, batchID)
+}
+
+// Poll checks the batch once and, when it has ended, loads every result as Wait
+// does. It reports whether the batch has ended; a caller that runs on a schedule
+// (the product's cron) calls it again on its next tick instead of blocking.
+func (b *AnthropicBatch) Poll(ctx context.Context, batchID string) (bool, error) {
+	batch, err := b.client.Messages.Batches.Get(ctx, batchID, anthropic.MessageBatchGetParams{})
+	if err != nil {
+		return false, err
+	}
+	if batch.ProcessingStatus != anthropic.MessageBatchProcessingStatusEnded {
+		return false, nil
+	}
+	return true, b.load(ctx, batchID)
+}
+
+// load reads the results of an ended batch into b.results.
+func (b *AnthropicBatch) load(ctx context.Context, batchID string) error {
 	stream := b.client.Messages.Batches.ResultsStreaming(ctx, batchID, anthropic.MessageBatchResultsParams{})
 	defer stream.Close()
 	b.mu.Lock()

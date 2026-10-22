@@ -944,13 +944,134 @@ test('ai: a request without views leaves views_max NULL; the legacy branch and b
     assert.equal(await waitAiVideo(legacy, 1), null);
 });
 
-// RT: GET must not create a Video row when the video doesn't exist
 test('ai: the image carries the pinned yt-dlp', () => {
     const r = spawnSync('yt-dlp', ['--version'], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout.trim(), '2026.10.21');
 });
 
+// ── AI detect (prv/commands/ai): stub yt-dlp and fixture model answers ─────────
+
+// docker-compose.e2e.yml points YTDLP_BIN and AI_CLIENT=fixture at test/fixtures/ai; an env value of undefined drops the variable.
+function runAi(args, env = {}) {
+    const e = { ...process.env, DB_NAME: TEST_DB, AI_DETECT_ENABLED: 'on', ...env };
+    for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
+    return spawnSync(`${APP_DIR}/prv/commands/ai/ai`, args, { env: e, encoding: 'utf8', timeout: 30000 });
+}
+
+async function aiVideo(nativeId) {
+    return (await dbQuery('SELECT * FROM prv_ai_videos WHERE native_id = $1', [nativeId]))[0];
+}
+
+async function aiCalculated(nativeId) {
+    return (await dbQuery('SELECT * FROM prv_ai_video_calculateds WHERE native_id = $1', [nativeId]))[0] || null;
+}
+
+test('ai detect: off by default; AI_CLIENT=anthropic without a key is a startup error', async () => {
+    await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 50000, 1)`);
+
+    let r = runAi(['detect'], { AI_DETECT_ENABLED: undefined });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout + r.stderr, '', 'silent when off');
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+    assert.equal(await heartbeat('ai_detect'), null);
+
+    r = runAi(['detect'], { AI_CLIENT: 'anthropic', ANTHROPIC_API_KEY: undefined });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /ANTHROPIC_API_KEY is not set/);
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+});
+
+test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /metrics', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES
+        ('-1_456000202', 50000, 1), ('-1_456000203', 50000, 1), ('-1_456000204', 5, 1),
+        ('-1_456000205', NULL, 3), ('-1_456000206', NULL, 4)`);
+    await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES
+        ('-1_456000201', 601, NOW(), NOW()), ('-1_456000201', 900, NOW(), NOW())`);
+    const [{ id: videoId }] = await dbQuery(`SELECT id FROM videos WHERE native_id = '-1_456000201' AND duration = 601`);
+    const before = Date.now() - 1000;
+
+    const r = runAi(['detect']);
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+
+    // Only the sponsor at high passes: self-promotion at medium and a 3-s sponsor are dropped.
+    let v = await aiVideo('-1_456000201');
+    assert.deepEqual([v.status, v.batch_id, v.last_error], ['published', null, null]);
+    assert.deepEqual(v.judge_counters, { duration_variants: 1 });
+    const ai = await aiCalculated('-1_456000201');
+    assert.equal(ai.video_id, videoId, 'keyed by the videos row within ±2 s of yt-dlp’s 600.4 s');
+    assert.deepEqual(ai.data, [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }]);
+    assert.equal(ai.withdrawn_at, null);
+    const [run] = await dbQuery(`SELECT * FROM prv_ai_runs WHERE native_id = '-1_456000201'`);
+    assert.equal(ai.run_id, run.id);
+    assert.deepEqual([run.video_id, run.model, run.prompt_version], [videoId, 'claude-sonnet-5-5', 'v2.2']);
+    assert.match(run.prompt_sha, /^[0-9a-f]{64}$/);
+    assert.equal(run.transcript.cues.length, 10);
+    assert.equal(run.transcript.meta.track_type, 'auto');
+    assert.ok(Math.abs(run.track_overrun_s - 0.6) < 1e-9, `overrun ${run.track_overrun_s}`);
+    assert.equal(run.yt_duration_s, 600.4);
+    assert.equal(run.raw_output.segments.length, 3);
+    assert.equal(run.cost_usd, 0, 'the fixture client reports no usage');
+    assert.match(out, /ai: duration variants: -1_456000201 has 1 videos rows/);
+    assert.match(out, /ai detect: -1_456000201 published: 1 entries of 3 segments/);
+
+    v = await aiVideo('-1_456000202');
+    assert.deepEqual([v.status, v.attempts], ['queued', 1], 'no ru track: retried later');
+    const wait = v.next_attempt_at.getTime() - Date.now();
+    assert.ok(wait > 5.9 * 3600e3 && wait <= 6 * 3600e3, `next attempt in ${wait} ms`);
+
+    v = await aiVideo('-1_456000203');
+    assert.equal(v.status, 'timeline_unreliable');
+    assert.match(v.last_error, /last cue ends 10\.0 s after the video/);
+    assert.equal(await aiCalculated('-1_456000203'), null);
+    assert.equal(await countVideos('', '-1_456000203'), 0);
+
+    assert.equal((await aiVideo('-1_456000204')).status, 'seen', 'below AI_MIN_VIEWS: not taken');
+    v = await aiVideo('-1_456000205');
+    assert.deepEqual([v.status, v.views_max], ['seen', 120], 'fallback: yt-dlp’s view_count is below the minimum');
+    v = await aiVideo('-1_456000206');
+    assert.deepEqual([v.status, v.views_max], ['published', 20000], 'fallback: enough views');
+    assert.deepEqual((await aiCalculated('-1_456000206')).data, [], 'nothing passed the thresholds: published empty');
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs`))[0].n, 2, 'one run per detected video');
+
+    const hb = await heartbeat('ai_detect');
+    assert.equal(hb.failed_videos, 0);
+    assert.ok(hb.last_run_at.getTime() >= before, `last_run_at ${hb.last_run_at}`);
+    assert.match(await fetchMetrics(), /^calculator_last_success_timestamp_seconds\{provider="ai_detect"\} \d/m);
+});
+
+test('ai detect <native_id>: the manual run ignores views and the switch, creates the videos row, writes no heartbeat', async () => {
+    const hb = await heartbeat('ai_detect');
+    const r = runAi(['detect', '-1_456000204'], { AI_DETECT_ENABLED: undefined });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await aiVideo('-1_456000204')).status, 'published');
+    const ai = await aiCalculated('-1_456000204');
+    assert.deepEqual(ai.data, [{ category_id: cats.prv.self_promotion, start: 20, end: 45, confidence: 'high', source: 'ai' }]);
+    const videos = await dbQuery(`SELECT id, duration FROM videos WHERE native_id = '-1_456000204'`);
+    assert.deepEqual(videos, [{ id: ai.video_id, duration: 300 }]);
+    assert.deepEqual(await heartbeat('ai_detect'), hb);
+
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'detecting' WHERE native_id = '-1_456000204'`);
+    const busy = runAi(['detect', '-1_456000204']);
+    assert.equal(busy.status, 1);
+    assert.match(busy.stderr, /-1_456000204 is already being fetched or detected/);
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'published' WHERE native_id = '-1_456000204'`);
+});
+
+test('ai detect: a yt-dlp failure is retried later, counted in the heartbeat, and the tick exits 1', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000207', 50000, 1)`);
+    const r = runAi(['detect']);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: -1_456000207 queued after fetch attempt 1: .*This video is unavailable/);
+    const v = await aiVideo('-1_456000207');
+    assert.deepEqual([v.status, v.attempts], ['queued', 1]);
+    assert.match(v.last_error, /This video is unavailable/);
+    assert.equal((await heartbeat('ai_detect')).failed_videos, 1);
+});
+
+// RT: GET must not create a Video row when the video doesn't exist
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';
     const res = await getCalculated('rt', vid, { duration: 300 });

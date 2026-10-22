@@ -27,6 +27,11 @@ services:
       - NODE_APP_PORT=${NODE_APP_PORT}
       - AUTH_TOKEN=${AUTH_TOKEN}
       - HOST_IP=${HOST_IP}
+      # AI detection (prv/commands/ai): off unless the deploy env turns it on
+      - AI_DETECT_ENABLED=${AI_DETECT_ENABLED:-off}
+      - AI_MIN_VIEWS=${AI_MIN_VIEWS:-}
+      - AI_DAILY_BUDGET_VIDEOS=${AI_DAILY_BUDGET_VIDEOS:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
   prometheus:
     image: prom/prometheus:v2.45.2
     restart: unless-stopped

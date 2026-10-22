@@ -221,6 +221,36 @@ module.exports = function(sequelize) {
         updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_videos', timestamps: false });
 
+    // One row per detector call (ai/pipeline): written at submit, the model's answer added when it comes back.
+    const AiRun = sequelize.define('ai_run', {
+        native_id: { type: DataTypes.STRING, allowNull: false },
+        video_id: { type: DataTypes.INTEGER, allowNull: false },
+        prompt_sha: { type: DataTypes.TEXT, allowNull: false },
+        prompt_version: { type: DataTypes.TEXT, allowNull: false },
+        model: { type: DataTypes.TEXT, allowNull: false },
+        transcript: { type: DataTypes.JSONB, allowNull: false },
+        track_overrun_s: { type: DataTypes.FLOAT, allowNull: false },
+        yt_duration_s: { type: DataTypes.FLOAT, allowNull: false },
+        raw_output: { type: DataTypes.JSONB, allowNull: true },
+        usage: { type: DataTypes.JSONB, allowNull: true },
+        cost_usd: { type: DataTypes.FLOAT, allowNull: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_ai_runs', timestamps: false, indexes: [{ fields: ['native_id'] }, { fields: ['created_at'] }] });
+
+    // The AI's final segments per videos row (entries as video_calculateds.data plus confidence, source "ai").
+    // Withdrawn rows keep `data` for the record; serving checks withdrawn_at IS NULL.
+    const AiVideoCalculated = sequelize.define('ai_video_calculated', {
+        video_id: { type: DataTypes.INTEGER, primaryKey: true, references: { model: 'videos', key: 'id' } },
+        native_id: { type: DataTypes.STRING, allowNull: false },
+        run_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'prv_ai_runs', key: 'id' } },
+        data: { type: DataTypes.JSONB, allowNull: false },
+        published_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+        withdrawn_at: { type: DataTypes.DATE, allowNull: true },
+        withdrawn_by: { type: DataTypes.TEXT, allowNull: true },
+        withdrawn_reason: { type: DataTypes.TEXT, allowNull: true },
+        updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_ai_video_calculateds', timestamps: false });
+
     Markup.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
     Markup.belongsTo(MarkupCategory, { foreignKey: 'category_id', as: 'category' });
     Markup.belongsTo(User, { foreignKey: 'internal_user_id', as: 'user' });
@@ -235,5 +265,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated };
 };

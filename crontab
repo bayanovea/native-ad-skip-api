@@ -1,3 +1,5 @@
 * * * * * flock -n /tmp/calculate-prv.lock /app/prv/commands/calculate >> /proc/1/fd/1 2>&1
 * * * * * sleep 20 && flock -n /tmp/calculate-rt.lock /app/rt/commands/calculate >> /proc/1/fd/1 2>&1
 * * * * * sleep 40 && flock -n /tmp/calculate-yt.lock /app/yt/commands/calculate >> /proc/1/fd/1 2>&1
+# AI detection: exits at once unless AI_DETECT_ENABLED=on (/app/.env)
+*/5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1
