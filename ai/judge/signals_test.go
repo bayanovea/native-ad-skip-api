@@ -2,6 +2,7 @@ package judge
 
 import (
 	"database/sql"
+	"encoding/json"
 	"regexp"
 	"testing"
 	"time"
@@ -43,16 +44,22 @@ func newMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 
 var since = published.Add(25 * time.Hour)
 
+// testBounds: testVideo's entry with its baseline, as collectSignals passes it to the queries.
+func testBounds(since time.Time) []byte {
+	b, _ := json.Marshal([]baseline{{testVideo.Entries[0], since}})
+	return b
+}
+
 func TestVotesCountsEachUsersLatestVoteOnEachEntry(t *testing.T) {
 	db, mock := newMock(t)
-	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`COUNT(*) FILTER (WHERE vote > 0), COUNT(*) FILTER (WHERE vote < 0), COUNT(*) FILTER (WHERE vote < 0 AND "createdAt" > $4)`)+`.*`+
-		regexp.QuoteMeta(`DISTINCT ON (vt.user_id, vt.category_id, vt.start, vt."end") vt.vote, vt."createdAt"`)+`.*`+
-		regexp.QuoteMeta(`jsonb_to_recordset($2::jsonb)`)+`.*`+
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`COUNT(*) FILTER (WHERE vote > 0), COUNT(*) FILTER (WHERE vote < 0), COUNT(*) FILTER (WHERE vote < 0 AND "createdAt" > since)`)+`.*`+
+		regexp.QuoteMeta(`DISTINCT ON (vt.user_id, vt.category_id, vt.start, vt."end") vt.vote, vt."createdAt", e.since`)+`.*`+
+		regexp.QuoteMeta(`jsonb_to_recordset($2::jsonb) AS e(category_id int, start int, "end" int, since timestamptz)`)+`.*`+
 		regexp.QuoteMeta(`WHERE vt.video_id = $1 AND vt."createdAt" <= $3`)+`.*`+
 		regexp.QuoteMeta(`vt."createdAt" DESC, vt.id DESC`)).
-		WithArgs(7, testVideo.Data, asOf, since).
+		WithArgs(7, testBounds(since), asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(3, 2, 1))
-	up, down, newDown, err := votes(db, testVideo, since, asOf)
+	up, down, newDown, err := votes(db, 7, testBounds(since), asOf)
 	if err != nil || up != 3 || down != 2 || newDown != 1 {
 		t.Fatalf("got %d %d %d %v", up, down, newDown, err)
 	}
@@ -61,11 +68,11 @@ func TestVotesCountsEachUsersLatestVoteOnEachEntry(t *testing.T) {
 func TestEventsMatchTheEntriesByNativeID(t *testing.T) {
 	db, mock := newMock(t)
 	for table, n := range map[string]int{"prv_events_interval_undo": 2, "prv_events_interval_click": 5} {
-		mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > $4) FROM `+table+" ev JOIN jsonb_to_recordset($2::jsonb)")+
+		mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > e.since) FROM `+table+" ev JOIN jsonb_to_recordset($2::jsonb)")+
 			`.*`+regexp.QuoteMeta(`WHERE ev.video_native_id = $1 AND ev."createdAt" <= $3`)).
-			WithArgs("-1_456000001", testVideo.Data, asOf, since).
+			WithArgs("-1_456000001", testBounds(since), asOf).
 			WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(n, 1))
-		got, newN, err := events(db, table, testVideo, since, asOf)
+		got, newN, err := events(db, table, "-1_456000001", testBounds(since), asOf)
 		if err != nil || got != n || newN != 1 {
 			t.Fatalf("%s: got %d %d %v", table, got, newN, err)
 		}
@@ -75,7 +82,7 @@ func TestEventsMatchTheEntriesByNativeID(t *testing.T) {
 func TestHumanMarkupsSincePublish(t *testing.T) {
 	db, mock := newMock(t)
 	mock.ExpectQuery(`(?s)FROM markups m.*LEFT JOIN users u ON u.id = m.internal_user_id.*`+
-		regexp.QuoteMeta(`m.deleted_at IS NULL AND m."createdAt" >= $2 AND m."createdAt" <= $3`)).
+		regexp.QuoteMeta(`m.deleted_at IS NULL AND m."createdAt" >= $2 AND GREATEST(m."createdAt", i."updatedAt") <= $3`)).
 		WithArgs(7, published, asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "created"}).
 			AddRow(2, 32.0, 68.0, 0, published).    // agrees with the AI entry
@@ -117,7 +124,7 @@ func TestCollectSignals(t *testing.T) {
 	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(3, 2))
 	v := testVideo
 	v.JudgeCounters = []byte(`{"duration_recut":1}`) // re-cuts only ever grow: one of the two is new
-	s, err := collectSignals(db, v, testCategories, since, asOf)
+	s, err := collectSignals(db, v, testCategories, []time.Time{since}, asOf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +145,11 @@ func TestStoredRecut(t *testing.T) {
 // expectSignals: testVideo's signal queries counted after `since` up to `asOf`, with down votes
 // and undo events given as {total, new}, and the re-cuts' total.
 func expectSignals(mock sqlmock.Sqlmock, since, asOf time.Time, down, undo [2]int, recut int) {
-	mock.ExpectQuery("FROM votes").WithArgs(7, testVideo.Data, asOf, since).
+	mock.ExpectQuery("FROM votes").WithArgs(7, testBounds(since), asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, down[0], down[1]))
-	mock.ExpectQuery("prv_events_interval_undo").WithArgs("-1_456000001", testVideo.Data, asOf, since).
+	mock.ExpectQuery("prv_events_interval_undo").WithArgs("-1_456000001", testBounds(since), asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(undo[0], undo[1]))
-	mock.ExpectQuery("prv_events_interval_click").WithArgs("-1_456000001", testVideo.Data, asOf, since).
+	mock.ExpectQuery("prv_events_interval_click").WithArgs("-1_456000001", testBounds(since), asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
 	mock.ExpectQuery("FROM markups").WithArgs(7, published, asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "created"}))

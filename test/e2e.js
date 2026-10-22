@@ -1872,6 +1872,60 @@ test('ai judge: new evidence is what was created after the baseline: dislikes af
     assert.deepEqual((await votesDown(kept.videoId)).at(-1), ['review', 'llm', 2, 1], 'another user’s dislike after the keep is');
 });
 
+// Each entry's evidence counts after its own keep: an undo on A after A's keep but before B's is new.
+test('ai judge: the keep baseline is per entry', async () => {
+    const vid = '-1_456000410';
+    const sp = cats.prv.sponsor;
+    const { videoId } = await aiPublished(vid, 25, [
+        { category_id: sp, start: 30, end: 70, confidence: 'high', source: 'ai' },
+        { category_id: sp, start: 200, end: 230, confidence: 'high', source: 'ai' }]);
+    const judge = () => {
+        const r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+    };
+    await postUndo(vid, 'entry-u1', 30, 70);
+    await postUndo(vid, 'entry-u1', 200, 230);
+    judge();
+    const items = await aiItems(videoId);
+    assert.deepEqual(items.map(i => [i.start, i.end]), [[30, 70], [200, 230]]);
+
+    await takeReview(items[0].batch);
+    await decideAi(items[0], 'sponsor');
+    await postUndo(vid, 'entry-u2', 30, 70);
+    await decideAi(items[1], 'sponsor');
+    await lockReview('release', items[0].batch, { reviewer: REVIEWER });
+    judge();
+    const j = (await judgements(videoId)).at(-1);
+    assert.deepEqual([j.decision, j.by, j.signals.undo, j.signals.new.undo], ['review', 'llm', 3, 1],
+        'the undo after A\'s keep is new although B was kept later');
+});
+
+// PUT /markups edits an interval in place: an edit into a conflict after the baseline is new evidence.
+test('ai judge: a human interval edited into a conflict is new evidence (bounds or category)', async () => {
+    const vid = '-1_456000411';
+    const { videoId } = await aiPublished(vid);
+    const sp = cats.prv.sponsor;
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'edit-a', category_id: sp, duration: 600, data: { intervals: [{ start: 32, end: 68 }] } });
+    await postMarkup('', { video_id: vid, v: '1', user_id: 'edit-b', category_id: cats.prv.intro, duration: 600, data: { intervals: [{ start: 400, end: 430 }] } });
+    const judge = () => {
+        const r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+    };
+    const conflicts = async () => (await judgements(videoId)).map(j => [j.by, j.signals.conflicting_markups, j.signals.new.conflicting_markups]);
+    judge();
+    assert.deepEqual(await conflicts(), [['rules', 0, 0]], 'one agreeing sponsor, one intro');
+
+    assert.equal((await putMarkup('', { video_id: vid, user_id: 'edit-a', category_id: sp, start: 32, end: 68, new_start: 100, new_end: 130 })).status, 200);
+    judge();
+    assert.deepEqual((await conflicts()).at(-1), ['llm', 1, 1], 'bounds moved off the AI entry');
+
+    assert.equal((await putMarkup('', { video_id: vid, user_id: 'edit-b', category_id: cats.prv.intro, start: 400, end: 430, new_category_id: sp })).status, 200);
+    judge();
+    assert.deepEqual((await conflicts()).at(-1), ['llm', 2, 1], 'intro turned sponsor');
+    judge();
+    assert.equal((await judgements(videoId)).length, 3, 'nothing newer: not judged again');
+});
+
 test('ai judge: review items go to the day’s newest part that nobody holds or has started, within 30 items', async () => {
     const sheet = `ai-judge-${new Date().toISOString().slice(0, 10)}`;
     const parts = async () => (await dbQuery(`SELECT DISTINCT batch FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, [sheet])).map(r => r.batch);
@@ -2217,6 +2271,31 @@ test('prv vote: a repeated identical vote is a no-op that still repairs the segm
     assert.equal(res.status, 201);
     assert.equal(await userRating('', author), authorBefore, 'the delete takes the author back');
     assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, 0);
+});
+
+// Pre-2026-10-17 rows: [older -1, latest +1]. A -1 now is a change from the latest, not a repeat of
+// the older row; it replaces both.
+test('prv vote: a vote matching an older legacy row of the user is a change from the latest one', async () => {
+    const vid = '__e2e__prv_vote_legacy_dup';
+    const cat = cats.prv.intro;
+    const author = 'prv-legacy-author';
+    await postMarkup('', { video_id: vid, v: '1', user_id: author, category_id: cat, data: { intervals: [{ start: 1, end: 11 }] } });
+    runCalc('prv');
+    const videoId = await prvVideoId(vid);
+    await dbQuery(
+        `INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt") VALUES
+         ('prv-legacy-voter', $1, $2, 1, 11, -1, now() - interval '2 days', now() - interval '2 days'),
+         ('prv-legacy-voter', $1, $2, 1, 11,  1, now() - interval '1 day', now() - interval '1 day')`,
+        [videoId, cat]
+    );
+    const authorBefore = await userRating('', author);
+
+    await postVote('', { video_id: vid, user_id: 'prv-legacy-voter', category_id: cat, start: 1, end: 11, vote: -1 });
+    const rows = await dbQuery('SELECT vote FROM votes WHERE video_id = $1', [videoId]);
+    assert.deepEqual(rows.map(r => r.vote), [-1], 'one row left, the new vote');
+    assert.equal((await getSegmentRow('', vid, cat, 1, 11)).rating, -1, 'segment table rating');
+    assert.equal(await getJsonRating('', vid, cat, 1, 11), -1, 'JSON rating');
+    assert.equal(await userRating('', author), authorBefore - 2, 'the author moved from the latest +1 to -1');
 });
 
 // independent users stack: +1 +1 -1 ⇒ rating=1

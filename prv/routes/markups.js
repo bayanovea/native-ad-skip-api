@@ -137,9 +137,10 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         }
 
         await sequelize.transaction(async (transaction) => {
-            if (Object.keys(newIntervalValues).length) {
-                await models.MarkupTimeInterval.update(newIntervalValues, { where: { id: markupInterval.id }, transaction });
-            }
+            // Also for a category change alone, so the interval's "updatedAt" dates every edit for
+            // the AI judge (Sequelize skips an update that would only set "updatedAt").
+            await models.MarkupTimeInterval.update({ start: markupInterval.start, end: markupInterval.end, ...newIntervalValues },
+                { where: { id: markupInterval.id }, transaction });
             await models.Markup.update(newMarkupValues, { where: { id: markupInterval.markup_id }, transaction });
         });
 

@@ -37,10 +37,11 @@ type Signals struct {
 	humans   []humanNote // the intervals behind HumanMarkups, for the LLM judge's request
 }
 
-// Evidence is the negative signals created after the baseline (the last judgement, or the
-// human keep after it); only these make a judged video due again. Each is a row whose
-// creation time never changes, so counts that shrink later (an entry removed on review, a
-// vote changed back) can never hide a new one, as a count compared with a stored count can.
+// Evidence is the negative signals created after the baseline (per entry: the last judgement,
+// or the human keep of that entry after it); only these make a judged video due again. Each is
+// dated by a time that never moves back, so counts that shrink later (an entry removed on
+// review, a vote changed back) can never hide a new one, as a count compared with a stored
+// count can.
 type Evidence struct {
 	VotesDown          int `json:"votes_down"` // users' latest votes on an entry that are down and were cast after the baseline
 	Undo               int `json:"undo"`
@@ -74,26 +75,46 @@ type Video struct {
 	LastSeenAt    time.Time
 }
 
-// entryBounds joins a signal table to the AI entries' exact bounds.
-const entryBounds = `jsonb_to_recordset($2::jsonb) AS e(category_id int, start int, "end" int)`
+// entryBounds joins a signal table to the AI entries' exact bounds and, where the
+// JSON has it, each entry's baseline (since).
+const entryBounds = `jsonb_to_recordset($2::jsonb) AS e(category_id int, start int, "end" int, since timestamptz)`
+
+// baseline is an AI entry with the time after which the evidence on it is new.
+type baseline struct {
+	Entry
+	Since time.Time `json:"since"`
+}
 
 // collectSignals runs one query per signal, counting the rows created up to asOf
-// (the tick's start) and, in New, the negative ones created after since (zero time
-// for a first judgement: all of them); every signal with bounds counts only the AI
-// entries' exact (category_id, start, end), the key votes and events carry.
-func collectSignals(db *sql.DB, v Video, categories map[int]string, since, asOf time.Time) (Signals, error) {
+// (the tick's start) and, in New, the negative ones created after the entry's
+// baseline since[i] (zero time for a first judgement: all of them); a conflicting
+// markup belongs to no entry, so its baseline is the earliest. Every signal with
+// bounds counts only the AI entries' exact (category_id, start, end), the key
+// votes and events carry.
+func collectSignals(db *sql.DB, v Video, categories map[int]string, since []time.Time, asOf time.Time) (Signals, error) {
 	s := Signals{Requests: v.Requests, AgeH: asOf.Sub(v.PublishedAt).Hours()}
 	if v.ViewsMax.Valid {
 		s.ViewsMax = &v.ViewsMax.Int64
 	}
-	var err error
-	if s.VotesUp, s.VotesDown, s.New.VotesDown, err = votes(db, v, since, asOf); err != nil {
+	bs := make([]baseline, len(v.Entries))
+	markupsSince := asOf
+	for i, e := range v.Entries {
+		bs[i] = baseline{e, since[i]}
+		if since[i].Before(markupsSince) {
+			markupsSince = since[i]
+		}
+	}
+	bounds, err := json.Marshal(bs)
+	if err != nil {
+		return s, err
+	}
+	if s.VotesUp, s.VotesDown, s.New.VotesDown, err = votes(db, v.VideoID, bounds, asOf); err != nil {
 		return s, fmt.Errorf("votes: %w", err)
 	}
-	if s.Undo, s.New.Undo, err = events(db, "prv_events_interval_undo", v, since, asOf); err != nil {
+	if s.Undo, s.New.Undo, err = events(db, "prv_events_interval_undo", v.NativeID, bounds, asOf); err != nil {
 		return s, fmt.Errorf("undo: %w", err)
 	}
-	if s.Clicks, _, err = events(db, "prv_events_interval_click", v, since, asOf); err != nil {
+	if s.Clicks, _, err = events(db, "prv_events_interval_click", v.NativeID, bounds, asOf); err != nil {
 		return s, fmt.Errorf("clicks: %w", err)
 	}
 	if s.humans, err = humanMarkups(db, v, categories, asOf); err != nil {
@@ -103,7 +124,7 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, since, asOf 
 	for _, h := range s.humans {
 		if h.Conflicting {
 			s.ConflictingMarkups++
-			if h.CreatedAt.After(since) {
+			if h.CreatedAt.After(markupsSince) {
 				s.New.ConflictingMarkups++
 			}
 		}
@@ -119,34 +140,38 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, since, asOf 
 }
 
 // votes counts the users' latest votes on each AI entry that are up / down (the
-// rating rule of lib/segment-rating.js), and the down ones cast after since. POST
-// /vote keeps the row of a repeated vote, so a vote's time is when the user said it.
-func votes(db *sql.DB, v Video, since, asOf time.Time) (up, down, newDown int, err error) {
-	err = db.QueryRow(`SELECT COUNT(*) FILTER (WHERE vote > 0), COUNT(*) FILTER (WHERE vote < 0), COUNT(*) FILTER (WHERE vote < 0 AND "createdAt" > $4)
-		FROM (SELECT DISTINCT ON (vt.user_id, vt.category_id, vt.start, vt."end") vt.vote, vt."createdAt"
+// rating rule of lib/segment-rating.js), and the down ones cast after the entry's
+// baseline. POST /vote keeps the row of a repeated vote, so a vote's time is when
+// the user said it.
+func votes(db *sql.DB, videoID int, bounds []byte, asOf time.Time) (up, down, newDown int, err error) {
+	err = db.QueryRow(`SELECT COUNT(*) FILTER (WHERE vote > 0), COUNT(*) FILTER (WHERE vote < 0), COUNT(*) FILTER (WHERE vote < 0 AND "createdAt" > since)
+		FROM (SELECT DISTINCT ON (vt.user_id, vt.category_id, vt.start, vt."end") vt.vote, vt."createdAt", e.since
 			FROM votes vt JOIN `+entryBounds+` ON vt.category_id = e.category_id AND vt.start = e.start AND vt."end" = e."end"
 			WHERE vt.video_id = $1 AND vt."createdAt" <= $3
 			ORDER BY vt.user_id, vt.category_id, vt.start, vt."end", vt."createdAt" DESC, vt.id DESC) latest`,
-		v.VideoID, v.Data, asOf, since).Scan(&up, &down, &newDown)
+		videoID, bounds, asOf).Scan(&up, &down, &newDown)
 	return
 }
 
-// events counts undo / click events on the AI entries, and those after since; events carry the native_id, not the videos row.
-func events(db *sql.DB, table string, v Video, since, asOf time.Time) (n, newN int, err error) {
-	err = db.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > $4) FROM `+table+` ev JOIN `+entryBounds+`
+// events counts undo / click events on the AI entries, and those after the entry's baseline; events carry the native_id, not the videos row.
+func events(db *sql.DB, table, nativeID string, bounds []byte, asOf time.Time) (n, newN int, err error) {
+	err = db.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > e.since) FROM `+table+` ev JOIN `+entryBounds+`
 		ON ev.category_id = e.category_id AND ev.start = e.start AND ev."end" = e."end"
-		WHERE ev.video_native_id = $1 AND ev."createdAt" <= $3`, v.NativeID, v.Data, asOf, since).Scan(&n, &newN)
+		WHERE ev.video_native_id = $1 AND ev."createdAt" <= $3`, nativeID, bounds, asOf).Scan(&n, &newN)
 	return
 }
 
 // humanMarkups lists the live human intervals on the AI row's videos row posted
-// since publish, each marked when it conflicts with the AI (see conflicts).
+// since publish, each marked when it conflicts with the AI (see conflicts). An
+// interval is dated by its last edit too (PUT /markups moves its bounds in place and
+// touches it on a category change), not by markups."updatedAt", which every
+// recalculation bumps.
 func humanMarkups(db *sql.DB, v Video, categories map[int]string, asOf time.Time) ([]humanNote, error) {
-	rows, err := db.Query(`SELECT m.category_id, i.start, i."end", COALESCE(u.rating, 0), m."createdAt"
+	rows, err := db.Query(`SELECT m.category_id, i.start, i."end", COALESCE(u.rating, 0), GREATEST(m."createdAt", i."updatedAt") AS dated
 		FROM markups m
 		JOIN markup_time_intervals i ON i.markup_id = m.id AND i.deleted_at IS NULL
 		LEFT JOIN users u ON u.id = m.internal_user_id
-		WHERE m.video_id = $1 AND m.deleted_at IS NULL AND m."createdAt" >= $2 AND m."createdAt" <= $3`, v.VideoID, v.PublishedAt, asOf)
+		WHERE m.video_id = $1 AND m.deleted_at IS NULL AND m."createdAt" >= $2 AND GREATEST(m."createdAt", i."updatedAt") <= $3`, v.VideoID, v.PublishedAt, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -222,17 +247,30 @@ func storedRecut(stored []byte) int {
 	return c.DurationRecut
 }
 
-// keptSince is the latest of the verdicts when every AI entry's latest review verdict
-// keeps it and came after the last judgement, else NULL (prv/repository/ai.js allKept
+// entryKeeps maps the bounds of each AI entry whose latest review verdict keeps it and
+// came after the last judgement to that verdict's time (prv/repository/ai.js allKept
 // matches the items the same way).
-func keptSince(db *sql.DB, v Video) (keptAt sql.NullTime, err error) {
-	err = db.QueryRow(`SELECT CASE WHEN bool_and(COALESCE(l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3, false)) THEN MAX(l.decided_at) END
-		FROM `+entryBounds+`
-		LEFT JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
+func entryKeeps(db *sql.DB, v Video) (map[[2]int]time.Time, error) {
+	rows, err := db.Query(`SELECT e.start, e."end", l.decided_at FROM `+entryBounds+`
+		JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
 			WHERE i.kind = 'ai' AND i.video_id = $1 AND i.start = e.start AND i."end" = e."end"
-			ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE`,
-		v.VideoID, v.Data, v.JudgedAt.Time).Scan(&keptAt)
-	return
+			ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE
+		WHERE l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3`,
+		v.VideoID, v.Data, v.JudgedAt.Time)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keeps := map[[2]int]time.Time{}
+	for rows.Next() {
+		var start, end int
+		var at time.Time
+		if err := rows.Scan(&start, &end, &at); err != nil {
+			return nil, err
+		}
+		keeps[[2]int{start, end}] = at
+	}
+	return keeps, rows.Err()
 }
 
 // parseEntries reads the bounds of the row's data.

@@ -3,6 +3,7 @@ package judge
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"testing"
@@ -52,10 +53,15 @@ func expectNotKept(mock sqlmock.Sqlmock, now time.Time) {
 	expectSignals(mock, since, now, [2]int{}, [2]int{2, 1}, 0)
 }
 
-// expectKept: keptSince's answer for testVideo judged at `judged`, the latest verdict's time or nil.
+// expectKept: entryKeeps' answer for testVideo judged at `judged`, its one entry's keep verdict time or nil.
 func expectKept(mock sqlmock.Sqlmock, judged time.Time, keptAt any) {
-	mock.ExpectQuery(`(?s)bool_and.*MAX\(l.decided_at\).*i.kind = 'ai' AND i.video_id = \$1.*ORDER BY r.decided_at DESC, r.id DESC LIMIT 1`).
-		WithArgs(7, testVideo.Data, judged).WillReturnRows(sqlmock.NewRows([]string{"kept_at"}).AddRow(keptAt))
+	rows := sqlmock.NewRows([]string{"start", "end", "decided_at"})
+	if keptAt != nil {
+		rows.AddRow(30, 70, keptAt)
+	}
+	mock.ExpectQuery(`(?s)i.kind = 'ai' AND i.video_id = \$1.*ORDER BY r.decided_at DESC, r.id DESC LIMIT 1.*`+
+		regexp.QuoteMeta(`WHERE l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3`)).
+		WithArgs(7, testVideo.Data, judged).WillReturnRows(rows)
 }
 
 func expectTranscript(mock sqlmock.Sqlmock) {
@@ -351,5 +357,31 @@ func TestTickJudgesTheOtherVideosAfterAFailure(t *testing.T) {
 	mock.ExpectCommit()
 	if failed, err := r.tick(); failed != 1 || err != nil {
 		t.Fatalf("got %d %v", failed, err)
+	}
+}
+
+// Entry A kept at 26 h, B kept at 28 h, both after the last judgement (25 h): each entry's evidence
+// counts after its own keep, and a conflicting markup at 27 h (after A's keep, before B's) is new.
+func TestJudgeVideoBaselineIsPerEntry(t *testing.T) {
+	r, mock, v, llm := llmCase(t, `{"decision":"ok","reason":"fine","segments":[{"index":0,"keep":true},{"index":1,"keep":true}]}`, true)
+	v.Data = []byte(`[{"category_id":2,"start":30,"end":70},{"category_id":2,"start":200,"end":230}]`)
+	keptA, keptB := published.Add(26*time.Hour), published.Add(28*time.Hour)
+	mock.ExpectQuery("i.kind = 'ai'").WithArgs(7, v.Data, since).
+		WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(30, 70, keptA).AddRow(200, 230, keptB))
+	bounds, _ := json.Marshal([]baseline{{Entry{2, 30, 70}, keptA}, {Entry{2, 200, 230}, keptB}})
+	mock.ExpectQuery("FROM votes").WithArgs(7, bounds, r.now).
+		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, 0, 0))
+	for _, table := range []string{"prv_events_interval_undo", "prv_events_interval_click"} {
+		mock.ExpectQuery(table).WithArgs("-1_456000001", bounds, r.now).WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
+	}
+	mock.ExpectQuery("FROM markups").WithArgs(7, published, r.now).
+		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "dated"}).AddRow(2, 400.0, 430.0, 0, published.Add(27*time.Hour)))
+	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(0, 0))
+	expectTranscript(mock)
+	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
+	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
+		t.Fatal(err, llm.calls)
 	}
 }

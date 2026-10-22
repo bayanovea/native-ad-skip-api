@@ -170,15 +170,22 @@ func (r *run) judgeVideo(v Video) error {
 	if v.Entries, err = parseEntries(v.Data); err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
-	var since time.Time // the baseline: evidence created after it is new; zero for a first judgement
-	var keptAt sql.NullTime
+	// Each entry's baseline: evidence on it created after it is new; zero for a first judgement.
+	since := make([]time.Time, len(v.Entries))
+	allKept := false
 	if v.JudgedAt.Valid {
-		since = v.JudgedAt.Time
-		if keptAt, err = keptSince(r.db, v); err != nil {
+		keeps, err := entryKeeps(r.db, v)
+		if err != nil {
 			return err
 		}
-		if keptAt.Valid {
-			since = keptAt.Time // humans have the last word: what they saw before their verdicts is not new
+		allKept = true
+		for i, e := range v.Entries {
+			since[i] = v.JudgedAt.Time
+			if at, ok := keeps[[2]int{e.Start, e.End}]; ok {
+				since[i] = at // humans have the last word: what they saw before their verdict is not new
+			} else {
+				allKept = false
+			}
 		}
 	}
 	s, err := collectSignals(r.db, v, r.categories, since, r.now)
@@ -186,7 +193,7 @@ func (r *run) judgeVideo(v Video) error {
 		return err
 	}
 	if v.JudgedAt.Valid && !s.New.negative() && s.New.DurationRecut == 0 {
-		if !keptAt.Valid {
+		if !allKept {
 			return nil
 		}
 		// Recording it moves judged_at past the verdicts, so the next tick skips the video.
