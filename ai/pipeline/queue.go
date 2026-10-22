@@ -35,11 +35,13 @@ const nativeIDRegex = `^-?[0-9]+_[0-9]+$`
 
 var nativeIDPattern = regexp.MustCompile(nativeIDRegex)
 
-// A crashed tick leaves its rows in `fetching`; after an hour the queue takes them again.
+// A crashed run leaves its row in `fetching`; after an hour the queue and a manual run take it again.
+const staleFetching = `status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'`
+
 const queueRule = `native_id ~ '` + nativeIDRegex + `' AND (
 	(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))
 	OR (status = 'queued' AND next_attempt_at <= NOW())
-	OR (status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'))`
+	OR (` + staleFetching + `))`
 
 // claimQueued moves up to the tick's share of the daily budget from the queue to
 // `fetching`, oldest first. The row lock is held only for the claim, so the read
@@ -89,8 +91,9 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 	return out, tx.Commit()
 }
 
-// claimOne is the manual single-video run: any row not already in flight, created
-// when missing, regardless of views and budget. A native_id with an AI row is
+// claimOne is the manual single-video run: any row not already in flight (a
+// `fetching` row untouched for an hour is not), created when missing, regardless
+// of views and budget. A native_id with an AI row is
 // refused: a re-detect would replace data that votes, review verdicts and a
 // withdrawal refer to (docs/backlog/ai-redetect.md).
 func claimOne(db *sql.DB, nativeID string) (queued, error) {
@@ -102,19 +105,21 @@ func claimOne(db *sql.DB, nativeID string) (queued, error) {
 		return q, err
 	}
 	var status string
-	var hasRow bool
-	if err := db.QueryRow(`SELECT status, EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)
-		FROM prv_ai_videos WHERE native_id = $1`, nativeID).Scan(&status, &hasRow); err != nil {
+	var stale, hasRow bool
+	if err := db.QueryRow(`SELECT status, `+staleFetching+`, EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)
+		FROM prv_ai_videos WHERE native_id = $1`, nativeID).Scan(&status, &stale, &hasRow); err != nil {
 		return q, err
 	}
 	switch {
-	case status == statusFetching || status == statusDetecting:
+	case status == statusFetching && !stale, status == statusDetecting:
 		return q, fmt.Errorf("%s is already being fetched or detected", nativeID)
 	case hasRow:
 		return q, fmt.Errorf("%s already has an AI row (status %s): a re-detect is not supported", nativeID, status)
 	}
+	// The staleness is checked again, so a cron claim in between is not taken twice.
 	err := db.QueryRow(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW()
-		WHERE native_id = $1 AND status = $2 RETURNING views_max, attempts`, nativeID, status).
+		WHERE native_id = $1 AND status = $2 AND (status <> 'fetching' OR `+staleFetching+`)
+		RETURNING views_max, attempts`, nativeID, status).
 		Scan(&q.viewsMax, &q.attempts)
 	if err == sql.ErrNoRows {
 		return q, fmt.Errorf("%s changed status meanwhile, run again", nativeID)

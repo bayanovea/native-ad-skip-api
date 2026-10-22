@@ -73,8 +73,15 @@ func expectLockAndJudgement(mock sqlmock.Sqlmock, decision, by string, reason an
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
 		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(nil))
+	expectVerdictSince(mock, false)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO prv_ai_judgements (video_id, decision, "by", reason, signals, model, cost_usd) VALUES ($1, $2, $3, $4, $5, $6, $7)`)).
 		WithArgs(7, decision, by, reason, sqlmock.AnyArg(), model, cost).WillReturnResult(sqlmock.NewResult(1, 1))
+}
+
+// expectVerdictSince: whether a review verdict on the video's AI items came after the tick's start.
+func expectVerdictSince(mock sqlmock.Sqlmock, found bool) {
+	mock.ExpectQuery(regexp.QuoteMeta("WHERE i.kind = 'ai' AND i.video_id = $1 AND r.decided_at > $2")).WithArgs(7, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(found))
 }
 
 // expectNewItems: no open item, a fresh sheet, one item for the one entry.
@@ -337,6 +344,22 @@ func TestRecordLeavesARowWithdrawnMeanwhile(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
 		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(reviewNow))
+	mock.ExpectRollback()
+	j := judgement{Decision: "withdraw", By: "llm", Reason: "r", WithdrawBy: "judge", Review: true}
+	if err := r.record(testVideo, Signals{}, j, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A not_ad verdict removed the entry during the LLM call: no judgement, withdraw or review item; judged_at stays.
+func TestRecordLeavesAVideoWithAVerdictDuringTheTick(t *testing.T) {
+	db, mock := newMock(t)
+	r := &judgeRun{db: db, categories: testCategories, prv: testPrv, now: reviewNow}
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT withdrawn_at FROM prv_ai_video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{"withdrawn_at"}).AddRow(nil))
+	mock.ExpectQuery(regexp.QuoteMeta("WHERE i.kind = 'ai' AND i.video_id = $1 AND r.decided_at > $2")).WithArgs(7, reviewNow).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectRollback()
 	j := judgement{Decision: "withdraw", By: "llm", Reason: "r", WithdrawBy: "judge", Review: true}
 	if err := r.record(testVideo, Signals{}, j, nil); err != nil {

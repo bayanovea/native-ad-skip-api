@@ -1123,6 +1123,15 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     const [frun] = await dbQuery(`SELECT raw_output FROM prv_ai_runs WHERE native_id = '-1_456000209'`);
     assert.equal(frun.raw_output, null);
     assert.equal(await aiCalculated('-1_456000209'), null);
+
+    // An interrupted run left `fetching`: refused while fresh, claimed again after an hour (the cron may be off).
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW() WHERE native_id = '-1_456000209'`);
+    assert.match(runAi(['detect', '-1_456000209']).stderr, /-1_456000209 is already being fetched or detected/);
+    await dbQuery(`UPDATE prv_ai_videos SET updated_at = NOW() - INTERVAL '61 minutes' WHERE native_id = '-1_456000209'`);
+    const stale = runAi(['detect', '-1_456000209']);
+    assert.equal(stale.status, 1);
+    assert.match(stale.stderr, /-1_456000209 failed: fixture: .*no such file/);
+    assert.equal((await aiVideo('-1_456000209')).status, 'failed');
 });
 
 test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed tick); a yt-dlp that cannot start is the tick’s', async () => {

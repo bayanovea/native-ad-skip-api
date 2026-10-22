@@ -258,7 +258,8 @@ func (r *judgeRun) askLLM(v Video, s Signals, cues []vtt.Cue) (judgement, error)
 // record writes the judgement under the AI row's lock, withdraws, creates the
 // review items, and moves judged_at to the tick's start (what the signals were
 // counted up to, so evidence created during the tick is new next time) with the
-// counters for the record. A row withdrawn meanwhile is left alone.
+// counters for the record. A row withdrawn meanwhile is left alone, and one with a
+// review verdict after the tick's start is left for the next tick.
 func (r *judgeRun) record(v Video, s Signals, j judgement, cues []vtt.Cue) error {
 	signals, err := json.Marshal(s)
 	if err != nil {
@@ -282,6 +283,17 @@ func (r *judgeRun) record(v Video, s Signals, j judgement, cues []vtt.Cue) error
 		return err
 	}
 	if withdrawn.Valid {
+		return nil
+	}
+	// A verdict applied meanwhile (applyVerdict takes this lock) may have removed or kept an entry
+	// the judgement was made on: the next tick judges the new state instead.
+	var verdictSince bool
+	if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
+		WHERE i.kind = 'ai' AND i.video_id = $1 AND r.decided_at > $2)`, v.VideoID, r.now).Scan(&verdictSince); err != nil {
+		return err
+	}
+	if verdictSince {
+		log.Printf("ai judge: %d got a review verdict during the tick, judged again next tick (%s %s discarded, cost %.4f)", v.VideoID, j.Decision, j.By, j.Cost)
 		return nil
 	}
 	if _, err := tx.Exec(`INSERT INTO prv_ai_judgements (video_id, decision, "by", reason, signals, model, cost_usd) VALUES ($1, $2, $3, $4, $5, $6, $7)`,

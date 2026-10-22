@@ -163,10 +163,10 @@ func TestClaimOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	expect := func(status string, hasRow bool) {
+	expect := func(status string, stale, hasRow bool) {
 		mock.ExpectExec("INSERT INTO prv_ai_videos").WithArgs("-1_456000001").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectQuery(regexp.QuoteMeta("EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)")).WithArgs("-1_456000001").
-			WillReturnRows(sqlmock.NewRows([]string{"status", "exists"}).AddRow(status, hasRow))
+		mock.ExpectQuery(regexp.QuoteMeta(staleFetching + ", EXISTS (SELECT 1 FROM prv_ai_video_calculateds WHERE native_id = $1)")).WithArgs("-1_456000001").
+			WillReturnRows(sqlmock.NewRows([]string{"status", "stale", "exists"}).AddRow(status, stale, hasRow))
 	}
 
 	for _, id := range []string{"", "x", "-1_", "1_2/../3", "-1_456000001?x=1"} {
@@ -177,25 +177,35 @@ func TestClaimOne(t *testing.T) {
 
 	for _, c := range []struct {
 		status string
+		stale  bool
 		hasRow bool
 		err    string
 	}{
-		{"detecting", false, "already being fetched or detected"},
-		{"published", true, "already has an AI row (status published): a re-detect is not supported"},
-		{"withdrawn", true, "already has an AI row (status withdrawn)"},
+		{"detecting", false, false, "already being fetched or detected"},
+		{"fetching", false, false, "already being fetched or detected"},
+		{"published", false, true, "already has an AI row (status published): a re-detect is not supported"},
+		{"withdrawn", false, true, "already has an AI row (status withdrawn)"},
 	} {
-		expect(c.status, c.hasRow)
+		expect(c.status, c.stale, c.hasRow)
 		if _, err := claimOne(db, "-1_456000001"); err == nil || !strings.Contains(err.Error(), c.err) {
 			t.Errorf("%s: got %v, want %q", c.status, err, c.err)
 		}
 	}
 
-	expect("failed", false)
+	expect("failed", false, false)
 	mock.ExpectQuery(`SET status = 'fetching'(?s).*AND status = \$2`).
 		WithArgs("-1_456000001", "failed").WillReturnRows(sqlmock.NewRows([]string{"views_max", "attempts"}).AddRow(nil, 3))
 	q, err := claimOne(db, "-1_456000001")
 	if err != nil || q.attempts != 3 || q.viewsMax.Valid {
 		t.Fatalf("a failed video is claimed again: got %+v %v", q, err)
+	}
+
+	// An interrupted manual run with the cron switched off: nothing else would ever reclaim the row.
+	expect("fetching", true, false)
+	mock.ExpectQuery(`SET status = 'fetching'(?s).*AND status = \$2 AND \(status <> 'fetching' OR `+regexp.QuoteMeta(staleFetching)+`\)`).
+		WithArgs("-1_456000001", "fetching").WillReturnRows(sqlmock.NewRows([]string{"views_max", "attempts"}).AddRow(nil, 1))
+	if q, err = claimOne(db, "-1_456000001"); err != nil || q.attempts != 1 {
+		t.Fatalf("a fetching row untouched for an hour is claimed: got %+v %v", q, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
