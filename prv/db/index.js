@@ -187,6 +187,7 @@ module.exports = function(sequelize) {
         batch: { type: DataTypes.STRING(64), primaryKey: true },
         reviews_needed: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
         excluded: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false, defaultValue: [] },
+        priority: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'important' },
         locked_by: { type: DataTypes.STRING(64), allowNull: true },
         locked_at: { type: DataTypes.DATE, allowNull: true },
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },

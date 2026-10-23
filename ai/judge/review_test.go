@@ -84,7 +84,7 @@ func TestReviewBatchOpensTheNextPart(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT b.batch FROM prv_review_batches").WillReturnRows(sqlmock.NewRows([]string{"batch"}))
 	mock.ExpectQuery("SELECT COUNT\\(DISTINCT batch\\)").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(2))
-	mock.ExpectExec("INSERT INTO prv_review_batches").WithArgs("ai-judge-2026-10-21-p3").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO prv_review_batches \(batch, priority\) VALUES \(\$1, 'urgent'\)`).WithArgs("ai-judge-2026-10-21-p3").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 	if batch, err := reviewBatch(begin(t, db), "ai-judge-2026-10-21", 1); err != nil || batch != "ai-judge-2026-10-21-p3" {
 		t.Fatalf("got %q %v", batch, err)

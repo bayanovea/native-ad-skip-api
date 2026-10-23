@@ -9,6 +9,10 @@ const VIDEO_FLAGS = ['track_mismatch'];
 const VALID_FLAGS = new Set(VIDEO_FLAGS);
 const SIGNALS_WINDOW = 30;
 const LOCK_IDLE_HOURS = 12;
+// Batch priorities, highest first: `urgent` is the judge's (prod videos people watch now),
+// `important` the default, `optional` a pass to do when there is time.
+const PRIORITIES = ['urgent', 'important', 'optional'];
+const PRIORITY_RANK = `array_position(ARRAY['urgent','important','optional']::text[], b.priority)`;
 // item_id is a Postgres INTEGER; anything larger fails in the DB (500), not as input.
 const MAX_ITEM_ID = 2147483647;
 
@@ -153,8 +157,9 @@ module.exports = function createReviewRepository(models, sequelize) {
     }
 
     // Progress rows of `reviewer`: `{ batch, total, decided, open,
-    // reviews_needed, finished, locked_by, locked_at, state }`, where
-    // decided/open count that reviewer's verdicts. `batch` narrows to one.
+    // reviews_needed, priority, finished, locked_by, locked_at, state }`, where
+    // decided/open count that reviewer's verdicts; urgent batches first, then
+    // most recently imported. `batch` narrows to one.
     // Inner join: the importer and lib/schema.js give every batch a row.
     function batchProgress({ batch = null, reviewer, transaction } = {}) {
         return sequelize.query(
@@ -167,14 +172,15 @@ module.exports = function createReviewRepository(models, sequelize) {
                  ${batch != null ? 'WHERE i.batch = :batch' : ''}
                  GROUP BY i.batch
              ), s AS (
-                SELECT p.*, b.reviews_needed, b.excluded, b.locked_by, b.locked_at,
+                SELECT p.*, b.reviews_needed, b.excluded, b.priority, b.locked_by, b.locked_at,
+                       ${PRIORITY_RANK} AS priority_rank,
                        ${finishedOf('p.batch')} AS finished
                   FROM p JOIN prv_review_batches b ON b.batch = p.batch
              )
              SELECT s.batch, s.total, s.decided, s.total - s.decided AS open,
-                    s.reviews_needed, s.finished, s.locked_by, s.locked_at, ${STATE} AS state
+                    s.reviews_needed, s.priority, s.finished, s.locked_by, s.locked_at, ${STATE} AS state
                FROM s
-              ORDER BY s.imported_at DESC, s.batch ASC`,
+              ORDER BY s.priority_rank ASC, s.imported_at DESC, s.batch ASC`,
             { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
         );
     }
@@ -348,14 +354,17 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * Register `batch` with how many reviewers must finish it and who may
-         * never take it. An existing batch keeps its row; asking for other
+         * Register `batch` with how many reviewers must finish it, who may
+         * never take it and its priority (PRIORITIES, default `important`). An existing batch keeps its row; asking for other
          * values than the stored ones throws ReviewInputError, so an import
          * never silently re-routes a batch (an option left null or out is not asked).
          */
-        async createBatch(batch, { reviews_needed, excluded } = {}, { transaction } = {}) {
+        async createBatch(batch, { reviews_needed, excluded, priority } = {}, { transaction } = {}) {
             if (reviews_needed != null && !(Number.isInteger(reviews_needed) && reviews_needed >= 1)) {
                 throw new ReviewInputError('reviews_needed must be a positive integer');
+            }
+            if (priority != null && !PRIORITIES.includes(priority)) {
+                throw new ReviewInputError(`priority must be one of ${PRIORITIES.join(', ')}`);
             }
             if (excluded != null) {
                 if (!Array.isArray(excluded)) throw new ReviewInputError('excluded must be a list of reviewers');
@@ -373,12 +382,16 @@ module.exports = function createReviewRepository(models, sequelize) {
                 if (codes != null && stored.join(',') !== codes.join(',')) {
                     throw new ReviewInputError(`batch ${batch} excludes {${stored.join(',')}}, not {${codes.join(',')}}`);
                 }
+                if (priority != null && existing.priority !== priority) {
+                    throw new ReviewInputError(`batch ${batch} is ${existing.priority}, not ${priority}`);
+                }
                 return existing;
             }
             return models.ReviewBatch.create({
                 batch,
                 ...(reviews_needed != null && { reviews_needed }),
                 ...(codes != null && { excluded: codes }),
+                ...(priority != null && { priority }),
             }, { transaction });
         },
 
@@ -514,7 +527,7 @@ module.exports = function createReviewRepository(models, sequelize) {
         /**
          * Split `batch` into balanced parts `<batch>-p1`, … of at most `maxItems`
          * items (splitSheet), in one transaction under the batch row lock: the
-         * parts get its `reviews_needed` / `excluded`, its items keep their sheet
+         * parts get its `reviews_needed` / `excluded` / `priority`, its items keep their sheet
          * and move, then its row is deleted. Verdicts stay on the items. Refuses
          * (ReviewInputError) an unknown or locked batch, one within the limit and
          * one whose part names exist. Returns `{ sheet, total, parts: [{ batch, total }] }`.
@@ -548,7 +561,7 @@ module.exports = function createReviewRepository(models, sequelize) {
                 await sequelize.query('UPDATE prv_review_items SET sheet = COALESCE(sheet, batch) WHERE batch = :batch',
                     { replacements: { batch }, transaction });
                 for (const part of parts) {
-                    await models.ReviewBatch.create({ batch: part.batch, reviews_needed: row.reviews_needed, excluded: row.excluded }, { transaction });
+                    await models.ReviewBatch.create({ batch: part.batch, reviews_needed: row.reviews_needed, excluded: row.excluded, priority: row.priority }, { transaction });
                     await sequelize.query('UPDATE prv_review_items SET batch = :part WHERE id IN (:ids)',
                         { replacements: { part: part.batch, ids: part.items.map((it) => it.id) }, transaction });
                 }
@@ -705,3 +718,4 @@ module.exports.mayDecide = mayDecide;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
 module.exports.LOCK_IDLE_HOURS = LOCK_IDLE_HOURS;
 module.exports.VIDEO_FLAGS = VIDEO_FLAGS;
+module.exports.PRIORITIES = PRIORITIES;

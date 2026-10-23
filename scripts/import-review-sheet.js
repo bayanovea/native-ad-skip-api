@@ -10,7 +10,7 @@
 //
 // Usage: DB_NAME=skipper DB_HOST=localhost DB_PORT=5433 DB_USER=postgres DB_PASSWORD=… \
 //        node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--reviewer CODE]
-//        [--reviews N] [--exclude CODE[,CODE]] [--max-items N]
+//        [--reviews N] [--exclude CODE[,CODE]] [--priority urgent|important|optional] [--max-items N]
 // --batch: sheet name (default: the md file name); parts are NAME-p1, ….
 // --reviewer: who the md verdicts belong to (default bayanovea, the owner's sheets).
 //   Per batch: when the imported verdicts leave it unfinished for them, it is locked
@@ -19,8 +19,10 @@
 // --reviews: how many reviewers must finish each batch (default 1).
 // --exclude: reviewers who may never take its batches (they reviewed the same items
 //   in another batch); md verdicts of an excluded --reviewer fail the import.
-// For existing batches, --reviews / --exclude must match the stored values; a new
-// part of an existing sheet takes the values of its first part unless given.
+// --priority: where the batches sort on the page (default important; optional =
+//   a pass to do when there is time; urgent is what the judge sends from prod).
+// For existing batches, --reviews / --exclude / --priority must match the stored
+// values; a new part of an existing sheet takes the values of its first part unless given.
 // The key file is <sheet>.key.tsv next to the md. Tables must exist
 // (sequelize.sync(): app boot or scripts/sync-db.js).
 
@@ -30,20 +32,21 @@ const { parseSheet, splitSheet } = require('../lib/review-sheet');
 const { scriptSequelize } = require('../lib/script-db');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
+const { PRIORITIES } = createReviewRepository;
 
 function usage(msg) {
     if (msg) console.error(msg);
     console.error('usage: node scripts/import-review-sheet.js <sheet.md> [--batch NAME] [--reviewer CODE]'
-        + ' [--reviews N] [--exclude CODE[,CODE]] [--max-items N]');
+        + ' [--reviews N] [--exclude CODE[,CODE]] [--priority urgent|important|optional] [--max-items N]');
     process.exit(2);
 }
 
 function parseArgs(argv) {
-    const opts = { batch: null, reviewer: 'bayanovea', reviews: null, exclude: null, maxItems: 30 };
+    const opts = { batch: null, reviewer: 'bayanovea', reviews: null, exclude: null, priority: null, maxItems: 30 };
     let mdPath = null;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        const m = /^--(batch|reviewer|reviews|exclude|max-items)(?:=(.*))?$/.exec(a);
+        const m = /^--(batch|reviewer|reviews|exclude|priority|max-items)(?:=(.*))?$/.exec(a);
         if (/^--assignee(=|$)/.test(a)) {
             usage('--assignee is gone: batches are first come, the reviewer takes one on the page');
         } else if (m) {
@@ -52,6 +55,9 @@ function parseArgs(argv) {
             if (m[1] === 'reviews' || m[1] === 'max-items') {
                 if (!/^[1-9]\d*$/.test(value)) usage(`--${m[1]} needs a positive integer`);
                 opts[m[1] === 'reviews' ? 'reviews' : 'maxItems'] = Number(value);
+            } else if (m[1] === 'priority') {
+                if (!PRIORITIES.includes(value)) usage(`--priority must be one of ${PRIORITIES.join(', ')}`);
+                opts.priority = value;
             } else if (m[1] === 'exclude') {
                 opts.exclude = value.split(',').map((c) => c.trim()).filter(Boolean);
                 if (opts.exclude.length === 0) usage('--exclude needs reviewer codes');
@@ -92,7 +98,7 @@ function backupMd(mdPath) {
     }
 }
 
-async function importItems(sequelize, review, sheet, items, { reviewer, reviews, exclude, maxItems }) {
+async function importItems(sequelize, review, sheet, items, { reviewer, reviews, exclude, priority, maxItems }) {
     const summary = { parts: [], inserted: [], present: [], imported: [], skipped: [], locked: [], released: [] };
     await review.releaseIdleLocks();
     await sequelize.transaction(async (transaction) => {
@@ -103,7 +109,7 @@ async function importItems(sequelize, review, sheet, items, { reviewer, reviews,
 
         const batchRows = new Map();
         for (const batch of oldParts) {
-            batchRows.set(batch, await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude }, { transaction }));
+            batchRows.set(batch, await review.createBatch(batch, { reviews_needed: reviews, excluded: exclude, priority }, { transaction }));
         }
         const first = batchRows.get(oldParts[0]);
         for (const { batch } of newParts) {
@@ -114,6 +120,7 @@ async function importItems(sequelize, review, sheet, items, { reviewer, reviews,
             batchRows.set(batch, await review.createBatch(batch, {
                 reviews_needed: reviews != null ? reviews : first && first.reviews_needed,
                 excluded: exclude != null ? exclude : first && first.excluded,
+                priority: priority != null ? priority : first && first.priority,
             }, { transaction }));
         }
         const holders = new Map();
@@ -192,7 +199,7 @@ function printSummary(sheet, summary, reviewer) {
 }
 
 async function main() {
-    const { mdPath, sheet, reviewer, reviews, exclude, maxItems } = parseArgs(process.argv.slice(2));
+    const { mdPath, sheet, reviewer, reviews, exclude, priority, maxItems } = parseArgs(process.argv.slice(2));
 
     // Backup before anything else; the md is never written to.
     const backup = backupMd(mdPath);
@@ -209,7 +216,7 @@ async function main() {
         // All review-table SQL lives in the repository; verdicts go through the
         // same write entrypoint as the review page.
         const review = createReviewRepository(definePrvModels(sequelize), sequelize);
-        const summary = await importItems(sequelize, review, sheet, items, { reviewer, reviews, exclude, maxItems });
+        const summary = await importItems(sequelize, review, sheet, items, { reviewer, reviews, exclude, priority, maxItems });
         printSummary(sheet, summary, reviewer);
     } finally {
         await sequelize.close();

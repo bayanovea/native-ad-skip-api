@@ -199,6 +199,9 @@ const STYLE = `
         .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: #fff; }
         .badge-banned { background: #7f1d1d; color: #fecaca; margin-left: 6px; }
         .ai-badge { background: #7c3aed; }
+        .priority-urgent { background: #b91c1c; }
+        .priority-important { background: #1d4ed8; }
+        .priority-optional { background: #6b7280; }
         .verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
         .verdict-btn { display: inline-flex; align-items: center; gap: 8px; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 6px 12px 6px 8px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
         .verdict-btn .icon { width: 16px; height: 16px; color: #94a3b8; }
@@ -325,6 +328,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
             <tr>
                 <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${tok}">${escapeHtml(b.batch)}</a></td>
                 <td>${t(`state_${b.state}`, { name: b.locked_by })}</td>
+                <td><span class="badge priority-${escapeHtml(b.priority)}">${t(`priority_${b.priority}`)}</span></td>
                 <td class="num">${b.total}</td>
                 <td class="num">${b.decided}</td>
                 <td class="num">${b.open}</td>
@@ -334,7 +338,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
         return rows.length === 0 ? '' : `
     <h2 class="section-${state}">${t(`list_section_${state}`)}</h2>
     <table>
-        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
+        <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_priority')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
         <tbody>${rows.map(row).join('')}</tbody>
     </table>`;
     }).join('');

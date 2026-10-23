@@ -79,7 +79,8 @@ func addReviewItems(tx *sql.Tx, prv provider.Provider, v Video, j judgement, s S
 // reviewBatch picks the sheet's newest part that nobody holds or has started and
 // that has room for n more items, else registers a new part (<sheet>, then
 // <sheet>-p2, …: the importer's names when a re-import adds a part to a sheet
-// imported whole), so a reviewer's batch never grows under them.
+// imported whole), so a reviewer's batch never grows under them. Judge batches
+// are `urgent`: their videos are served (or withdrawn) on prod right now.
 func reviewBatch(tx *sql.Tx, sheet string, n int) (string, error) {
 	var batch string
 	err := tx.QueryRow(`SELECT b.batch FROM prv_review_batches b
@@ -102,7 +103,7 @@ func reviewBatch(tx *sql.Tx, sheet string, n int) (string, error) {
 	if parts > 0 {
 		batch = fmt.Sprintf("%s-p%d", sheet, parts+1)
 	}
-	if _, err := tx.Exec(`INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING`, batch); err != nil {
+	if _, err := tx.Exec(`INSERT INTO prv_review_batches (batch, priority) VALUES ($1, 'urgent') ON CONFLICT DO NOTHING`, batch); err != nil {
 		return "", fmt.Errorf("review batch: %w", err)
 	}
 	return batch, nil

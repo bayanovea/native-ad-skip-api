@@ -89,7 +89,7 @@ func expectNewItems(mock sqlmock.Sqlmock, flagged string) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT i.start, i."end" FROM prv_review_items i`)).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"start", "end"}))
 	mock.ExpectQuery("SELECT b.batch FROM prv_review_batches").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT COUNT\\(DISTINCT batch\\)").WithArgs("ai-judge-2026-10-21").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING")).WithArgs("ai-judge-2026-10-21").
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO prv_review_batches (batch, priority) VALUES ($1, 'urgent') ON CONFLICT DO NOTHING")).WithArgs("ai-judge-2026-10-21").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("COALESCE\\(MAX\\(position\\), 0\\)").WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(0))
 	mock.ExpectExec("INSERT INTO prv_review_items").

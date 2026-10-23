@@ -1443,6 +1443,7 @@ test('ai judge: off by default; no signal → ok by rules, an undo → the LLM s
     assert.equal(items.length, 1);
     const [it] = items;
     assert.match(it.batch, /^ai-judge-\d{4}-\d\d-\d\d$/);
+    assert.deepEqual(await dbQuery('SELECT priority FROM prv_review_batches WHERE batch = $1', [it.batch]), [{ priority: 'urgent' }], 'judge batches are urgent');
     assert.deepEqual([it.sheet, it.kind, it.item_code, it.native_id, it.start, it.end, it.proposed],
         [it.batch, 'ai', 'A1', '-1_456000402', 30, 70, 'sponsor']);
     assert.equal(it.cues, 'Этот выпуск спонсирует сервис\nпереходите по ссылке в описании');
@@ -3856,8 +3857,8 @@ async function reviewState(batch) {
 }
 
 // Batch progress row as the repository and the JSON return it (3 items).
-function batchRow(batch, { decided, finished = [], locked_by = null, state = 'available', reviews_needed = 1 }) {
-    return { batch, total: 3, decided, open: 3 - decided, reviews_needed, finished, locked_by, locked_at: null, state };
+function batchRow(batch, { decided, finished = [], locked_by = null, state = 'available', reviews_needed = 1, priority = 'important' }) {
+    return { batch, total: 3, decided, open: 3 - decided, reviews_needed, priority, finished, locked_by, locked_at: null, state };
 }
 
 // The importer locks a half-done batch on the md reviewer; tests that start
@@ -4077,6 +4078,33 @@ test('review import: md verdicts into a batch locked by another reviewer fail an
     assert.equal(skipped.status, 0, 'every md verdict is skipped, nothing would land');
     assert.match(skipped.stdout, /verdicts imported: 0\n/);
     await withReviewRepo(async (repo) => assert.equal((await repo.getBatchProgress(batch, 'gkshi')).locked_by, 'gkshi'));
+});
+
+test('review import: --priority sets the batch row (default important), an existing batch must match; the list sorts urgent first and shows the label', async () => {
+    const opt = 'e2e-review-import-priority-opt';
+    const urg = 'e2e-review-import-priority-urg';
+    const plain = 'e2e-review-import-priority-plain';
+    assert.equal(runImport(copyReviewFixture(opt), ['--priority', 'optional']).status, 0);
+    assert.equal(runImport(copyReviewFixture(urg), ['--priority=urgent']).status, 0);
+    assert.equal(runImport(copyReviewFixture(plain)).status, 0);
+    const priorities = await dbQuery('SELECT batch, priority FROM prv_review_batches WHERE batch = ANY($1) ORDER BY batch', [[opt, plain, urg]]);
+    assert.deepEqual(priorities, [{ batch: opt, priority: 'optional' }, { batch: plain, priority: 'important' }, { batch: urg, priority: 'urgent' }]);
+    assert.equal(runImport(copyReviewFixture(opt), ['--priority', 'optional']).status, 0, 'same value passes');
+    assert.equal(runImport(copyReviewFixture(opt)).status, 0, 'left out: not compared');
+    const other = runImport(copyReviewFixture(opt), ['--priority', 'urgent']);
+    assert.equal(other.status, 1);
+    assert.match(other.stderr, /batch e2e-review-import-priority-opt is optional, not urgent/);
+    const bad = runImport(copyReviewFixture('e2e-review-import-priority-bad'), ['--priority', 'soon']);
+    assert.equal(bad.status, 2);
+    assert.match(bad.stderr, /--priority must be one of urgent, important, optional/);
+    await giveUp(opt, urg, plain);
+
+    const list = (await request('GET', reviewPath('/admin/review', { format: 'json' }), null)).body.batches
+        .filter(b => [opt, urg, plain].includes(b.batch));
+    assert.deepEqual(list.map(b => [b.batch, b.priority]), [[urg, 'urgent'], [plain, 'important'], [opt, 'optional']], 'urgent first, optional last');
+    const html = (await request('GET', reviewPath('/admin/review'), null)).body;
+    for (const key of ['list_col_priority', 'priority_urgent', 'priority_important', 'priority_optional']) assert.ok(html.includes(RU(key)), key);
+    assert.ok(html.indexOf(`/admin/review/${urg}?`) < html.indexOf(`/admin/review/${plain}?`) && html.indexOf(`/admin/review/${plain}?`) < html.indexOf(`/admin/review/${opt}?`), 'rows in priority order');
 });
 
 test('review import: --reviews and --exclude set the batch row; an existing batch must match; bad values fail', async () => {
@@ -4317,7 +4345,7 @@ test('review split: a batch over the limit becomes balanced parts; verdicts, set
     const excl = 'e2e-split-excluded';
     await withReviewRepo((repo) => repo.createReviewer(excl));
     try {
-        const imp = runImport(writeReviewSheet(sheet, 64, firstVerdicts(64)), ['--max-items', '64', '--reviews', '2', '--exclude', excl]);
+        const imp = runImport(writeReviewSheet(sheet, 64, firstVerdicts(64)), ['--max-items', '64', '--reviews', '2', '--exclude', excl, '--priority', 'optional']);
         assert.equal(imp.status, 0, imp.stderr);
         const whole = [[sheet, 64, 1, 64, 2, [excl], null]];
         assert.deepEqual(await sheetParts(sheet), whole);
@@ -4354,6 +4382,8 @@ test('review split: a batch over the limit becomes balanced parts; verdicts, set
             [`${sheet}-p3`, 21, 44, 64, 2, [excl], null],
         ]);
         assert.deepEqual(await dbQuery('SELECT batch FROM prv_review_batches WHERE batch = $1', [sheet]), [], 'old batch row gone');
+        assert.deepEqual((await dbQuery('SELECT priority FROM prv_review_batches WHERE batch LIKE $1 ORDER BY batch', [`${sheet}-p%`])).map((r) => r.priority),
+            ['optional', 'optional', 'optional'], 'parts keep the priority');
         assert.deepEqual(await verdicts(), before, 'verdicts stay on their items');
         const parts = [1, 2, 3].map((k) => `${sheet}-p${k}`);
         await withReviewRepo(async (repo) => {
@@ -4498,7 +4528,7 @@ test('schema one-off: batch assignee → exclusions and locks, assignee cleared;
         const columns = (await c.query(
             `SELECT column_name FROM information_schema.columns WHERE table_name = 'prv_review_batches' ORDER BY column_name`)).rows
             .map(row => row.column_name);
-        assert.deepEqual(columns, ['assignee', 'batch', 'created_at', 'excluded', 'locked_at', 'locked_by', 'reviews_needed']);
+        assert.deepEqual(columns, ['assignee', 'batch', 'created_at', 'excluded', 'locked_at', 'locked_by', 'priority', 'reviews_needed']);
         const batches = async () => (await c.query(
             'SELECT batch, assignee, reviews_needed, excluded, locked_by, locked_at FROM prv_review_batches ORDER BY batch')).rows;
         const after = await batches();
