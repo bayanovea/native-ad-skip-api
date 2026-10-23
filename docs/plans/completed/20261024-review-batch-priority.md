@@ -13,7 +13,7 @@ Assessors see one list and take the newest batch. With the judge sending items f
 ## Solution
 
 - `prv_review_batches.priority` (`VARCHAR(16) NOT NULL DEFAULT 'important'`, `lib/schema.js` ALTER, model field), values `PRIORITIES = ['urgent', 'important', 'optional']` in `prv/repository/review.js`. A pre-branch image keeps inserting (default), a rolled-back image ignores the column.
-- `batchProgress()` selects it and orders by priority rank, then imported-at desc as before; JSON rows carry `priority`. The page keeps its sections (In work / Available / …) and shows a coloured label per row; within a section urgent batches come first.
+- `batchProgress()` selects it and orders by priority rank, then imported-at desc as before; JSON rows carry `priority`. The page keeps its sections (In work / Available / …) and shows a coloured label per row; within a section urgent batches come first, each priority run under a divider row with a coloured left edge on its rows (owner, 2026-10-24: the difference must be visible without reading the labels).
 - Importer: `--priority urgent|important|optional`; the existing-batch rule as for `--reviews` / `--exclude` (a different stored value fails, left out is not checked; a new part of a sheet inherits the first part's). `splitBatch()` copies it to the parts.
 - Judge (`ai/judge/review.go`): new batches are inserted with `'urgent'`.
 

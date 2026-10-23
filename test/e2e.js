@@ -4105,6 +4105,15 @@ test('review import: --priority sets the batch row (default important), an exist
     const html = (await request('GET', reviewPath('/admin/review'), null)).body;
     for (const key of ['list_col_priority', 'priority_urgent', 'priority_important', 'priority_optional']) assert.ok(html.includes(RU(key)), key);
     assert.ok(html.indexOf(`/admin/review/${urg}?`) < html.indexOf(`/admin/review/${plain}?`) && html.indexOf(`/admin/review/${plain}?`) < html.indexOf(`/admin/review/${opt}?`), 'rows in priority order');
+    for (const p of ['urgent', 'important', 'optional']) {
+        assert.ok(html.includes(`class="priority-group priority-group-${p}"`), `divider row for ${p}`);
+    }
+    // Other tests leave batches in other sections, so look around this section's urgent row (the CSS mentions the class names too).
+    const urgAt = html.indexOf(`/admin/review/${urg}?`);
+    const urgentDivider = html.lastIndexOf('class="priority-group priority-group-urgent"', urgAt);
+    const importantDivider = html.indexOf('class="priority-group priority-group-important"', urgAt);
+    assert.ok(urgentDivider > -1 && importantDivider > -1 && importantDivider < html.indexOf(`/admin/review/${plain}?`), 'the urgent divider sits above its rows, the important one between them and the important rows');
+    assert.ok(html.includes(`class="priority-row priority-row-optional"`), 'rows carry their priority class');
 });
 
 test('review import: --reviews and --exclude set the batch row; an existing batch must match; bad values fail', async () => {

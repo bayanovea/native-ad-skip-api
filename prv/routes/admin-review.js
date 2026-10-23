@@ -202,6 +202,14 @@ const STYLE = `
         .priority-urgent { background: #b91c1c; }
         .priority-important { background: #1d4ed8; }
         .priority-optional { background: #6b7280; }
+        .priority-group td { padding: 4px 12px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; background: #0f172a; border-top: 2px solid #334155; }
+        .priority-group-urgent td { color: #fca5a5; }
+        .priority-group-optional td { color: #9ca3af; font-weight: 500; }
+        .priority-row td:first-child { border-left: 4px solid transparent; }
+        .priority-row-urgent td:first-child { border-left-color: #b91c1c; }
+        .priority-row-important td:first-child { border-left-color: #1d4ed8; }
+        .priority-row-optional td:first-child { border-left-color: #6b7280; }
+        .priority-row-optional { color: #94a3b8; }
         .verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
         .verdict-btn { display: inline-flex; align-items: center; gap: 8px; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 6px 12px 6px 8px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
         .verdict-btn .icon { width: 16px; height: 16px; color: #94a3b8; }
@@ -321,11 +329,24 @@ function renderReviewerPicker(reviewers, token, t, langLink, form = {}) {
 // Batch list sections in page order; `closed` rows come only with show=all.
 const LIST_SECTIONS = ['mine', 'available', 'locked', 'done', 'closed'];
 
+// Rows of one section split into runs of the same priority, in list order
+// (the repository sorts urgent → important → optional): each run gets a
+// divider row, so the drop from urgent to optional is visible without reading labels.
+function groupByPriority(rows) {
+    const groups = [];
+    for (const b of rows) {
+        const last = groups[groups.length - 1];
+        if (last && last[0] === b.priority) last[1].push(b);
+        else groups.push([b.priority, [b]]);
+    }
+    return groups;
+}
+
 function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
     const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
     const row = (b) => `
-            <tr>
+            <tr class="priority-row priority-row-${escapeHtml(b.priority)}">
                 <td><a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(b.batch))}?reviewer=${r}&amp;verifyBearerToken=${tok}">${escapeHtml(b.batch)}</a></td>
                 <td>${t(`state_${b.state}`, { name: b.locked_by })}</td>
                 <td><span class="badge priority-${escapeHtml(b.priority)}">${t(`priority_${b.priority}`)}</span></td>
@@ -339,7 +360,8 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
     <h2 class="section-${state}">${t(`list_section_${state}`)}</h2>
     <table>
         <thead><tr><th>${t('list_col_batch')}</th><th>${t('list_col_state')}</th><th>${t('list_col_priority')}</th><th>${t('list_col_items')}</th><th>${t('list_col_decided')}</th><th>${t('list_col_open')}</th></tr></thead>
-        <tbody>${rows.map(row).join('')}</tbody>
+        <tbody>${groupByPriority(rows).map(([priority, group]) => `
+            <tr class="priority-group priority-group-${escapeHtml(priority)}"><td colspan="6">${t(`priority_${priority}`)}</td></tr>${group.map(row).join('')}`).join('')}</tbody>
     </table>`;
     }).join('');
     return page(t.text('page_title'), `
