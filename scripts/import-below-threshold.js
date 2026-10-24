@@ -7,7 +7,9 @@
 //
 // Usage: DB_NAME=… DB_HOST=… DB_PORT=… DB_USER=… DB_PASSWORD=… \
 //        node scripts/import-below-threshold.js [--sheet NAME] [--priority urgent|important|optional]
-//        [--max-items N] [--empty-only] [--dry-run]
+//        [--max-items N] [--min-seconds S] [--empty-only] [--dry-run]
+// --min-seconds: skip segments shorter than S s (default 5, the publish floor: a short mention cannot be
+//   served whatever its confidence, and streams produce dozens of 1–5 s sponsor mentions); 0 = keep them.
 // --sheet: default ai-below-threshold-<YYYY-MM-DD> (UTC); a sheet that already has items is refused.
 // --priority: default optional (a pass for when there is time). --max-items: part size (default 30).
 // --empty-only: only videos whose AI row has no entry at all (the funnel's stage 9).
@@ -42,10 +44,10 @@ function usage(msg) {
 }
 
 function parseArgs(argv) {
-    const opts = { sheet: `ai-below-threshold-${new Date().toISOString().slice(0, 10)}`, priority: 'optional', maxItems: 30, emptyOnly: false, dryRun: false };
+    const opts = { sheet: `ai-below-threshold-${new Date().toISOString().slice(0, 10)}`, priority: 'optional', maxItems: 30, minSeconds: MIN_SEGMENT_SECONDS, emptyOnly: false, dryRun: false };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        const m = /^--(sheet|priority|max-items)(?:=(.*))?$/.exec(a);
+        const m = /^--(sheet|priority|max-items|min-seconds)(?:=(.*))?$/.exec(a);
         if (a === '--empty-only') opts.emptyOnly = true;
         else if (a === '--dry-run') opts.dryRun = true;
         else if (m) {
@@ -54,6 +56,9 @@ function parseArgs(argv) {
             if (m[1] === 'max-items') {
                 if (!/^[1-9]\d*$/.test(value)) usage('--max-items needs a positive integer');
                 opts.maxItems = Number(value);
+            } else if (m[1] === 'min-seconds') {
+                if (!/^\d+(\.\d+)?$/.test(value)) usage('--min-seconds needs a number');
+                opts.minSeconds = Number(value);
             } else if (m[1] === 'priority') {
                 if (!PRIORITIES.includes(value)) usage(`--priority must be one of ${PRIORITIES.join(', ')}`);
                 opts.priority = value;
@@ -89,7 +94,7 @@ async function main() {
                     continue;
                 }
                 const start = round1(first.start), end = round1(last.end);
-                if (published(seg, first.start, last.end)) continue;
+                if (published(seg, first.start, last.end) || end - start < opts.minSeconds) continue;
                 candidates.push({
                     native_id: row.native_id, start, end, proposed: seg.category,
                     cues: cues.slice(seg.first_cue, seg.last_cue + 1).map((c) => c.text).join('\n') || null,
@@ -108,7 +113,7 @@ async function main() {
             if (!dup) fresh.push(c);
         }
         const videos = new Set(fresh.map((c) => c.native_id)).size;
-        console.log(`${candidates.length} segments below the threshold, ${fresh.length} not yet in review (${videos} videos)`);
+        console.log(`${candidates.length} segments below the threshold and at least ${opts.minSeconds} s, ${fresh.length} not yet in review (${videos} videos)`);
         if (fresh.length === 0) return;
         const items = fresh.map((c, i) => ({ ...c, position: i + 1, item_code: `B${i + 1}` }));
         if (opts.dryRun) {

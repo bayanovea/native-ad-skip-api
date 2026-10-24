@@ -1092,10 +1092,13 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     // -1_456000201: self_promotion at medium (300–320) and a 3-s sponsor (480–483) were dropped; -1_456000206 published empty.
     let r = run('--dry-run');
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^3 segments below the threshold, 3 not yet in review \(2 videos\)\n/);
+    assert.match(r.stdout, /^1 segments below the threshold and at least 5 s, 1 not yet in review \(1 videos\)\nB1\t-1_456000201\t300\t320\tself_promotion\t/, 'the 3-s sponsor and the 3-s self-promotion are under the floor');
+    r = run('--dry-run', '--min-seconds', '0');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 3 not yet in review \(2 videos\)\n/);
     assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE native_id LIKE '-1_45600020%'`))[0].n, 0, 'dry run writes nothing');
 
-    r = run('--sheet', 'below-test', '--empty-only');
+    r = run('--sheet', 'below-test', '--empty-only', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /imported 1 items into below-test \(1\)/);
     let items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test' ORDER BY position`);
@@ -1108,9 +1111,9 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     assert.equal(r.status, 1, 'a sheet with items is refused');
     assert.match(r.stderr, /sheet below-test already has items/);
 
-    r = run('--sheet', 'below-test-2', '--max-items', '1', '--priority', 'important');
+    r = run('--sheet', 'below-test-2', '--max-items', '1', '--priority', 'important', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^3 segments below the threshold, 2 not yet in review \(1 videos\)\nimported 2 items into below-test-2-p1 \(1\), below-test-2-p2 \(1\)/);
+    assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 2 not yet in review \(1 videos\)\nimported 2 items into below-test-2-p1 \(1\), below-test-2-p2 \(1\)/);
     items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test-2' ORDER BY position`);
     assert.deepEqual(items.map((i) => [i.batch, i.item_code, i.native_id, i.start, i.end, i.proposed, i.link, i.cues]), [
         ['below-test-2-p1', 'B1', '-1_456000201', 300, 320, 'self_promotion', 'https://example.invalid/video-1_456000201?t=4m58s', 'подписывайтесь на мой телеграм канал\nтам ролики выходят раньше'],
@@ -1118,9 +1121,9 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     ]);
     assert.match(items[0].flagged_by[0], /^detect run \d+: self_promotion medium, 20 s, below the publish threshold$/);
 
-    r = run('--sheet', 'below-test-3');
+    r = run('--sheet', 'below-test-3', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout, '3 segments below the threshold, 0 not yet in review (0 videos)\n');
+    assert.equal(r.stdout, '3 segments below the threshold and at least 0 s, 0 not yet in review (0 videos)\n');
     await dbQuery(`DELETE FROM prv_review_items WHERE sheet LIKE 'below-test%'`);
     await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'below-test%'`);
 });
