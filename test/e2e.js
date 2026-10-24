@@ -1092,7 +1092,7 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     // -1_456000201: self_promotion at medium (300–320) and a 3-s sponsor (480–483) were dropped; -1_456000206 published empty.
     let r = run('--dry-run');
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^1 segments below the threshold and at least 5 s, 1 not yet in review \(1 videos\)\nB1\t-1_456000201\t300\t320\tself_promotion\t/, 'the 3-s sponsor and the 3-s self-promotion are under the floor');
+    assert.match(r.stdout, /^2 segments below the threshold and at least 5 s, 2 not yet in review \(2 videos\)\nB1\t-1_456000201\t300\t320\tself_promotion\t.*\nB2\t-1_456000206\t20\t30\tsponsor\t/, 'the 3-s sponsor is under the floor');
     r = run('--dry-run', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 3 not yet in review \(2 videos\)\n/);
