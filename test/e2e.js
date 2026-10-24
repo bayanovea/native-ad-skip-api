@@ -1086,6 +1086,45 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.match(await fetchMetrics(), /^calculator_last_success_timestamp_seconds\{provider="ai_detect"\} \d/m);
 });
 
+test('import-below-threshold: the dropped segments become sheet items once, never AI items', async () => {
+    const run = (...args) => spawnSync('node', [`${APP_DIR}/scripts/import-below-threshold.js`, ...args],
+        { env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000 });
+    // -1_456000201: self_promotion at medium (300–320) and a 3-s sponsor (480–483) were dropped; -1_456000206 published empty.
+    let r = run('--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^3 segments below the threshold, 3 not yet in review \(2 videos\)\n/);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE native_id LIKE '-1_45600020%'`))[0].n, 0, 'dry run writes nothing');
+
+    r = run('--sheet', 'below-test', '--empty-only');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /imported 1 items into below-test \(1\)/);
+    let items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test' ORDER BY position`);
+    assert.deepEqual(items.map((i) => [i.sheet, i.batch, i.item_code, i.native_id, i.proposed, i.kind, i.video_id]),
+        [['below-test', 'below-test', 'B1', '-1_456000206', 'sponsor', 'sheet', null]]);
+    assert.deepEqual((await dbQuery(`SELECT reviews_needed, priority, locked_by FROM prv_review_batches WHERE batch = 'below-test'`))[0],
+        { reviews_needed: 1, priority: 'optional', locked_by: null });
+
+    r = run('--sheet', 'below-test');
+    assert.equal(r.status, 1, 'a sheet with items is refused');
+    assert.match(r.stderr, /sheet below-test already has items/);
+
+    r = run('--sheet', 'below-test-2', '--max-items', '1', '--priority', 'important');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^3 segments below the threshold, 2 not yet in review \(1 videos\)\nimported 2 items into below-test-2-p1 \(1\), below-test-2-p2 \(1\)/);
+    items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test-2' ORDER BY position`);
+    assert.deepEqual(items.map((i) => [i.batch, i.item_code, i.native_id, i.start, i.end, i.proposed, i.link, i.cues]), [
+        ['below-test-2-p1', 'B1', '-1_456000201', 300, 320, 'self_promotion', 'https://example.invalid/video-1_456000201?t=4m58s', 'подписывайтесь на мой телеграм канал\nтам ролики выходят раньше'],
+        ['below-test-2-p2', 'B2', '-1_456000201', 480, 483, 'sponsor', 'https://example.invalid/video-1_456000201?t=7m58s', 'промокод ещё раз в описании'],
+    ]);
+    assert.match(items[0].flagged_by[0], /^detect run \d+: self_promotion medium, 20 s, below the publish threshold$/);
+
+    r = run('--sheet', 'below-test-3');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '3 segments below the threshold, 0 not yet in review (0 videos)\n');
+    await dbQuery(`DELETE FROM prv_review_items WHERE sheet LIKE 'below-test%'`);
+    await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'below-test%'`);
+});
+
 test('ai detect <native_id>: the manual run ignores views and the switch, calls the model synchronously, writes no heartbeat; a video with an AI row is never re-detected', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000204', 5, 1) ON CONFLICT DO NOTHING`);
     const hb = await heartbeat('ai_detect');

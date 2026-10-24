@@ -3890,6 +3890,209 @@
         }
       ],
       "description": "Без AI (или при AI_FIRST = off) эти видео отдаются пустыми."
+    },
+    {
+      "id": 60,
+      "type": "stat",
+      "title": "Модель не нашла рекламу, а пользователи разметили",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 136,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_video_calculateds c\nWHERE jsonb_array_length(c.data) = 0 AND c.withdrawn_at IS NULL\n  AND EXISTS (SELECT 1 FROM markups m JOIN videos v ON v.id = m.video_id JOIN markup_categories mc ON mc.id = m.category_id\n    WHERE v.native_id = c.native_id AND m.deleted_at IS NULL AND mc.category IN ('sponsor', 'self_promotion'))"
+        }
+      ],
+      "description": "Пропуски модели: видео стадии 9 (ответ пустой), у которых есть живая пользовательская разметка sponsor / self_promotion на любом videos-ряду этого native_id. Зрители получают пользовательскую, мы проверяем модель на кейсах «рекламы нет». Отрезки ниже порога уходят асессорам скриптом scripts/import-below-threshold.js."
+    },
+    {
+      "id": 61,
+      "type": "table",
+      "title": "Пропуски модели: какие видео",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 136,
+        "w": 18,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://example.invalid/video${__data.fields.native_id}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ответ модели"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "последняя разметка"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "SELECT c.native_id, c.video_id, c.published_at AS \"ответ модели\",\n       CASE WHEN jsonb_typeof(r.raw_output) = 'object' THEN jsonb_array_length(COALESCE(r.raw_output -> 'segments', '[]'::jsonb)) ELSE 0 END AS \"модель предлагала (ниже порога)\",\n       h.n AS \"разметок sponsor / self_promo\", h.last AS \"последняя разметка\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.native_id = c.native_id AND i.kind = 'sheet' AND i.flagged_by::text LIKE '%below the publish threshold%') AS \"у асессоров\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nJOIN LATERAL (SELECT COUNT(*) AS n, MAX(m.\"createdAt\") AS last FROM markups m JOIN videos v ON v.id = m.video_id JOIN markup_categories mc ON mc.id = m.category_id\n    WHERE v.native_id = c.native_id AND m.deleted_at IS NULL AND mc.category IN ('sponsor', 'self_promotion')) h ON TRUE\nWHERE jsonb_array_length(c.data) = 0 AND c.withdrawn_at IS NULL AND h.n > 0\nORDER BY h.last DESC LIMIT 50"
+        }
+      ],
+      "description": "Те же видео: когда ответила модель, сколько сегментов она предлагала (все ниже порога), сколько пользовательских sponsor / self_promotion разметок и когда последняя, сколько отрезков этого видео уже в батчах «ниже порога»."
     }
   ]
 }
