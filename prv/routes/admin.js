@@ -41,7 +41,8 @@ async function aiBlock(models, video, token) {
             return `
             <tr>
                 <td><span class="badge" style="background:${CATEGORY_COLORS[name] || '#64748b'}">${escapeHtml(name)}</span></td>
-                <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span></td>
+                <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span>${e.source === 'review'
+        ? ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>' : ''}</td>
                 <td class="muted">${escapeHtml(e.confidence)}</td>
                 <td class="muted">${escapeHtml(e.rating ?? 0)}</td>
             </tr>`;

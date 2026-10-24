@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime, splitSheet } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime, parsePlayerTime, validateVerdictBounds, splitSheet } = require('../lib/review-sheet');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -238,4 +238,33 @@ test('splitSheet: balanced parts in position order, plain name within the limit,
     assert.deepEqual(shape(splitSheet('s', items(5), 30, 4)), [['s-p4', 5]], 'a new part of an existing sheet is always numbered');
     assert.deepEqual(shape(splitSheet('s', items(40), 30, 2)), [['s-p2', 20], ['s-p3', 20]]);
     assert.deepEqual(splitSheet('s', [], 30), []);
+});
+
+test('parsePlayerTime: seconds, m:ss, h:mm:ss; the inverse of formatPlayerTime', () => {
+    for (const [text, seconds] of [['0', 0], ['42', 42], [' 75 ', 75], ['1:05', 65], ['0:07', 7], ['12:00', 720], ['90:00', 5400],
+        ['1:02:03', 3723], ['0:00:09', 9], ['10:59:59', 39599]]) {
+        assert.equal(parsePlayerTime(text), seconds, text);
+    }
+    assert.equal(parsePlayerTime(17), 17);
+    for (const s of [0, 5, 59, 60, 61, 599, 3599, 3600, 3661, 86400]) assert.equal(parsePlayerTime(formatPlayerTime(s)), s, String(s));
+});
+
+test('parsePlayerTime: NaN on anything else', () => {
+    for (const text of ['', ' ', 'x', '1:5x', '1:60', '1:60:00', '1:00:60', '12.5', '1:05.5', '-5', '1::05', ':05', '1:', '01:008:06', '23-01']) {
+        assert.ok(Number.isNaN(parsePlayerTime(text)), JSON.stringify(text));
+    }
+    for (const value of [null, undefined, {}, [], true]) assert.ok(Number.isNaN(parsePlayerTime(value)));
+});
+
+test('validateVerdictBounds: whole seconds, 0…86400, start before end, at least 5 s', () => {
+    assert.equal(validateVerdictBounds({ start: 0, end: 5 }), null);
+    assert.equal(validateVerdictBounds({ start: 86395, end: 86400 }), null);
+    assert.equal(validateVerdictBounds({ start: 10.5, end: 40 }), 'format');
+    assert.equal(validateVerdictBounds({ start: 10, end: NaN }), 'format');
+    assert.equal(validateVerdictBounds({ start: '10', end: 40 }), 'format');
+    assert.equal(validateVerdictBounds({ start: -1, end: 40 }), 'range');
+    assert.equal(validateVerdictBounds({ start: 86000, end: 86401 }), 'range');
+    assert.equal(validateVerdictBounds({ start: 40, end: 40 }), 'order');
+    assert.equal(validateVerdictBounds({ start: 40, end: 10 }), 'order');
+    assert.equal(validateVerdictBounds({ start: 10, end: 14 }), 'short');
 });

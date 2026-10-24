@@ -206,9 +206,13 @@ func disagreementWindows(entries []Entry, humans []humanNote) []window {
 	return out
 }
 
+// entrySourceReview marks an entry whose bounds an assessor set (prv/repository/ai.js applyVerdict).
+const entrySourceReview = "review"
+
 // renderRequest is the user message: the AI entries with their text, the
 // counters (per 1k views when views are known), the human intervals and the
-// transcript around every disagreement.
+// transcript around every disagreement. Cues are rendered by their text only, so
+// stored word timings never grow the request.
 func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]string, cues []vtt.Cue) detector.Request {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<video duration=\"%d\" published_hours_ago=\"%.0f\" requests=\"%d\"", v.Duration.Int64, s.AgeH, s.Requests)
@@ -217,7 +221,11 @@ func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]str
 	}
 	b.WriteString(">\n<ai_segments>\n")
 	for i, e := range v.Entries {
-		fmt.Fprintf(&b, "[%d] %s %d-%d s: %s\n", i, categories[e.CategoryID], e.Start, e.End, cueText(cues, float64(e.Start), float64(e.End), " "))
+		marker := ""
+		if e.Source == entrySourceReview {
+			marker = " (bounds by review)"
+		}
+		fmt.Fprintf(&b, "[%d] %s %d-%d s%s: %s\n", i, categories[e.CategoryID], e.Start, e.End, marker, cueText(cues, float64(e.Start), float64(e.End), " "))
 	}
 	b.WriteString("</ai_segments>\n<signals>\n")
 	c := s.Counters

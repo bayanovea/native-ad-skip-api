@@ -156,3 +156,51 @@ func expectSignals(mock sqlmock.Sqlmock, since, asOf time.Time, down, undo [2]in
 	mock.ExpectQuery("FROM videos").WithArgs("-1_456000001", 7, published, testVideo.LastSeenAt, testVideo.Duration, 2, asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(recut, recut))
 }
+
+// entryKeepsQuery: entryKeeps' query for testVideo judged at `since`. The parts it pins are what
+// make an item find the entry an assessor moved: the verdict and its time come from the item's
+// latest verdict, the key from its latest verdict that has bounds (an earlier move survives a
+// later keep without bounds), else from the item's own bounds (so an item whose verdict moved the
+// entry no longer matches its old bounds).
+func entryKeepsQuery(mock sqlmock.Sqlmock) *sqlmock.ExpectedQuery {
+	return mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`SELECT e.start, e."end", k.decided_at FROM jsonb_to_recordset($2::jsonb)`)+`.*`+
+		regexp.QuoteMeta(`SELECT r.id, r.verdict, r.decided_at FROM prv_review_verdicts r WHERE r.item_id = i.id
+				ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE`)+`.*`+
+		regexp.QuoteMeta(`LEFT JOIN LATERAL (SELECT r.start, r."end" FROM prv_review_verdicts r WHERE r.item_id = i.id AND r.start IS NOT NULL
+				ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) b ON TRUE`)+`.*`+
+		regexp.QuoteMeta(`WHERE i.kind = 'ai' AND i.video_id = $1 AND COALESCE(b.start, i.start) = e.start AND COALESCE(b."end", i."end") = e."end"`)+`.*`+
+		regexp.QuoteMeta(`ORDER BY l.decided_at DESC, l.id DESC LIMIT 1) k ON TRUE
+		WHERE k.verdict IN ('sponsor', 'self_promotion') AND k.decided_at > $3`)).
+		WithArgs(7, testVideo.Data, since)
+}
+
+// An entry moved from 30-70 to 25-75 by a keep verdict with bounds: the keep is keyed by the
+// moved bounds, the ones the entry has in the row's data.
+func TestEntryKeepsKeysAMovedEntryByItsNewBounds(t *testing.T) {
+	db, mock := newMock(t)
+	keptAt := published.Add(28 * time.Hour)
+	entryKeepsQuery(mock).WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(25, 75, keptAt))
+	v := testVideo
+	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
+	keeps, err := entryKeeps(db, v)
+	if err != nil || len(keeps) != 1 || !keeps[entryKey{25, 75}].Equal(keptAt) {
+		t.Fatalf("got %v %v", keeps, err)
+	}
+	if _, ok := keeps[entryKey{30, 70}]; ok {
+		t.Error("the item's old bounds carry no keep")
+	}
+}
+
+// A keep without bounds after a verdict that moved the entry: the same query, the entry stays
+// keyed by the moved bounds (no carry-forward needed on the verdict rows).
+func TestEntryKeepsALaterKeepWithoutBoundsStaysOnTheMovedEntry(t *testing.T) {
+	db, mock := newMock(t)
+	keptAt := published.Add(30 * time.Hour)
+	entryKeepsQuery(mock).WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(25, 75, keptAt))
+	v := testVideo
+	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
+	keeps, err := entryKeeps(db, v)
+	if err != nil || !keeps[entryKey{25, 75}].Equal(keptAt) {
+		t.Fatalf("got %v %v", keeps, err)
+	}
+}

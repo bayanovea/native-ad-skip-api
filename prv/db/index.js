@@ -163,6 +163,10 @@ module.exports = function(sequelize) {
         comment: { type: DataTypes.TEXT, allowNull: true },
         reviewer: { type: DataTypes.STRING(64), allowNull: false },
         source: { type: DataTypes.STRING(16), allowNull: false },
+        // Bounds the assessor gave the segment (whole seconds), all three or none; keep verdicts only.
+        start: { type: DataTypes.INTEGER, allowNull: true },
+        end: { type: DataTypes.INTEGER, allowNull: true },
+        bounds_source: { type: DataTypes.STRING(8), allowNull: true },
         decided_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, {
         tableName: 'prv_review_verdicts',

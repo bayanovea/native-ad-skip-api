@@ -21,6 +21,8 @@ const batchMax = 30
 // withdrawn row's other entries still reach a human. Returns the batch and the
 // number of items, "" and 0 when every entry already waits.
 func addReviewItems(tx *sql.Tx, prv provider.Provider, v Video, j judgement, s Signals, cues []vtt.Cue, categories map[int]string, now time.Time) (string, int, error) {
+	// Matched on the item's own bounds, not its effective ones: an open item has no verdict, so no
+	// assessor has moved its entry.
 	rows, err := tx.Query(`SELECT i.start, i."end" FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = $1
 		AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts r WHERE r.item_id = i.id)`, v.VideoID)
 	if err != nil {

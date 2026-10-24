@@ -72,8 +72,8 @@ selection is stored (the text inside the bounds follows from the transcript).
 
 ## Testing Strategy
 
-- **unit**: `test/review-sheet.test.js` (time parser), `test/validate-intervals.test.js` or a new
-  `test/verdict-bounds.test.js` (bounds rules), `test/i18n.test.js` parity, Go `ai/judge` sqlmock
+- **unit**: `test/review-sheet.test.js` (time parser and `validateVerdictBounds`; no separate
+  test file), `test/i18n.test.js` parity, Go `ai/judge` sqlmock
   tests (`entryKeeps` with verdict bounds), eval `internal/vtt` tests (word tags).
 - **e2e** (`test/e2e.js`, the `ai…:` group drives the real binaries with fixtures): decide with
   bounds on an ai item changes what `GET /video-calculated` serves, ratings and votes follow the
@@ -100,7 +100,7 @@ selection is stored (the text inside the bounds follows from the transcript).
 - `applyVerdict(item, verdict, { from, to })`: `from` = the item's effective bounds before this
   verdict (read in the same transaction), `to` = the new bounds or `from`. Keep: the entry at
   `from` (or a new one) gets the verdict's category, `start`/`end = to`, `source: "review"` when
-  `to ≠ from` (`confidence` kept), its `rating` from the votes on `(category, to)`, the array
+  `to ≠ from` or when an entry is put back at bounds that are not the item's own (`confidence` kept), its `rating` from the votes on `(category, to)`, the array
   re-sorted by `start`. `not_ad` / `unclear`: the entry at `from` is removed, as today. Bounds
   that overlap another entry of the row are refused (400); the assessor decides that item first.
 - The item page gets the transcript around the item (`[start − 60, end + 60]`, widened with a
@@ -117,11 +117,14 @@ selection is stored (the text inside the bounds follows from the transcript).
   `Parse` reads the tags, `Collapse` keeps the words of the kept tail; after the sync the product
   stores them with no code change (`storedTranscript` holds `vtt.Cue`). Before the sync is
   shipped: confirm nothing marshals cues into the prompt (the prompt must not grow).
-- Export: `start` / `end` = `COALESCE(v.start, i.start)`, so the eval's gold carries the corrected
-  bounds. Import of the old comments: `scripts/import-verdict-bounds.js <tsv>` appends, per row,
+- Export: a `gold_missing` row carries the effective bounds (latest verdict with bounds, of the
+  given reviewer when one is given), so the eval's gold carries the corrected bounds; `model_wrong` /
+  `definition_unclear` rows keep the item's bounds, since they judge the stretch the model proposed. Import of the old comments: `scripts/import-verdict-bounds.js <tsv>` appends, per row,
   a verdict row copying the reviewer's latest verdict and comment on the item plus the bounds
   (`source = 'import'`, `bounds_source = 'import'`); refuses a row whose latest verdict is not a
-  keep (a "the ad actually starts at 19:30" on a `not_ad` is not this item's bounds).
+  keep (a "the ad actually starts at 19:30" on a `not_ad` is not this item's bounds) and one where
+  someone else decided the item later (the copy would become the item's latest verdict). Reviewer
+  `-` = the author of the item's latest verdict (the local exports do not name reviewers).
 
 ## Technical Details
 
@@ -135,9 +138,12 @@ selection is stored (the text inside the bounds follows from the transcript).
 - `reviewRepository.effectiveBounds(item_id, { transaction })` → `{start, end, verdict_id,
   reviewer}` from the latest verdict with bounds, else the item's; `hydrate` exposes
   `item.effective_bounds` and `item.own_bounds` (R's own latest verdict's bounds, to pre-fill).
-- `allKept` (`ai.js`): per item, the latest verdict and `(COALESCE(v.start, i.start),
-  COALESCE(v."end", i."end"))` as the entry key. `entryKeeps` (`signals.go`): the same COALESCE in
-  the lateral join, scanning the stored ints.
+- `allKept` (`ai.js`) and `entryKeeps` (`signals.go`): per item, the latest verdict (its value and
+  time) and, separately, the latest verdict *with* bounds for the entry key
+  (`COALESCE(b.start, i.start), COALESCE(b."end", i."end")`). A COALESCE on the latest verdict alone
+  would lose a correction as soon as anyone saves a keep without bounds after it (a second reviewer,
+  a comment change). Clearing the inputs therefore never resets the bounds; typing the item's own
+  bounds does.
 - Decide route: inside the batch lock, before `recordVerdict`: `from = effectiveBounds(item)`;
   after: `applyVerdict(item, verdict, { from, to })`; response adds `bounds: {start, end, source}
   | null` and `effective_bounds`. Duplicate guard: same verdict, comment **and bounds** as R's
@@ -166,8 +172,7 @@ selection is stored (the text inside the bounds follows from the transcript).
 ## What Goes Where
 
 - **Implementation Steps**: code, tests, docs in this repo and the eval repo change for the words.
-- **Post-Completion**: the owner's check of the 14-row table, the prod import, republishing the
-  overview artifacts, telling the assessors.
+- **Post-Completion**: the owner's check of the 14-row table, the prod import, telling the assessors.
 
 ## Implementation Steps
 
@@ -178,12 +183,12 @@ selection is stored (the text inside the bounds follows from the transcript).
 - Modify (here, via `scripts/sync-detector.sh`): `ai/vtt/*`, `ai/SOURCE`
 - Modify: `test/fixtures/ai/<one native_id>.ru.vtt` (word tags on one fixture)
 
-- [ ] eval: `Word{T float64 "t"; Text string "text"}`, `Cue.Words []Word "words,omitempty"`; `Parse` reads `<hh:mm:ss.mmm>` tags before `<c>…</c>` (the first word of a line takes the cue start); `cleanText` unchanged for `Text`
-- [ ] eval: `Collapse` keeps the words of the kept tail (drop as many leading words as the prefix had); exact repeats still dropped
-- [ ] eval: confirm nothing marshals `vtt.Cue` into the detector prompt (grep `json.Marshal` in `internal/detector`, `internal/transcript`); if something does, exclude `Words` there
-- [ ] eval: tests with a rolling-caption sample (word times, tail words after collapse, a cue without tags → no words); `go test ./internal/vtt/...`; commit in the eval
-- [ ] here: `scripts/sync-detector.sh ~/Web/ad-skip-segment-eval`, `go build ./ai/...`, `go test -mod=vendor ./ai/...`; one e2e fixture `.ru.vtt` gets word tags
-- [ ] e2e: after `ai detect`, `prv_ai_runs.transcript->'cues'->0->'words'` is present for that fixture and absent for one without tags; `make test-e2e` passes
+- [x] eval: `Word{T float64 "t"; Text string "text"}`, `Cue.Words []Word "words,omitempty"`; `Parse` reads `<hh:mm:ss.mmm>` tags before `<c>…</c>` (the first word of a line takes the cue start); `cleanText` unchanged for `Text`
+- [x] eval: `Collapse` keeps the words of the kept tail (drop as many leading words as the prefix had); exact repeats still dropped
+- [x] eval: confirm nothing marshals `vtt.Cue` into the detector prompt (grep `json.Marshal` in `internal/detector`, `internal/transcript`); if something does, exclude `Words` there
+- [x] eval: tests with a rolling-caption sample (word times, tail words after collapse, a cue without tags → no words); `go test ./internal/vtt/...`; commit in the eval
+- [x] here: `scripts/sync-detector.sh ~/Web/ad-skip-segment-eval`, `go build ./ai/...`, `go test -mod=vendor ./ai/...`; one e2e fixture `.ru.vtt` gets word tags
+- [x] e2e: after `ai detect`, `prv_ai_runs.transcript->'cues'->0->'words'` is present for that fixture and absent for one without tags; `make test-e2e` passes
 
 ### Task 2: Verdict bounds in the schema, the model and `recordVerdict`
 
@@ -192,57 +197,57 @@ selection is stored (the text inside the bounds follows from the transcript).
 - Create: `test/verdict-bounds.test.js`
 - Modify: `test/review-sheet.test.js`, `Makefile` (test-unit list), `CLAUDE.md` (test list)
 
-- [ ] `lib/schema.js`: the three `ADD COLUMN IF NOT EXISTS` on `prv_review_verdicts`; model fields `start`, `end`, `bounds_source`
-- [ ] `lib/review-sheet.js`: `parsePlayerTime()` (`s`, `m:ss`, `h:mm:ss` → seconds, `NaN` otherwise) and `validateVerdictBounds({start, end})` (ints, `0 ≤ start < end ≤ 86400`, `end − start ≥ 5`) exported for the route, the script and the page's inline code
-- [ ] `recordVerdict`: optional `bounds: {start, end, source}`; all-or-nothing, keep verdicts only, `source ∈ cue|typed|import`; stored on the row
-- [ ] `effectiveBounds(item_id)` and `hydrate` → `item.effective_bounds` (`{start, end, reviewer}`) and `item.own_bounds`; `ITEM_COLUMNS` untouched
-- [ ] unit tests: parser table (success, `NaN` cases), bounds rules (range, min length, non-int), `recordVerdict` input errors need no DB → cover through `validateVerdictBounds`; `make test-unit`
-- [ ] run tests - must pass before next task
+- [x] `lib/schema.js`: the three `ADD COLUMN IF NOT EXISTS` on `prv_review_verdicts`; model fields `start`, `end`, `bounds_source`
+- [x] `lib/review-sheet.js`: `parsePlayerTime()` (`s`, `m:ss`, `h:mm:ss` → seconds, `NaN` otherwise) and `validateVerdictBounds({start, end})` (ints, `0 ≤ start < end ≤ 86400`, `end − start ≥ 5`) exported for the route, the script and the page's inline code
+- [x] `recordVerdict`: optional `bounds: {start, end, source}`; all-or-nothing, keep verdicts only, `source ∈ cue|typed|import`; stored on the row
+- [x] `effectiveBounds(item_id)` and `hydrate` → `item.effective_bounds` (`{start, end, reviewer}`) and `item.own_bounds`; `ITEM_COLUMNS` untouched
+- [x] unit tests: parser table (success, `NaN` cases), bounds rules (range, min length, non-int), `recordVerdict` input errors need no DB → cover through `validateVerdictBounds`; `make test-unit`
+- [x] run tests - must pass before next task
 
 ### Task 3: `applyVerdict` moves the entry; decide route; `allKept` on effective bounds
 
 **Files:**
 - Modify: `prv/repository/ai.js`, `prv/routes/admin-review.js`, `api/doc/openapi.yaml`, `test/e2e.js`
 
-- [ ] `applyVerdict(item, verdict, { from, to, transaction })`: entry at `from` (or new), keep → category + `to` + `source: 'review'` when `to ≠ from` + `rating` from `voteRating(category, to)` + re-sort; refuse overlap with another entry (`ReviewInputError` → 400, nothing written); `changed` true on a bounds change
-- [ ] `allKept`: latest verdict per item, key `(COALESCE(v.start, i.start), COALESCE(v."end", i."end"))`
-- [ ] decide route: parse `bounds` (`start`, `end` ints or `m:ss` strings via the parser, `bounds_source`), `from = effectiveBounds` inside the batch lock, duplicate guard includes bounds, response `bounds` + `effective_bounds` + `ai_applied`; 400 texts in both languages
-- [ ] `openapi.yaml`: request and response fields of `POST /admin/review/decide`
-- [ ] e2e: keep with bounds → `GET /video-calculated` serves the new bounds with `source: 'review'`; a vote on the old bounds 404, on the new 201 and the rating lands; second correction moves again; not_ad with bounds → 400; overlap → 400; sheet item with bounds → stored, `ai_applied: false`; restore of a judge-withdrawn row through `allKept` with a moved entry; `--recompute-ratings` on a moved entry
-- [ ] run `make test-e2e` - must pass before next task
+- [x] `applyVerdict(item, verdict, { from, to, transaction })`: entry at `from` (or new), keep → category + `to` + `source: 'review'` when `to ≠ from` + `rating` from `voteRating(category, to)` + re-sort; refuse overlap with another entry (`ReviewInputError` → 400, nothing written); `changed` true on a bounds change
+- [x] `allKept`: latest verdict per item, key `(COALESCE(v.start, i.start), COALESCE(v."end", i."end"))`
+- [x] decide route: parse `bounds` (`start`, `end` ints or `m:ss` strings via the parser, `bounds_source`), `from = effectiveBounds` inside the batch lock, duplicate guard includes bounds, response `bounds` + `effective_bounds` + `ai_applied`; 400 texts in both languages
+- [x] `openapi.yaml`: request and response fields of `POST /admin/review/decide`
+- [x] e2e: keep with bounds → `GET /video-calculated` serves the new bounds with `source: 'review'`; a vote on the old bounds 404, on the new 201 and the rating lands; second correction moves again; not_ad with bounds → 400; overlap → 400; sheet item with bounds → stored, `ai_applied: false`; restore of a judge-withdrawn row through `allKept` with a moved entry; `--recompute-ratings` on a moved entry
+- [x] run `make test-e2e` - must pass before next task
 
 ### Task 4: Judge: keep baseline on effective bounds
 
 **Files:**
 - Modify: `ai/judge/signals.go` (`entryKeeps`), `ai/judge/signals_test.go`, `ai/judge/judge_test.go`, `test/e2e.js`
 
-- [ ] `entryKeeps`: lateral join on `COALESCE(l.start, i.start) = e.start AND COALESCE(l."end", i."end") = e."end"` (latest verdict per item, as today)
-- [ ] `review.go`: no change needed (open items have no verdicts); note it in the code comment where the dedupe is
-- [ ] sqlmock tests: a moved entry's keep verdict sets its baseline; an item whose verdict moved the entry elsewhere does not match the old bounds
-- [ ] e2e judge test: verdict with bounds, then a tick → "every entry kept" `ok`, `judged_at` moves
-- [ ] `go test -mod=vendor ./ai/...`, `make test-e2e` - must pass before next task
+- [x] `entryKeeps`: lateral join on `COALESCE(l.start, i.start) = e.start AND COALESCE(l."end", i."end") = e."end"` (latest verdict per item, as today)
+- [x] `review.go`: no change needed (open items have no verdicts); note it in the code comment where the dedupe is
+- [x] sqlmock tests: a moved entry's keep verdict sets its baseline; an item whose verdict moved the entry elsewhere does not match the old bounds
+- [x] e2e judge test: verdict with bounds, then a tick → "every entry kept" `ok`, `judged_at` moves
+- [x] `go test -mod=vendor ./ai/...`, `make test-e2e` - must pass before next task
 
 ### Task 5: Transcript window for the item page
 
 **Files:**
 - Modify: `prv/repository/review.js` (`getTranscript`), `prv/routes/admin-review.js` (JSON), `api/doc/openapi.yaml`, `test/e2e.js`
 
-- [ ] `getTranscript(item, contextSeconds)`: `prv_ai_runs.transcript` via `prv_ai_video_calculateds.run_id` for `item.video_id`; cues overlapping `[start − c, end + c]`, with `words` when stored; `has_words`; `null` for sheet items or a missing row
-- [ ] item route: `?context=N` (int 0…600, default 60, else 400); JSON `transcript`; `STATE.transcript`
-- [ ] e2e: JSON shape for an ai item (window, `has_words` true on the word fixture, false on the other), `null` for a sheet item, `context=600`, bad `context` → 400
-- [ ] run `make test-e2e` - must pass before next task
+- [x] `getTranscript(item, contextSeconds)`: `prv_ai_runs.transcript` via `prv_ai_video_calculateds.run_id` for `item.video_id`; cues overlapping `[start − c, end + c]`, with `words` when stored; `has_words`; `null` for sheet items or a missing row
+- [x] item route: `?context=N` (int 0…600, default 60, else 400); JSON `transcript`; `STATE.transcript`
+- [x] e2e: JSON shape for an ai item (window, `has_words` true on the word fixture, false on the other), `null` for a sheet item, `context=600`, bad `context` → 400
+- [x] run `make test-e2e` - must pass before next task
 
 ### Task 6: Page: selection → bounds, inputs, rule texts
 
 **Files:**
 - Modify: `prv/routes/admin-review.js` (HTML + inline script), `prv/locales/review/ru.json`, `prv/locales/review/en.json`, `test/i18n.test.js`, `test/e2e.js`
 
-- [ ] render the transcript (cue and word spans with times, the quote highlighted, the effective bounds as a second highlight, a "+60 s" control that reloads with a larger `context`), the snap-to-cue notice when `has_words` is false
-- [ ] two inputs (`m:ss` accepted, pre-filled from `own_bounds`), clear button, `selectionchange` → bounds (floor / ceil to whole seconds) + `bounds_source = 'cue'`, typing → `typed`; disabled and cleared when the verdict is `not_ad` / `unclear`; hotkey `t` in `LETTER_HOTKEYS`; "No change" guard includes bounds; the save payload carries `bounds`
-- [ ] header: item bounds, then "→ corrected a–b (by X)" when `effective_bounds` differ; the saved flash names the bounds
-- [ ] strings ru/en: labels, the optional-use hint, the notice, the header text, the control; rules card lines (lead-in in, return out, link-in-description in); onboarding section `onb_bounds_*`; `hotkeyRows()` shows `t`
-- [ ] `test/i18n.test.js` parity passes; e2e: the item HTML contains the inputs and the transcript for an ai item and no transcript block for a sheet item; the decide call from the page shape (`bounds` with `m:ss` strings) works
-- [ ] run `make test-unit`, `make test-e2e` - must pass before next task
+- [x] render the transcript (cue and word spans with times, the quote highlighted, the effective bounds as a second highlight, a "+60 s" control that reloads with a larger `context`), the snap-to-cue notice when `has_words` is false
+- [x] two inputs (`m:ss` accepted, pre-filled from `own_bounds`), clear button, `selectionchange` → bounds (floor / ceil to whole seconds) + `bounds_source = 'cue'`, typing → `typed`; disabled and cleared when the verdict is `not_ad` / `unclear`; hotkey `t` in `LETTER_HOTKEYS`; "No change" guard includes bounds; the save payload carries `bounds`
+- [x] header: item bounds, then "→ corrected a–b (by X)" when `effective_bounds` differ; the saved flash names the bounds
+- [x] strings ru/en: labels, the optional-use hint, the notice, the header text, the control; rules card lines (lead-in in, return out, link-in-description in); onboarding section `onb_bounds_*`; `hotkeyRows()` shows `t`
+- [x] `test/i18n.test.js` parity passes; e2e: the item HTML contains the inputs and the transcript for an ai item and no transcript block for a sheet item; the decide call from the page shape (`bounds` with `m:ss` strings) works
+- [x] run `make test-unit`, `make test-e2e` - must pass before next task
 
 ### Task 7: Export with corrected bounds; import of the old comments
 
@@ -250,49 +255,57 @@ selection is stored (the text inside the bounds follows from the transcript).
 - Modify: `scripts/export-review-verdicts.sql`, `test/review-export.test.js`, `CLAUDE.md` (Ops)
 - Create: `scripts/import-verdict-bounds.js`
 
-- [ ] export: `start` / `end` = `COALESCE(v.start, i.start)` / `COALESCE(v."end", i."end")` (the DISTINCT ON subquery selects them too)
-- [ ] `import-verdict-bounds.js <tsv> [--dry-run]`: rows `sheet item_code reviewer start end`, times through `parsePlayerTime`, item by `(COALESCE(sheet, batch), item_code)`, under `withBatchLock`, appends a verdict copying the reviewer's latest verdict + comment with the bounds (`source 'import'`, `bounds_source 'import'`), skips with a reason (no verdict, latest not a keep, bounds invalid, already has these bounds), one transaction, exit 1 on any parse error
-- [ ] prepare the private table from the 14 comments (`~/Web/data/review/bounds-2026-10.tsv`, outside the repo) for the owner's check; list the comments that cannot become bounds (not_ad with a time) in the Post-Completion note
-- [ ] tests in `test/review-export.test.js`: a verdict with bounds exports them, one without exports the item's; the import script on a fixture DB (applied row, skipped not_ad, invalid time → exit 1)
-- [ ] run `make test-e2e` - must pass before next task
+- [x] export: `start` / `end` = `COALESCE(v.start, i.start)` / `COALESCE(v."end", i."end")` (the DISTINCT ON subquery selects them too)
+- [x] `import-verdict-bounds.js <tsv> [--dry-run]`: rows `sheet item_code reviewer start end`, times through `parsePlayerTime`, item by `(COALESCE(sheet, batch), item_code)`, under `withBatchLock`, appends a verdict copying the reviewer's latest verdict + comment with the bounds (`source 'import'`, `bounds_source 'import'`), skips with a reason (no verdict, latest not a keep, bounds invalid, already has these bounds), one transaction, exit 1 on any parse error
+- [x] prepare the private table from the 14 comments (`~/Web/data/review/bounds-2026-10.tsv`, outside the repo) for the owner's check; list the comments that cannot become bounds (not_ad with a time) in the Post-Completion note
+- [x] tests in `test/review-export.test.js`: a verdict with bounds exports them, one without exports the item's; the import script on a fixture DB (applied row, skipped not_ad, invalid time → exit 1)
+- [x] run `make test-e2e` - must pass before next task
 
 ### Task 8: Admin page and judge request show review-set bounds
 
 **Files:**
 - Modify: `prv/routes/admin.js`, `ai/judge/llm.go`, `ai/judge/llm_test.go`
 
-- [ ] `/admin/video/:video_id` AI block: a "review" badge on entries with `source: 'review'`
-- [ ] `llm.go` request: entries rendered with `(bounds by review)` when `source == "review"` (`Entry` gets `Source string "source"`), so the judge does not treat a human-set edge as a model error
-- [ ] Go test for the rendering; e2e asserts the badge
-- [ ] run tests - must pass before next task
+- [x] `/admin/video/:video_id` AI block: a "review" badge on entries with `source: 'review'`
+- [x] `llm.go` request: entries rendered with `(bounds by review)` when `source == "review"` (`Entry` gets `Source string "source"`), so the judge does not treat a human-set edge as a model error
+- [x] Go test for the rendering; e2e asserts the badge
+- [x] run tests - must pass before next task
 
 ### Task 9: Verify acceptance criteria
 
-- [ ] every requirement of the Overview is covered: optional bounds, both inputs, served on keep, 400 on non-keep, restore / judge baseline on moved entries, export, import script, word timings stored
-- [ ] edge cases: bounds equal to the item's (saved, `source` kept, entry unchanged), two assessors with different bounds (latest wins), a withdrawn-by-admin row (bounds stored, row stays withdrawn), pre-plan verdict rows (NULL bounds everywhere)
-- [ ] `make test-unit`, `go vet ./...`, `go test -mod=vendor ./ai/... ./calculator -run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, `make test-e2e`
+- [x] every requirement of the Overview is covered: optional bounds, both inputs, served on keep, 400 on non-keep, restore / judge baseline on moved entries, export, import script, word timings stored
+- [x] edge cases: bounds equal to the item's (saved, `source` kept, entry unchanged), two assessors with different bounds (latest wins), a withdrawn-by-admin row (bounds stored, row stays withdrawn), pre-plan verdict rows (NULL bounds everywhere)
+- [x] `make test-unit`, `go vet ./...`, `go test -mod=vendor ./ai/... ./calculator -run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`, `make test-e2e`
 
 ### Task 10: [Final] Documentation and cleanup
 
-- [ ] `CLAUDE.md`: decide endpoint, `ReviewVerdict` model, "Verdicts" in AI-first segments (entry replaced, `source: review`, effective bounds), `entryKeeps`, Ops (import script, export semantics), the `t` hotkey, the test lists
-- [ ] `docs/ai-first-overview/{ru,en}.html`: what a verdict does now (bounds), the boundary rule; "updated" date; republish both artifacts (single file each)
-- [ ] `docs/backlog/ai-redetect.md`: note that review-set entries must survive a re-detect
-- [ ] move this plan to `docs/plans/completed/`
-- [ ] cleanup pass before commit (residue / transient state / open questions)
+- [x] `CLAUDE.md`: decide endpoint, `ReviewVerdict` model, "Verdicts" in AI-first segments (entry replaced, `source: review`, effective bounds), `entryKeeps`, Ops (import script, export semantics), the `t` hotkey, the test lists
+- [x] `docs/ai-first-overview/{ru,en}.html`: what a verdict does now (bounds), the boundary rule; "updated" date; republish both artifacts (single file each)
+- [x] `docs/backlog/ai-redetect.md`: note that review-set entries must survive a re-detect
+- [x] move this plan to `docs/plans/completed/`
+- [x] cleanup pass before commit (residue / transient state / open questions)
 
 ## Post-Completion
 
 **Owner**
-- Check `~/Web/data/review/bounds-2026-10.tsv` (the 14 old comments as bounds; the ones that
-  cannot be bounds are listed next to it), then run on prod over the tunnel:
+- Check `~/Web/data/review/bounds-2026-10.tsv`. Of the 14 comments one is a row
+  (`2026-10-22-dev-misses C13`, start 23:01, end = the item's); `dev-misses C9` names no end and
+  needs a look in the player; seven name the *player* time of a shifted track (`overlap-clean
+  C26`, `heldout-b-p1 C81 C83 C85`, `heldout-b-p3 C171 C173 C177`): the gold is on the track's
+  clock, so importing them would put a shifted interval into the gold; they are in the file as
+  commented-out proposals. Five cannot be bounds (`2026-10-14-clean C9`, `overlap-clean C8`,
+  `heldout-b-p2 C101 C121`, `heldout-b-p3 C146`: no ad, unreadable time, video shorter). Then run on
+  prod over the tunnel:
   `DB_… node scripts/import-verdict-bounds.js ~/Web/data/review/bounds-2026-10.tsv` (dry-run
   first), then `export-review-verdicts.sh` for the affected sheets and `adskip review -file` in
   the eval, so the gold carries the corrected bounds.
+- The two overview artifacts were republished on 2026-10-24 (ru, en); the en one is private, the ru
+  one shared by link.
 - Tell the assessors: the bounds are optional, the rule for where an ad starts and ends, the `t`
   hotkey and the selection.
 
 **Eval repo**
-- The `vtt` change is committed there first (Task 1); later syncs carry it. The eval can now
+- The `vtt` change is eval commit `7fd1a9a` (committed, not pushed); `ai/SOURCE` points at it. The eval can now
   measure assessor-set bounds against the detector's (a boundary report) once exports with bounds
   exist; the design of that report is the eval's.
 

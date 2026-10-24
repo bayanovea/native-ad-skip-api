@@ -151,3 +151,21 @@ func TestAnthropicJudge(t *testing.T) {
 		t.Fatal("a cut-off answer must not parse")
 	}
 }
+
+// An entry an assessor moved is read with its source and marked, so the judge does not take a
+// human-set edge for a detector error; the detector's own entries stay unmarked.
+func TestRenderRequestMarksReviewSetBounds(t *testing.T) {
+	entries, err := parseEntries([]byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"},
+		{"category_id":3,"start":118,"end":150,"confidence":"high","source":"review"}]`))
+	if err != nil || entries[0].Source != "ai" || entries[1].Source != "review" {
+		t.Fatalf("got %+v %v", entries, err)
+	}
+	v := testVideo
+	v.Entries = entries
+	req := renderRequest(detector.Prompt{Text: "PROMPT"}, v, Signals{}, testCategories, []vtt.Cue{{Start: 120, End: 124, Text: "подписывайтесь"}})
+	for _, want := range []string{"[0] sponsor 30-70 s: \n", "[1] self_promotion 118-150 s (bounds by review): подписывайтесь\n"} {
+		if !strings.Contains(req.User, want) {
+			t.Errorf("missing %q in\n%s", want, req.User)
+		}
+	}
+}

@@ -1,7 +1,9 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
-const { VERDICTS, formatPlayerTime } = require('../../lib/review-sheet');
-const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, mayDecide } = require('../repository/review');
+const { VERDICTS, formatPlayerTime, parsePlayerTime, validateVerdictBounds } = require('../../lib/review-sheet');
+// Inlined into the item page's script, so the page checks typed times by the server's rules.
+const CLIENT_HELPERS = [formatPlayerTime, parsePlayerTime, validateVerdictBounds].map(String).join('\n');
+const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, KEEP_VERDICTS, mayDecide } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
 const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
@@ -42,6 +44,7 @@ const LETTER_HOTKEYS = [
     { key: 'j', action: 'next' },
     { key: 'k', action: 'prev' },
     { key: 'o', action: 'player' },
+    { key: 't', action: 'bounds' },
 ];
 const HOTKEY_PARAMS = { flag: TRACK_KEY, ...Object.fromEntries(LETTER_HOTKEYS.map(h => [h.action, h.key])) };
 // Legacy "Wrong text" verdicts (before 2026-10-18) are `unclear` with this
@@ -76,6 +79,33 @@ function validBodyItemId(id) {
     return Number.isInteger(id) && id > 0 && id <= 2147483647;
 }
 
+// Seconds of transcript shown on each side of an ai item (`?context=`, the "+60 s" control).
+const TRANSCRIPT_CONTEXT = 60;
+const TRANSCRIPT_CONTEXT_MAX = 600;
+const TRANSCRIPT_STEP = 60;
+
+// Bounds sources the page may send (`import` is scripts/import-verdict-bounds.js only).
+const PAGE_BOUNDS_SOURCES = ['cue', 'typed'];
+
+// `body.bounds` of a decide request → `{ start, end, source }` or null; times are
+// whole seconds or player times (`m:ss`, `h:mm:ss`). Throws ReviewInputError.
+function parseBodyBounds(raw, verdict) {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) throw new ReviewInputError('bounds must be an object', 'bounds_format');
+    if (!KEEP_VERDICTS.has(verdict)) throw new ReviewInputError(`bounds only with a keep verdict, not ${verdict}`, 'bounds_not_keep');
+    if (!PAGE_BOUNDS_SOURCES.includes(raw.source)) {
+        throw new ReviewInputError(`bounds.source must be one of ${PAGE_BOUNDS_SOURCES.join(', ')}`, 'bounds_source');
+    }
+    const bounds = { start: parsePlayerTime(raw.start), end: parsePlayerTime(raw.end), source: raw.source };
+    const why = validateVerdictBounds(bounds);
+    if (why) throw new ReviewInputError(`bad bounds ${raw.start}-${raw.end}: ${why}`, `bounds_${why}`);
+    return bounds;
+}
+
+function sameBounds(a, b) {
+    return a == null || b == null ? a == null && b == null : a.start === b.start && a.end === b.end;
+}
+
 // Verdict-valued categories show the translated verdict label (as on the buttons).
 function badge(category, t) {
     const color = CATEGORY_COLORS[category] || '#64748b';
@@ -100,10 +130,10 @@ function sendConflict(req, res, err) {
     res.status(409).json({ reason: err.reason, locked_by: err.locked_by, message: t.text(`conflict_${err.reason}`, { name: err.locked_by }) });
 }
 
-// ReviewInputError → 400, ReviewConflictError → 409; true when it answered.
+// ReviewInputError → 400 (in the page language when it has a code), ReviewConflictError → 409; true when it answered.
 function sendReviewError(req, res, err) {
     if (err instanceof ReviewInputError) {
-        res.status(400).send(err.message);
+        res.status(400).send(err.code ? translator(pickLang(req)).text(`error_${err.code}`) : err.message);
         return true;
     }
     if (err instanceof ReviewConflictError) {
@@ -254,6 +284,16 @@ const STYLE = `
         .onboarding p, .onboarding li { font-size: 0.9rem; line-height: 1.5; color: #cbd5e1; margin-bottom: 6px; }
         .onboarding ul, .onboarding ol { padding-left: 22px; }
         .onboarding table { max-width: 560px; background: #0f172a; margin-top: 6px; }
+        .transcript { margin-top: 14px; padding: 12px 14px; background: #0f172a; border-radius: 8px; max-height: 380px; overflow-y: auto; font-size: 1.05rem; line-height: 1.6; color: #cbd5e1; }
+        .transcript-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-top: 14px; font-size: 0.85rem; }
+        .cue { display: block; }
+        .cue-time { color: #475569; font-size: 0.75rem; margin-right: 8px; user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
+        .hl-item { background: #1e3a8a; color: #f1f5f9; }
+        .hl-eff { box-shadow: inset 0 -3px 0 #22c55e; color: #f1f5f9; }
+        .bounds-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 12px; }
+        .bounds-row input { width: 90px; font-variant-numeric: tabular-nums; }
+        .bounds-row .clear-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5f5; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; }
+        .corrected { color: #86efac; font-weight: 500; margin-left: 6px; }
 `;
 
 function page(title, body, lang) {
@@ -287,7 +327,7 @@ function hotkeyRows(t, compact = false) {
     ];
 }
 
-const ONBOARDING_SECTIONS = ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'hotkeys', 'comments'];
+const ONBOARDING_SECTIONS = ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'bounds', 'hotkeys', 'comments'];
 
 // Collapsed by default: assessors read it once, then it stays out of the way.
 function renderOnboarding(t) {
@@ -458,8 +498,47 @@ function renderLockBanner(batch, t) {
     </div>`;
 }
 
+function differs(a, b) {
+    return a.start !== b.start || a.end !== b.end;
+}
+
+function boundsText(b) {
+    return `${formatPlayerTime(b.start)} – ${formatPlayerTime(b.end)}`;
+}
+
+// The ai item's transcript window: one line per cue (its time not selectable),
+// words as spans with their time (`data-t`) and end (`data-e`: the next word's
+// time, or the cue's end), a cue without words as one span with the cue's
+// times. `hl-item` marks what the detector flagged, `hl-eff` the corrected
+// bounds. The page script turns a selection over these spans into bounds.
+function renderTranscript(transcript, item, moreHref, t) {
+    const eff = differs(item.effective_bounds, item) ? item.effective_bounds : null;
+    const marks = (start, end) => [
+        start < item.end && end > item.start ? 'hl-item' : '',
+        eff && start < eff.end && end > eff.start ? 'hl-eff' : '',
+    ].filter(Boolean).join(' ');
+    const leaf = (start, end, text) =>
+        `<span class="leaf ${marks(start, end)}" data-t="${start}" data-e="${end}">${escapeHtml(text)}</span>`;
+    const lines = transcript.cues.map(c => {
+        const words = c.words || [];
+        const body = words.length === 0
+            ? leaf(c.start, c.end, c.text)
+            : words.map((w, i) => leaf(w.t, i + 1 < words.length ? words[i + 1].t : c.end, w.text)).join(' ');
+        return `<span class="cue"><span class="cue-time">${formatPlayerTime(c.start)}</span>${body}</span>`;
+    }).join('');
+    return `
+        <div class="transcript-head">
+            <strong>${t('transcript_title')}</strong>
+            <span class="muted">${t('transcript_range', { from: formatPlayerTime(transcript.from), to: formatPlayerTime(transcript.to) })}</span>
+            ${moreHref ? `<a href="${moreHref}" id="transcript-more">${t('transcript_more')}</a>` : ''}
+            <span class="muted">${t('transcript_legend_html')}</span>
+        </div>
+        ${transcript.has_words ? '' : `<div class="warn" style="font-size:0.85rem">${t('transcript_no_words')}</div>`}
+        <div class="transcript" id="transcript">${lines || `<span class="empty">—</span>`}</div>`;
+}
+
 function renderItemPage(payload, token, t, langLink) {
-    const { batch, item, nav, signals, reviewer, video_flags, can_decide } = payload;
+    const { batch, item, nav, signals, reviewer, video_flags, can_decide, transcript, context } = payload;
     const off = can_decide ? '' : ' disabled';
     const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
@@ -484,7 +563,7 @@ function renderItemPage(payload, token, t, langLink) {
             <tbody>${item.history.map(h => `
                 <tr>
                     <td class="muted">${formatDate(h.decided_at)}</td>
-                    <td>${badge(h.verdict, t)}</td>
+                    <td>${badge(h.verdict, t)}${h.bounds ? ` <span class="muted">${boundsText(h.bounds)}</span>` : ''}</td>
                     <td>${escapeHtml(h.reviewer)}</td>
                     <td class="muted">${escapeHtml(h.source)}</td>
                     <td style="white-space:pre-wrap">${escapeHtml(h.comment || '')}</td>
@@ -497,6 +576,8 @@ function renderItemPage(payload, token, t, langLink) {
     const currentChoice = own ? own.verdict : null;
     const verdictButtons = CHOICES.map((v, i) => `
             <button type="button" class="verdict-btn${currentChoice === v ? ' selected' : ''}" data-verdict="${v}" onclick="pick('${v}')"${off}><kbd>${i + 1}</kbd>${icon(CHOICE_ICONS[v])}${t(`verdict_${v}`)}</button>`).join('');
+    const ownBounds = item.own_bounds;
+    const boundsOff = can_decide && !(currentChoice && !KEEP_VERDICTS.has(currentChoice)) ? '' : ' disabled';
     const track = video_flags[TRACK_FLAG];
     const trackOn = track ? track.value === true : false;
 
@@ -506,6 +587,7 @@ function renderItemPage(payload, token, t, langLink) {
         batch: batch.batch,
         item_id: item.id,
         item_code: item.item_code,
+        own_bounds: item.own_bounds,
         prev: nav.prev ? nav.prev.item_code : null,
         next: nav.next ? nav.next.item_code : null,
         prev_player_link: nav.prev ? nav.prev.player_link : null,
@@ -522,7 +604,8 @@ function renderItemPage(payload, token, t, langLink) {
         letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
-            'js_read_only', 'js_force_confirm']
+            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds',
+            ...['format', 'range', 'order', 'short'].map(why => `error_bounds_${why}`)]
             .map(key => [key, t.text(key)])),
     };
 
@@ -544,13 +627,17 @@ function renderItemPage(payload, token, t, langLink) {
     ${renderLockBanner(batch, t)}
 
     <div class="card">
-        <div class="item-head">${t('item_duration', { start: item.start_player, end: item.end_player, seconds: item.duration_s })}</div>
+        <div class="item-head">${t('item_duration', { start: item.start_player, end: item.end_player, seconds: item.duration_s })}${differs(item.effective_bounds, item)
+        ? `<span class="corrected" id="corrected">${t('item_corrected', { start: formatPlayerTime(item.effective_bounds.start), end: formatPlayerTime(item.effective_bounds.end), name: item.effective_bounds.reviewer })}</span>`
+        : ''}</div>
         ${item.player_link
         ? `<a id="player-link" href="${escapeHtml(item.player_link)}" target="_blank" rel="noopener noreferrer">${t('item_open_player')}</a>
         <span class="muted">${t('item_player_offset')}</span>`
         : `<span class="muted">${t('item_no_player')}</span>`}
         ${item.beyond_video_s != null ? `<div class="warn">${t('item_beyond_video_warn', { seconds: item.beyond_video_s })}</div>` : ''}
-        ${item.cues ? `<div class="cues">${icon(QUOTE_ICON, 'quote-icon')}<div class="cues-text">${escapeHtml(item.cues)}</div></div>` : ''}
+        ${transcript
+        ? renderTranscript(transcript, item, context + TRANSCRIPT_STEP <= TRANSCRIPT_CONTEXT_MAX ? `${itemHref(item.item_code)}&amp;context=${context + TRANSCRIPT_STEP}` : null, t)
+        : item.cues ? `<div class="cues">${icon(QUOTE_ICON, 'quote-icon')}<div class="cues-text">${escapeHtml(item.cues)}</div></div>` : ''}
         <div class="muted item-id">${escapeHtml(item.item_code)} · ${escapeHtml(item.native_id)}</div>
     </div>
 
@@ -560,6 +647,16 @@ function renderItemPage(payload, token, t, langLink) {
         <div class="proposed"><span class="muted">${t('proposed_as')}</span> ${proposed}</div>
         <label>${t('verdict_prompt_html')}</label>
         <div class="verdicts">${verdictButtons}
+        </div>
+        <label for="bound-start">${t('bounds_label')}</label>
+        <div class="muted flags-hint">${t('bounds_hint')}</div>
+        <div class="bounds-row">
+            <span class="muted">${t('bounds_start')}</span>
+            <input type="text" id="bound-start" inputmode="numeric" placeholder="m:ss" value="${ownBounds ? formatPlayerTime(ownBounds.start) : ''}"${boundsOff}>
+            <span class="muted">${t('bounds_end')}</span>
+            <input type="text" id="bound-end" inputmode="numeric" placeholder="m:ss" value="${ownBounds ? formatPlayerTime(ownBounds.end) : ''}"${boundsOff}>
+            <button type="button" class="clear-btn" id="bounds-clear" onclick="clearBounds()"${boundsOff}>${t('bounds_clear')}</button>
+            <span class="muted">${t('bounds_keep_only')}</span>
         </div>
         <label title="${t('flags_hint')}">${t('flags_label')}</label>
         <div class="muted flags-hint">${t('flags_hint')}</div>
@@ -581,6 +678,7 @@ function renderItemPage(payload, token, t, langLink) {
             <li>${t('rules_call_to_action_html')}</li>
             <li>${t('rules_not_ad_html')}</li>
             <li>${t('rules_track_html')}</li>
+            <li>${t('rules_bounds_html')}</li>
         </ul>
     </div>
 
@@ -591,11 +689,14 @@ function renderItemPage(payload, token, t, langLink) {
 
 <script>
     const STATE = ${scriptJson(state)};
+    ${CLIENT_HELPERS}
     const FLASH_KEY = 'adminReview.flash';
     // Absent = on (the default); only "off" is stored.
     const AUTO_ADVANCE_KEY = 'adminReview.autoAdvance';
     let picked = STATE.verdict;
     let saving = false;
+    // How the bounds in the inputs were set: 'cue' (a transcript selection) or 'typed'.
+    let boundsSource = STATE.own_bounds && STATE.own_bounds.source === 'cue' ? 'cue' : 'typed';
 
     function tr(key, params) {
         return STATE.i18n[key].replace(/\\{(\\w+)\\}/g, function (m, name) {
@@ -694,8 +795,48 @@ function renderItemPage(payload, token, t, langLink) {
         document.querySelectorAll('.verdict-btn').forEach(function (b) {
             b.classList.toggle('selected', b.dataset.verdict === v);
         });
+        // Bounds go only with a keep verdict.
+        const keep = v === 'sponsor' || v === 'self_promotion';
+        ['bound-start', 'bound-end', 'bounds-clear'].forEach(function (id) { document.getElementById(id).disabled = !keep; });
+        if (!keep) clearBounds();
         setStatus('');
     }
+    function boundInputs() {
+        return [document.getElementById('bound-start'), document.getElementById('bound-end')];
+    }
+    function clearBounds() {
+        boundInputs().forEach(function (el) { el.value = ''; });
+        boundsSource = 'typed';
+    }
+    // The inputs as {start, end} seconds, null when both are empty, or an error text.
+    function readBounds() {
+        const raw = boundInputs().map(function (el) { return el.value.trim(); });
+        if (raw[0] === '' && raw[1] === '') return { bounds: null };
+        if (raw[0] === '' || raw[1] === '') return { error: tr('js_bounds_both') };
+        const b = { start: parsePlayerTime(raw[0]), end: parsePlayerTime(raw[1]) };
+        const why = validateVerdictBounds(b);
+        return why ? { error: tr('error_bounds_' + why) } : { bounds: b };
+    }
+    // A selection over the transcript fills the inputs: the start of the first
+    // selected word (or line without word times), the end of the last one,
+    // rounded outward so the ad is never cut short.
+    function boundsFromSelection() {
+        const box = document.getElementById('transcript');
+        const sel = window.getSelection();
+        if (!box || !sel || sel.isCollapsed || sel.rangeCount === 0) return;
+        const leaves = Array.prototype.filter.call(box.querySelectorAll('.leaf'), function (el) { return sel.containsNode(el, true); });
+        if (leaves.length === 0) return;
+        const inputs = boundInputs();
+        if (inputs[0].disabled) return;
+        inputs[0].value = formatPlayerTime(Math.floor(Number(leaves[0].dataset.t)));
+        inputs[1].value = formatPlayerTime(Math.ceil(Number(leaves[leaves.length - 1].dataset.e)));
+        boundsSource = 'cue';
+        setStatus('');
+    }
+    document.addEventListener('selectionchange', boundsFromSelection);
+    boundInputs().forEach(function (el) {
+        el.addEventListener('input', function () { boundsSource = 'typed'; setStatus(''); });
+    });
     function toggleTrack() {
         if (readOnly()) return;
         const box = document.getElementById('track-flag');
@@ -708,10 +849,15 @@ function renderItemPage(payload, token, t, langLink) {
         const verdict = picked;
         const comment = document.getElementById('comment').value;
         const track = document.getElementById('track-flag').checked;
+        const read = readBounds();
+        if (read.error) { setStatus(read.error, 'error'); return; }
+        const bounds = read.bounds;
+        const own = STATE.own_bounds;
+        const sameBounds = bounds == null || own == null ? bounds == own : bounds.start === own.start && bounds.end === own.end;
         // A stray Enter on an item this reviewer decided must not append a
         // copy of their verdict. The server skips the duplicate row too; this
         // only spares the round trip.
-        if (verdict === STATE.verdict && comment.trim() === STATE.comment && track === STATE.track_mismatch) {
+        if (verdict === STATE.verdict && comment.trim() === STATE.comment && track === STATE.track_mismatch && sameBounds) {
             setStatus(tr('js_no_change', { item: STATE.item_code, verdict: STATE.verdict_labels[verdict] }));
             return;
         }
@@ -728,6 +874,7 @@ function renderItemPage(payload, token, t, langLink) {
                     comment: comment,
                     reviewer: STATE.reviewer,
                     track_mismatch: track,
+                    bounds: bounds ? { start: bounds.start, end: bounds.end, source: boundsSource } : null,
                 }),
             });
             if (res.status === 201) {
@@ -736,6 +883,7 @@ function renderItemPage(payload, token, t, langLink) {
                 let flash = tr('js_saved', {
                     item: STATE.item_code,
                     verdict: STATE.verdict_labels[verdict],
+                    bounds: data.bounds ? tr('js_saved_bounds', { start: formatPlayerTime(data.bounds.start), end: formatPlayerTime(data.bounds.end) }) : '',
                     track: data.track_mismatch ? tr('js_saved_track') : '',
                     flagged: flagged,
                 });
@@ -783,6 +931,11 @@ function renderItemPage(payload, token, t, langLink) {
             case 'next': if (STATE.next) goTo(STATE.next, STATE.next_player_link); break;
             case 'prev': if (STATE.prev) goTo(STATE.prev, STATE.prev_player_link); break;
             case 'player': openPlayer(STATE.player_link); break;
+            case 'bounds': {
+                const start = document.getElementById('bound-start');
+                if (!start.disabled) { e.preventDefault(); start.focus(); }
+                break;
+            }
         }
     });
     // Plain clicks on ◀ / ▶ / first open switch like j / k (a modified click
@@ -795,6 +948,10 @@ function renderItemPage(payload, token, t, langLink) {
     });
     (function init() {
         document.getElementById('auto-advance').checked = autoAdvance();
+        // The flagged stretch in view inside the scrolling transcript.
+        const box = document.getElementById('transcript');
+        const mark = box && box.querySelector('.hl-item, .hl-eff');
+        if (mark) box.scrollTop = mark.offsetTop - box.offsetTop - 60;
         const flash = storageGet('sessionStorage', FLASH_KEY);
         if (flash) { setStatus(flash, 'ok'); storageSet('sessionStorage', FLASH_KEY, null); }
     })();
@@ -899,17 +1056,23 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             const before = await reviewRepository.getItemById(body.item_id);
             if (!before && !validBodyItemId(body.item_id)) throw new ReviewInputError('item_id must be a positive integer');
             if (!before) throw new ReviewInputError(`unknown review item ${body.item_id}`);
+            const bounds = parseBodyBounds(body.bounds, body.verdict);
             const comment = body.comment == null ? null : body.comment;
             const text = typeof comment === 'string' ? comment.trim() : comment;
             const own = ownVerdict(before, reviewer);
             const same = own && own.verdict === body.verdict
-                && (own.comment || null) === (text === '' ? null : text);
+                && (own.comment || null) === (text === '' ? null : text)
+                && sameBounds(own.bounds, bounds);
             await reviewRepository.withBatchLock(before.batch, async (transaction) => {
                 const progress = await reviewRepository.getBatchProgress(before.batch, reviewer, { transaction });
                 if (!mayDecide(progress.state)) throw new ReviewConflictError(progress.state, progress.locked_by);
                 if (!same) {
-                    await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', transaction });
-                    if (before.kind === 'ai') aiApplied = await aiRepository.applyVerdict(before, body.verdict, { transaction });
+                    // Read under the batch lock: every verdict on the item is written under it.
+                    const from = await reviewRepository.effectiveBounds(before.id, { transaction });
+                    await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', bounds, transaction });
+                    if (before.kind === 'ai') {
+                        aiApplied = await aiRepository.applyVerdict(before, body.verdict, { from, to: bounds || from, transaction });
+                    }
                 }
                 if (body.track_mismatch !== undefined) {
                     const current = await reviewRepository.getVideoFlag(before.native_id, TRACK_FLAG, { transaction });
@@ -934,6 +1097,8 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             item_id: item.id,
             item_code: item.item_code,
             verdict: item.verdict.verdict,
+            bounds: item.verdict.bounds,
+            effective_bounds: item.effective_bounds,
             track_mismatch: track ? track.value : false,
             flagged_by: item.flagged_by || [],
             next_item: next ? next.item_code : null,
@@ -968,8 +1133,9 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
     router.post('/admin/review/:batch/take', lockRoute('take'));
     router.post('/admin/review/:batch/release', lockRoute('release'));
 
-    // GET /admin/review/:batch?item=C7 — item page; without `item` the
-    // reviewer's first open item (or the last one when they decided them all).
+    // GET /admin/review/:batch?item=C7[&context=N] — item page; without `item` the
+    // reviewer's first open item (or the last one when they decided them all);
+    // `context` = seconds of an ai item's transcript on each side (default 60).
     // Needs a reviewer: without one the HTML goes back to the picker, JSON gets 400.
     router.get('/admin/review/:batch', handler(async (req, res) => {
         if (!authorized(req, res)) return;
@@ -978,6 +1144,11 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
         if (!reviewer) {
             if (req.query.format === 'json') { res.status(400).send('reviewer required'); return; }
             res.redirect(302, `/admin/review?verifyBearerToken=${encodeURIComponent(req.query.verifyBearerToken)}`);
+            return;
+        }
+        const context = req.query.context === undefined ? TRANSCRIPT_CONTEXT : Number(req.query.context);
+        if (!(Number.isInteger(context) && context >= 0 && context <= TRANSCRIPT_CONTEXT_MAX)) {
+            res.status(400).send(`context must be an integer 0-${TRANSCRIPT_CONTEXT_MAX}`);
             return;
         }
         const batchName = req.params.batch;
@@ -990,12 +1161,14 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             : await reviewRepository.defaultItem(batchName, reviewer);
         if (!raw) { res.status(404).send('Item not found'); return; }
 
-        const item = { ...presentItem(raw), own_verdict: ownVerdict(raw, reviewer) };
-        const [{ prev, next }, firstOpen, signals, track] = await Promise.all([
+        const own = ownVerdict(raw, reviewer);
+        const item = { ...presentItem(raw), own_verdict: own, own_bounds: own ? own.bounds : null };
+        const [{ prev, next }, firstOpen, signals, track, transcript] = await Promise.all([
             reviewRepository.neighbours(batchName, item.position, reviewer),
             reviewRepository.firstOpenItem(batchName, reviewer),
             reviewRepository.getSignals(item.native_id, item.start, item.end),
             reviewRepository.getVideoFlag(item.native_id, TRACK_FLAG),
+            reviewRepository.getTranscript(raw, context),
         ]);
         item.beyond_video_s = beyondVideo(item, signals.videos);
         const payload = {
@@ -1006,6 +1179,8 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             video_flags: { [TRACK_FLAG]: track },
             nav: { prev: presentNav(prev), next: presentNav(next), first_open: presentNav(firstOpen) },
             signals,
+            transcript,
+            context,
         };
 
         if (req.query.format === 'json') {

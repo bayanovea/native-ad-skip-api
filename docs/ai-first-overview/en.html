@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-10-22 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-10-24 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -63,6 +63,7 @@
   <ul class="plain">
     <li><b>Verdict</b>: what the text is: <span class="pill">sponsor</span> <span class="pill">self_promotion</span> <span class="pill">not_ad</span> <span class="pill">unclear</span>. Judge the text, not the picture.</li>
     <li><b>Flag "subtitles ≠ video"</b>: a fact about the whole video, not the segment. Set separately; it never replaces the verdict.</li>
+    <li><b>Start and end times</b> (optional): when the AI's edges are visibly off and a viewer would notice, select the text in the subtitles around the item or type the time from the player. Only with <span class="pill">sponsor</span> / <span class="pill">self_promotion</span>. Where the edge is: the lead-in ("and now a word from our sponsor") is part of the ad, the return to the topic is not, "link in the description" is part of the ad.</li>
   </ul>
   <p>These verdicts tell us how far the detector can be trusted and decide when phase 2 can start.</p>
 
@@ -120,7 +121,7 @@
   <h3>The assessor in phase 2: a verdict changes what is live</h3>
   <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason. The decision is the same as before, but now it acts at once:</p>
   <div class="branch">
-    <div class="node ok"><b>sponsor / self_promotion</b><span>the segment stays live (or comes back) with that category. If the judge withdrew the whole markup and every segment of it is confirmed, the markup is live again.</span></div>
+    <div class="node ok"><b>sponsor / self_promotion</b><span>the segment stays live (or comes back) with that category; when the assessor gave times, those edges go live. If the judge withdrew the whole markup and every segment of it is confirmed, the markup is live again.</span></div>
     <div class="node warn"><b>not_ad / unclear</b><span>the segment is removed from the AI markup. Once all are removed, the markup is withdrawn and viewers get the human segments.</span></div>
   </div>
   <p>The "subtitles ≠ video" flag is set as before, separately from the verdict. It accumulates as knowledge about the video and feeds the later work on shifted tracks.</p>
@@ -128,7 +129,7 @@
   <div class="two">
     <div class="card"><h3>For the frontend</h3>
       <ul>
-        <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown.</li>
+        <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown; <code>source: "review"</code> means an assessor set the edges.</li>
         <li>Always send the video duration: without it no AI markup is served (we cannot tell which cut it is).</li>
         <li>Undone skips and dislikes are valuable events; they reach the judge.</li>
       </ul>
@@ -137,6 +138,7 @@
       <ul>
         <li>AI items come in batches from the judge, one per segment; real viewers are behind them, so they come before the sheets.</li>
         <li>Decide by the text, as before. One verdict puts one segment on or off the air.</li>
+        <li>Start and end times with a sponsor / self-promotion verdict change the segment's edges for viewers at once; votes on the old edges are not carried over.</li>
         <li>The track flag is a separate checkbox; it never replaces the verdict.</li>
       </ul>
     </div>

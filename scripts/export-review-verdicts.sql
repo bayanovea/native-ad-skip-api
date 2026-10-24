@@ -4,6 +4,9 @@
 -- :batch names a sheet or a batch (sheet IS NULL on rows of an older image: their sheet is their batch).
 -- One row per decided item (latest verdict wins), ordered by position; open items are skipped.
 -- A non-empty :reviewer narrows to that reviewer's verdicts (their latest per item).
+-- start / end of a gold_missing row are the item's effective bounds: those of the latest verdict (of :reviewer,
+-- when given) that carries bounds (an assessor's correction), else the item's own. The other rows judge the
+-- stretch the model proposed, so they keep the item's bounds.
 --
 --   sponsor / self_promotion -> gold_missing,       category = the verdict
 --   not_ad                   -> model_wrong,        category = first proposed category
@@ -29,8 +32,8 @@ FROM (
            i.native_id,
            CASE WHEN v.verdict IN ('sponsor', 'self_promotion') THEN v.verdict
                 ELSE split_part(i.proposed, '+', 1) END,
-           round(i."start"::numeric, 1)::text,
-           round(i."end"::numeric, 1)::text,
+           round((CASE WHEN v.verdict IN ('sponsor', 'self_promotion') THEN COALESCE(b."start", i."start") ELSE i."start" END)::numeric, 1)::text,
+           round((CASE WHEN v.verdict IN ('sponsor', 'self_promotion') THEN COALESCE(b."end", i."end") ELSE i."end" END)::numeric, 1)::text,
            CASE v.verdict WHEN 'sponsor'        THEN 'gold_missing'
                           WHEN 'self_promotion' THEN 'gold_missing'
                           WHEN 'not_ad'         THEN 'model_wrong'
@@ -44,6 +47,12 @@ FROM (
     WHERE :'reviewer' = '' OR reviewer = :'reviewer'
     ORDER BY item_id, decided_at DESC, id DESC
   ) v ON v.item_id = i.id
+  LEFT JOIN (
+    SELECT DISTINCT ON (item_id) item_id, "start", "end"
+    FROM prv_review_verdicts
+    WHERE "start" IS NOT NULL AND (:'reviewer' = '' OR reviewer = :'reviewer')
+    ORDER BY item_id, decided_at DESC, id DESC
+  ) b ON b.item_id = i.id
   WHERE i.sheet = :'batch' OR i.batch = :'batch'
 ) r
 ORDER BY ord, position, item_code;

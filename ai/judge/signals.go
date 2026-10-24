@@ -55,9 +55,10 @@ func (e Evidence) negative() bool {
 
 // Entry is one AI segment of prv_ai_video_calculateds.data.
 type Entry struct {
-	CategoryID int `json:"category_id"`
-	Start      int `json:"start"`
-	End        int `json:"end"`
+	CategoryID int    `json:"category_id"`
+	Start      int    `json:"start"`
+	End        int    `json:"end"`
+	Source     string `json:"source,omitempty"` // "ai", or "review" once an assessor set the bounds
 }
 
 // entryKey is an entry's bounds, by which review items and their verdicts find it.
@@ -104,7 +105,7 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, since []time
 	bs := make([]baseline, len(v.Entries))
 	markupsSince := asOf
 	for i, e := range v.Entries {
-		bs[i] = baseline{e, since[i]}
+		bs[i] = baseline{Entry{CategoryID: e.CategoryID, Start: e.Start, End: e.End}, since[i]} // the queries take the bounds only
 		if since[i].Before(markupsSince) {
 			markupsSince = since[i]
 		}
@@ -253,14 +254,20 @@ func storedRecut(stored []byte) int {
 }
 
 // entryKeeps maps the bounds of each AI entry whose latest review verdict keeps it and
-// came after the last judgement to that verdict's time (prv/repository/ai.js allKept
-// matches the items the same way).
+// came after the last judgement to that verdict's time. An item refers to the entry at its
+// effective bounds: those of its latest verdict that has bounds (an assessor moved the entry),
+// else its own; a later verdict without bounds leaves the entry where it was moved
+// (prv/repository/ai.js allKept matches the items the same way).
 func entryKeeps(db *sql.DB, v Video) (map[entryKey]time.Time, error) {
-	rows, err := db.Query(`SELECT e.start, e."end", l.decided_at FROM `+entryBounds+`
-		JOIN LATERAL (SELECT r.verdict, r.decided_at FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id
-			WHERE i.kind = 'ai' AND i.video_id = $1 AND i.start = e.start AND i."end" = e."end"
-			ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE
-		WHERE l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3`,
+	rows, err := db.Query(`SELECT e.start, e."end", k.decided_at FROM `+entryBounds+`
+		JOIN LATERAL (SELECT l.verdict, l.decided_at FROM prv_review_items i
+			JOIN LATERAL (SELECT r.id, r.verdict, r.decided_at FROM prv_review_verdicts r WHERE r.item_id = i.id
+				ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE
+			LEFT JOIN LATERAL (SELECT r.start, r."end" FROM prv_review_verdicts r WHERE r.item_id = i.id AND r.start IS NOT NULL
+				ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) b ON TRUE
+			WHERE i.kind = 'ai' AND i.video_id = $1 AND COALESCE(b.start, i.start) = e.start AND COALESCE(b."end", i."end") = e."end"
+			ORDER BY l.decided_at DESC, l.id DESC LIMIT 1) k ON TRUE
+		WHERE k.verdict IN ('sponsor', 'self_promotion') AND k.decided_at > $3`,
 		v.VideoID, v.Data, v.JudgedAt.Time)
 	if err != nil {
 		return nil, err

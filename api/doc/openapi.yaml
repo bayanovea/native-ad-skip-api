@@ -40,7 +40,7 @@ components:
       description: |
         Aggregated segment served from `video_calculateds.data`, or (prv, `AI_FIRST=on`, the video
         has an active AI row) from `prv_ai_video_calculateds.data`, whose entries also carry
-        `confidence` and `source: "ai"`. `rating` is the sum of the users' latest votes on the
+        `confidence` and `source: "ai"` (`"review"` once an assessor set its bounds). `rating` is the sum of the users' latest votes on the
         segment, omitted when 0.
       properties:
         category_id: { type: integer, example: 1 }
@@ -48,7 +48,7 @@ components:
         end:         { type: integer, example: 30 }
         rating:      { type: integer, example: 0 }
         confidence:  { type: string, example: high, description: "AI entries only" }
-        source:      { type: string, enum: [ai], description: "AI entries only" }
+        source:      { type: string, enum: [ai, review], description: "AI entries only; `review` once an assessor set the entry's bounds" }
 
     Interval:
       type: object
@@ -643,7 +643,7 @@ paths:
     get:
       tags: [Admin]
       summary: Assessor review — item page
-      description: "Refuses every request when AUTH_TOKEN is unset. Needs a registered `reviewer` (HTML: 302 to the picker; JSON: 400). Without `item`: the reviewer's first open item by position, or the last item when they decided them all; open/decided and nav count the reviewer's own verdicts. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); `item.own_verdict` is the reviewer's latest verdict or null; `item.kind` is `sheet` or `ai` (an entry of an AI row sent by the judge) and `item.video_id` the AI row's videos.id (null for sheet items); nav entries are `{item_code, decided, player_link}`."
+      description: "Refuses every request when AUTH_TOKEN is unset. Needs a registered `reviewer` (HTML: 302 to the picker; JSON: 400). Without `item`: the reviewer's first open item by position, or the last item when they decided them all; open/decided and nav count the reviewer's own verdicts. `flagged_by` is present only once the item has a verdict. `item.player_link` is the stored sheet link, or null when it is not http(s); `item.own_verdict` is the reviewer's latest verdict or null; `item.kind` is `sheet` or `ai` (an entry of an AI row sent by the judge) and `item.video_id` the AI row's videos.id (null for sheet items); nav entries are `{item_code, decided, player_link}`. Verdicts carry `bounds: {start, end, source} | null`; `item.effective_bounds` = `{start, end, reviewer, source}` of the latest verdict with bounds, else the item's own (reviewer and source null); `item.own_bounds` = the bounds of the reviewer's own latest verdict or null. `transcript` (ai items with an AI row, else null) = `{from, to, has_words, cues: [{start, end, text, words?: [{t, text}]}]}`: the detector run's cues within `context` seconds of the item's own and effective bounds."
       security:
         - tokenQuery: []
       parameters:
@@ -652,16 +652,17 @@ paths:
         - { name: item,     in: query, required: false, schema: { type: string, example: C7 } }
         - { name: lang,     in: query, required: false, schema: { type: string, enum: [ru, en] } }
         - { name: format,   in: query, required: false, schema: { type: string, enum: [json] } }
+        - { name: context,  in: query, required: false, schema: { type: integer, minimum: 0, maximum: 600, default: 60 }, description: "Seconds of transcript on each side of an ai item" }
       responses:
         '200':
-          description: "HTML page, or `{reviewer, batch, can_decide, item, video_flags: {track_mismatch}, nav: {prev, next, first_open}, signals}` with format=json (`batch` = the reviewer's progress row, as in the list)"
+          description: "HTML page, or `{reviewer, batch, can_decide, item, video_flags: {track_mismatch}, nav: {prev, next, first_open}, signals, transcript, context}` with format=json (`batch` = the reviewer's progress row, as in the list)"
           content:
             text/html:
               schema: { type: string }
             application/json:
               schema: { type: object }
         '302': { description: No reviewer; redirect to the picker }
-        '400': { description: No reviewer (format=json) }
+        '400': { description: "No reviewer (format=json), or `context` not an integer 0…600" }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Batch or item not found }
 
@@ -669,7 +670,7 @@ paths:
     post:
       tags: [Admin]
       summary: Assessor review — append a verdict
-      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins; a verdict identical to the reviewer's own latest one is not appended again. Only the batch holder, or a reviewer who has finished the batch, may decide; the verdict on the reviewer's last open item releases their lock. On an `ai` item an appended verdict is applied to the AI row in the same transaction: not_ad / unclear remove the entry (the row is withdrawn by review when none is left), sponsor / self_promotion keep it or put it back with that category; a row withdrawn by the judge or by review is served again once every entry's latest verdict, decided after the withdraw, keeps it."
+      description: "Refuses every request when AUTH_TOKEN is unset. Append-only; the latest verdict per item wins; a verdict identical to the reviewer's own latest one is not appended again. Only the batch holder, or a reviewer who has finished the batch, may decide; the verdict on the reviewer's last open item releases their lock. On an `ai` item an appended verdict is applied to the AI row in the same transaction: not_ad / unclear remove the entry (the row is withdrawn by review when none is left), sponsor / self_promotion keep it or put it back with that category, at `bounds` when given (the entry is replaced: `source: review`, rating from the votes on the new bounds; bounds overlapping another entry → 400). The entry an item refers to sits at the item's effective bounds (its latest verdict with bounds, else its own). A row withdrawn by the judge or by review is served again once every entry's latest verdict, decided after the withdraw, keeps it."
       security:
         - tokenQuery: []
       requestBody:
@@ -685,6 +686,15 @@ paths:
                 comment:  { type: string, nullable: true, description: "Trimmed; blank or null → no comment" }
                 reviewer: { type: string, description: "A registered reviewer code" }
                 track_mismatch: { type: boolean, description: "Video flag: subtitle track does not match the player; saved only when it changes" }
+                bounds:
+                  type: object
+                  nullable: true
+                  description: "Optional, keep verdicts only (else 400): the segment's real start and end, whole seconds (`0 ≤ start < end ≤ 86400`, at least 5 s). Part of the duplicate check."
+                  required: [start, end, source]
+                  properties:
+                    start:  { oneOf: [{ type: integer }, { type: string, example: "1:05" }], description: "Seconds, or `m:ss` / `h:mm:ss`" }
+                    end:    { oneOf: [{ type: integer }, { type: string, example: "1:42" }] }
+                    source: { type: string, enum: [cue, typed], description: "A transcript selection or typed times" }
       responses:
         '201':
           description: Verdict recorded
@@ -696,12 +706,14 @@ paths:
                   item_id:    { type: integer }
                   item_code:  { type: string }
                   verdict:    { type: string, description: "The item's latest verdict" }
+                  bounds:     { type: object, nullable: true, description: "`{start, end, source}` of the item's latest verdict, or null" }
+                  effective_bounds: { type: object, description: "`{start, end, reviewer, source}`: the bounds the item now refers to" }
                   track_mismatch: { type: boolean }
                   flagged_by: { type: array, items: { type: string } }
                   next_item:  { type: string, nullable: true, description: "The reviewer's next open item after this one, wrapping round; null when they are done" }
                   next_player_link: { type: string, nullable: true }
                   ai_applied: { type: boolean, description: "The AI row changed (ai items only; false otherwise)" }
-        '400': { description: Invalid verdict, reviewer, comment, track_mismatch or unknown item }
+        '400': { description: "Invalid verdict, reviewer, comment, track_mismatch, bounds (bad, on a non-keep verdict, overlapping another AI entry; text in the page language) or unknown item" }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { description: "The reviewer neither holds nor has finished the batch: `{reason: available | locked | closed, locked_by, message}`" }
 

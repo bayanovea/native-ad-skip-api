@@ -1046,6 +1046,9 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.deepEqual([run.video_id, run.model, run.prompt_version], [videoId, 'claude-sonnet-5-5', 'v2.2']);
     assert.match(run.prompt_sha, /^[0-9a-f]{64}$/);
     assert.equal(run.transcript.cues.length, 10);
+    // The fixture's prv word tags are kept per cue (the review page selects by them).
+    assert.deepEqual(run.transcript.cues[0].words.slice(0, 2), [{ t: 5, text: 'привет' }, { t: 5.833, text: 'всем,' }]);
+    assert.ok(run.transcript.cues.every(c => c.words.length === c.text.split(/\s+/).length));
     assert.equal(run.transcript.meta.track_type, 'auto');
     assert.ok(Math.abs(run.track_overrun_s - 0.6) < 1e-9, `overrun ${run.track_overrun_s}`);
     assert.equal(run.yt_duration_s, 600.4);
@@ -1093,8 +1096,9 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.deepEqual([v.status, v.batch_id], ['published', null]);
     const ai = await aiCalculated('-1_456000204');
     assert.deepEqual(ai.data, [{ category_id: cats.prv.self_promotion, start: 20, end: 45, confidence: 'high', source: 'ai' }]);
-    const [run] = await dbQuery(`SELECT cost_usd FROM prv_ai_runs WHERE native_id = '-1_456000204'`);
+    const [run] = await dbQuery(`SELECT cost_usd, transcript FROM prv_ai_runs WHERE native_id = '-1_456000204'`);
     assert.ok(Math.abs(run.cost_usd - FIXTURE_COST) < 1e-12, `synchronous: full price, got ${run.cost_usd}`);
+    assert.ok(run.transcript.cues.length > 0 && run.transcript.cues.every(c => !('words' in c)), 'a track without word tags stores no words');
     const videos = await dbQuery(`SELECT id, duration FROM videos WHERE native_id = '-1_456000204'`);
     assert.deepEqual(videos, [{ id: ai.video_id, duration: 300 }]);
     assert.deepEqual(await heartbeat('ai_detect'), hb);
@@ -1745,6 +1749,210 @@ test('ai review: not_ad on a judge-withdrawn row removes the entry and keeps it 
 
     assert.equal((await decideAi(bare, 'not_ad')).ai_applied, false, 'no AI row for the item’s video');
     assert.equal(await aiCalculated('-1_456000507'), null);
+});
+
+async function decideBounds(item, verdict, bounds, { comment = null, reviewer = REVIEWER } = {}) {
+    return decideReview({ item_id: item.id, verdict, comment, reviewer, bounds });
+}
+
+const aiEntries = async videoId => (await aiData(videoId)).map(({ category_id, start, end, source, rating }) => [category_id, start, end, source, rating]);
+
+test('ai review bounds: a keep with bounds replaces the entry (source review) and is served; votes follow the new bounds; a second correction moves it again; bad bounds are 400 in the page language', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000511';
+    const batch = 'e2e-ai-bounds';
+    const sp = cats.prv.sponsor;
+    const { videoId, items: [a1, a2] } = await aiReviewSeed(vid, batch, [[30, 70], [200, 230]]);
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt") VALUES
+        ('bounds-voter-old', $1, $2, 30, 70, 1, NOW(), NOW()), ('bounds-voter-new', $1, $2, 25, 75, 1, NOW(), NOW())`, [videoId, sp]);
+    await takeReview(batch);
+    const verdicts = async () => (await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_verdicts WHERE item_id = $1`, [a1.id]))[0].n;
+
+    let res = await decideBounds(a1, 'sponsor', { start: '0:25', end: '1:15', source: 'typed' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual([res.body.ai_applied, res.body.bounds, res.body.effective_bounds],
+        [true, { start: 25, end: 75, source: 'typed' }, { start: 25, end: 75, reviewer: REVIEWER, source: 'typed' }]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 25, 75, 'review', 1], [sp, 200, 230, 'ai', undefined]],
+        'replaced: the rating of the votes on the new bounds, the old bounds\' vote not carried over');
+    assert.deepEqual((await aiData(videoId))[0].confidence, 'high', 'confidence kept');
+    assert.deepEqual(await servedBounds(vid), [[sp, 25, 75], [sp, 200, 230]]);
+
+    const vote = (userId, start, end) => requestOn(AI_PORT, 'POST', '/vote', {
+        video_id: vid, user_id: userId, category_id: sp, start, end, vote: 1, duration: 600 });
+    assert.equal((await vote('bounds-voter-2', 30, 70)).status, 404, 'the old bounds are no longer served');
+    assert.equal((await vote('bounds-voter-2', 25, 75)).status, 204);
+    assert.equal((await aiData(videoId))[0].rating, 2);
+
+    // The same verdict, comment and bounds again: no new row; the bounds alone make a change.
+    const n = await verdicts();
+    res = await decideBounds(a1, 'sponsor', { start: 25, end: 75, source: 'cue' });
+    assert.deepEqual([res.status, res.body.ai_applied, await verdicts()], [201, false, n]);
+    res = await decideBounds(a1, 'sponsor', { start: 20, end: 80, source: 'cue' });
+    assert.deepEqual([res.status, res.body.ai_applied, await verdicts()], [201, true, n + 1]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 20, 80, 'review', undefined], [sp, 200, 230, 'ai', undefined]], 'moved again');
+
+    // A later keep without bounds keeps the corrected entry; not_ad removes it, a keep puts it back where the review put it.
+    res = await decideBounds(a1, 'self_promotion', null, { comment: 'own channel' });
+    assert.deepEqual([res.body.ai_applied, res.body.bounds, res.body.effective_bounds.start], [true, null, 20]);
+    assert.deepEqual((await aiEntries(videoId))[0], [cats.prv.self_promotion, 20, 80, 'review', undefined]);
+    assert.equal((await decideBounds(a1, 'not_ad', null)).body.ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]]);
+    assert.equal((await decideBounds(a1, 'sponsor', null)).body.ai_applied, true);
+    assert.deepEqual((await aiEntries(videoId))[0], [sp, 20, 80, 'review', undefined]);
+
+    // Bounds equal to the item's own: stored, the entry stays the detector's.
+    res = await decideBounds(a2, 'sponsor', { start: 200, end: 230, source: 'typed' });
+    assert.deepEqual([res.status, res.body.ai_applied, res.body.bounds], [201, false, { start: 200, end: 230, source: 'typed' }]);
+    assert.deepEqual((await aiEntries(videoId))[1], [sp, 200, 230, 'ai', undefined]);
+
+    const n2 = await verdicts();
+    for (const [verdict, bounds, key] of [
+        ['not_ad', { start: 20, end: 80, source: 'typed' }, 'error_bounds_not_keep'],
+        ['unclear', { start: 20, end: 80, source: 'typed' }, 'error_bounds_not_keep'],
+        ['sponsor', { start: 20, end: 80 }, 'error_bounds_source'],
+        ['sponsor', { start: 20, end: 80, source: 'import' }, 'error_bounds_source'],
+        ['sponsor', { start: '1:5x', end: 80, source: 'typed' }, 'error_bounds_format'],
+        ['sponsor', { start: 20.5, end: 80, source: 'typed' }, 'error_bounds_format'],
+        ['sponsor', { start: 20, end: '24:00:01', source: 'typed' }, 'error_bounds_range'],
+        ['sponsor', { start: 80, end: 20, source: 'typed' }, 'error_bounds_order'],
+        ['sponsor', { start: 20, end: 24, source: 'typed' }, 'error_bounds_short'],
+        ['sponsor', [20, 80], 'error_bounds_format'],
+    ]) {
+        res = await decideBounds(a1, verdict, bounds);
+        assert.deepEqual([res.status, res.body], [400, RU.text(key)], `${verdict} ${JSON.stringify(bounds)}`);
+    }
+    res = await decideBounds(a2, 'sponsor', { start: 70, end: 210, source: 'typed' });
+    assert.deepEqual([res.status, res.body], [400, RU.text('error_bounds_overlap')], 'overlaps the other entry');
+    res = await request('POST', `/admin/review/decide?verifyBearerToken=${MOD_AUTH}&lang=en`,
+        { item_id: a2.id, verdict: 'sponsor', reviewer: REVIEWER, bounds: { start: 70, end: 210, source: 'typed' } });
+    assert.equal(res.body, translator('en').text('error_bounds_overlap'), 'in the requested language');
+    assert.equal(await verdicts(), n2, 'nothing written');
+    assert.deepEqual(await servedBounds(vid), [[sp, 20, 80], [sp, 200, 230]]);
+
+    // The item JSON: verdict bounds in the history, the effective and own bounds.
+    const json = (await getReview(batch, { item: 'A1', format: 'json' })).body.item;
+    assert.deepEqual([json.effective_bounds, json.own_bounds], [{ start: 20, end: 80, reviewer: REVIEWER, source: 'cue' }, null]);
+    assert.deepEqual(json.history.map(h => h.bounds && [h.bounds.start, h.bounds.end, h.bounds.source]),
+        [null, null, null, [20, 80, 'cue'], [25, 75, 'typed']]);
+
+    // --recompute-ratings rewrites the moved entry from the votes on its bounds.
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
+        VALUES ('bounds-voter-3', $1, $2, 20, 80, -1, NOW(), NOW())`, [videoId, sp]);
+    runRecomputeRatings('prv');
+    assert.deepEqual((await aiEntries(videoId))[0], [sp, 20, 80, 'review', -1]);
+
+    // /admin/video marks the review-set entry.
+    const admin = await request('GET', `/admin/video/${videoId}?verifyBearerToken=${MOD_AUTH}`, null);
+    assert.equal((admin.body.match(/class="badge review-badge"/g) || []).length, 1, 'one entry has review bounds');
+});
+
+test('ai review bounds: a sheet item stores them and applies nothing; a judge-withdrawn row with a moved entry is restored through its new bounds; an admin-withdrawn one stays withdrawn', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const sheetBatch = 'e2e-bounds-sheet';
+    const [sheetItem] = await dbQuery(`INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, link)
+        VALUES ($1, 'C1', 1, '-1_456000512', 100.4, 130.2, 'sponsor', 'https://example.invalid/video-1_456000512?t=98s') RETURNING id, item_code`, [sheetBatch]);
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1)', [sheetBatch]);
+    await takeReview(sheetBatch);
+    let res = await decideBounds(sheetItem, 'sponsor', { start: '1:35', end: '2:20', source: 'typed' });
+    assert.deepEqual([res.status, res.body.ai_applied, res.body.effective_bounds],
+        [201, false, { start: 95, end: 140, reviewer: REVIEWER, source: 'typed' }]);
+    const [stored] = await dbQuery(`SELECT start, "end", bounds_source, source FROM prv_review_verdicts WHERE item_id = $1`, [sheetItem.id]);
+    assert.deepEqual(stored, { start: 95, end: 140, bounds_source: 'typed', source: 'page' });
+
+    const batch = 'e2e-bounds-restore';
+    const judge = await aiReviewSeed('-1_456000513', batch, [[30, 70], [200, 230]], { withdrawnBy: 'judge' });
+    const admin = await aiReviewSeed('-1_456000514', batch, [[30, 70]], { withdrawnBy: 'admin', firstPos: 3 });
+    await takeReview(batch);
+    res = await decideBounds(judge.items[0], 'sponsor', { start: 25, end: 75, source: 'cue' });
+    assert.equal(res.body.ai_applied, true, 'the entry moved');
+    assert.ok((await aiCalculated('-1_456000513')).withdrawn_at, 'one entry still waits');
+    assert.equal((await decideBounds(judge.items[1], 'sponsor', null)).body.ai_applied, true);
+    assert.equal((await aiCalculated('-1_456000513')).withdrawn_at, null, 'every entry kept at its effective bounds: served again');
+    assert.deepEqual(await servedBounds('-1_456000513'), [[sp, 25, 75], [sp, 200, 230]]);
+
+    assert.equal((await decideBounds(admin.items[0], 'sponsor', { start: 25, end: 75, source: 'typed' })).body.ai_applied, true);
+    const row = await aiCalculated('-1_456000514');
+    assert.deepEqual([row.withdrawn_by, row.data.map(e => [e.start, e.end, e.source])], ['admin', [[25, 75, 'review']]],
+        'bounds applied to the record, the operator\'s withdraw stays');
+});
+
+test('ai review bounds: the item page carries the transcript window (words when stored) and the bounds inputs; a sheet item has no transcript', async () => {
+    const vid = '-1_456000515';
+    const batch = 'e2e-bounds-transcript';
+    const { videoId, items: [a1] } = await aiReviewSeed(vid, batch, [[30, 70]]);
+    const transcript = { meta: {}, cues: [
+        { start: 28, end: 33, text: 'этот выпуск спонсирует', words: [{ t: 28, text: 'этот' }, { t: 29.5, text: 'выпуск' }, { t: 31, text: 'спонсирует' }] },
+        { start: 33, end: 40, text: 'переходите по ссылке' },
+        { start: 300, end: 305, text: 'далее по теме' },
+    ] };
+    await dbQuery(`UPDATE prv_ai_runs SET transcript = $2 WHERE id = (SELECT run_id FROM prv_ai_video_calculateds WHERE video_id = $1)`,
+        [videoId, JSON.stringify(transcript)]);
+    await takeReview(batch);
+
+    let body = (await getReview(batch, { item: 'A1', format: 'json' })).body;
+    assert.deepEqual([body.context, body.transcript], [60, { from: 0, to: 130, has_words: true, cues: transcript.cues.slice(0, 2) }]);
+    body = (await getReview(batch, { item: 'A1', format: 'json', context: '600' })).body;
+    assert.deepEqual([body.transcript.to, body.transcript.cues.length], [670, 3]);
+    for (const context of ['601', '-1', '1.5', 'x']) {
+        const res = await getReview(batch, { item: 'A1', format: 'json', context });
+        assert.equal(res.status, 400, `context=${context}`);
+    }
+    // Corrected bounds widen the window around them.
+    assert.equal((await decideBounds(a1, 'sponsor', { start: 30, end: 300, source: 'typed' })).status, 201);
+    body = (await getReview(batch, { item: 'A1', format: 'json', context: '0' })).body;
+    assert.deepEqual([body.transcript.from, body.transcript.to, body.transcript.cues.length], [30, 300, 3]);
+
+    let html = (await getReview(batch, { item: 'A1' })).body;
+    assert.ok(html.includes('id="transcript"') && html.includes('data-t="29.5" data-e="31"'), 'words with their times');
+    assert.ok(html.includes('class="leaf hl-item hl-eff" data-t="33" data-e="40"'), 'a line without words, flagged and corrected');
+    assert.ok(!html.includes(RU('transcript_no_words')), 'words stored: no snap notice');
+    assert.ok(html.includes(RU('item_corrected', { start: '0:30', end: '5:00', name: REVIEWER })));
+    assert.match(html, /id="bound-start"[^>]*value="0:30"/, 'pre-filled from the reviewer\'s own bounds');
+    assert.match(html, /context=120/, 'the +60 s control');
+
+    await dbQuery(`UPDATE prv_ai_runs SET transcript = $2 WHERE id = (SELECT run_id FROM prv_ai_video_calculateds WHERE video_id = $1)`,
+        [videoId, JSON.stringify(AI_TRANSCRIPT)]);
+    html = (await getReview(batch, { item: 'A1', context: '0' })).body;
+    assert.ok(html.includes(RU('transcript_no_words')), 'no word times: the selection snaps to lines');
+
+    const sheet = 'e2e-bounds-transcript-sheet';
+    await dbQuery(`INSERT INTO prv_review_items (batch, item_code, position, native_id, start, "end", proposed, cues, link)
+        VALUES ($1, 'C1', 1, $2, 30, 70, 'sponsor', 'цитата', 'https://example.invalid/video-1_456000515?t=28s')`, [sheet, vid]);
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1)', [sheet]);
+    body = (await getReview(sheet, { item: 'C1', format: 'json' })).body;
+    assert.equal(body.transcript, null);
+    html = (await getReview(sheet, { item: 'C1' })).body;
+    assert.ok(!html.includes('id="transcript"') && html.includes('цитата') && html.includes('id="bound-start"'), 'typed bounds only');
+});
+
+test('ai judge: a keep verdict that moved the entry is its baseline: every entry kept → ok by rules, the old bounds\' signals stay behind', async () => {
+    const vid = '-1_456000412';
+    const sp = cats.prv.sponsor;
+    const { videoId } = await aiPublished(vid, 25);
+    const judge = () => {
+        const r = runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0' });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        return r.stdout + r.stderr;
+    };
+    await postUndo(vid, 'moved-u1', 30, 70);
+    judge();
+    const [item] = await aiItems(videoId);
+    assert.ok(item, 'the undo sent the entry to review');
+    const before = (await aiVideo(vid)).judged_at;
+
+    await takeReview(item.batch);
+    const res = await decideBounds(item, 'sponsor', { start: 25, end: 75, source: 'cue' });
+    assert.deepEqual([res.status, res.body.ai_applied], [201, true]);
+    assert.deepEqual((await aiData(videoId)).map(e => [e.category_id, e.start, e.end, e.source]), [[sp, 25, 75, 'review']]);
+    await lockReview('release', item.batch, { reviewer: REVIEWER });
+
+    const out = judge();
+    const j = (await judgements(videoId)).at(-1);
+    assert.deepEqual([j.decision, j.by, j.reason], ['ok', 'rules', 'every entry kept on review since the last judgement']);
+    assert.match(out, new RegExp(`ai judge: ${videoId} ok rules: every entry kept on review since the last judgement`));
+    assert.ok((await aiVideo(vid)).judged_at > before, 'judged_at moves past the verdict');
+    assert.equal((await aiItems(videoId)).length, 1, 'no new item');
 });
 
 // ── Acceptance (Task 10): the whole AI path in one scenario, and every flag at its default ──
@@ -4924,8 +5132,11 @@ const REVIEWER = 'bayanovea';
 // The page is Russian by default; text checks go through the same locale.
 const RU = translator('ru');
 
-function savedFlash(item, verdict, { track = false, flagged = 'run-kbd' } = {}) {
-    return RU.text('js_saved', { item, verdict: RU.text(`verdict_${verdict}`), track: track ? RU.text('js_saved_track') : '', flagged });
+function savedFlash(item, verdict, { track = false, flagged = 'run-kbd', bounds = null } = {}) {
+    return RU.text('js_saved', {
+        item, verdict: RU.text(`verdict_${verdict}`), track: track ? RU.text('js_saved_track') : '', flagged,
+        bounds: bounds ? RU.text('js_saved_bounds', { start: bounds[0], end: bounds[1] }) : '',
+    });
 }
 
 function noChangeText(item, verdict) {
@@ -5027,7 +5238,9 @@ test('review page: default item is the first open one, blind until decided, deci
     await takeReview(batch);
     const d = await decideReview({ item_id: item.id, verdict: 'self_promotion', comment: ' plug ', reviewer: REVIEWER });
     assert.equal(d.status, 201, JSON.stringify(d.body));
-    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null, ai_applied: false });
+    assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', bounds: null,
+        effective_bounds: { start: item.start, end: item.end, reviewer: null, source: null },
+        track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null, ai_applied: false });
 
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'self_promotion');
@@ -5339,16 +5552,26 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
     const body = { tagName: 'BODY', id: '' };
     const doc = { body, activeElement: body };
     const field = (tagName, id, value = '') => ({
-        tagName, id, value, isContentEditable: false, textContent: '', className: '', disabled: false,
+        tagName, id, value, isContentEditable: false, textContent: '', className: '', disabled: false, listeners: {},
         focus() { doc.activeElement = this; },
         blur() { if (doc.activeElement === this) doc.activeElement = body; },
+        addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
     });
+    // An input or button of the page as rendered: value and disabled from its tag.
+    const control = (tagName, id) => {
+        const tag = (html.match(new RegExp(`<${tagName.toLowerCase()}\\b[^>]*\\bid="${id}"[^>]*>`)) || [''])[0];
+        const value = (tag.match(/\bvalue="([^"]*)"/) || [, ''])[1];
+        return Object.assign(field(tagName, id, htmlUnescape(value)), { disabled: /\sdisabled(?=[\s>])/.test(tag) });
+    };
     const comment = html.match(/<textarea[^>]*\bid="comment"[^>]*>([\s\S]*?)<\/textarea>/);
     const els = {
         status: field('DIV', 'status'),
         'track-flag': Object.assign(field('INPUT', 'track-flag'), { checked: /id="track-flag" checked/.test(html) }),
         comment: field('TEXTAREA', 'comment', comment ? htmlUnescape(comment[1]) : ''),
         'save-btn': field('BUTTON', 'save-btn'),
+        'bound-start': control('INPUT', 'bound-start'),
+        'bound-end': control('INPUT', 'bound-end'),
+        'bounds-clear': control('BUTTON', 'bounds-clear'),
     };
     if (html.includes('id="player-link"')) els['player-link'] = field('A', 'player-link');
     if (html.includes('id="lock-status"')) els['lock-status'] = field('SPAN', 'lock-status');
@@ -5460,6 +5683,51 @@ async function seedKeyboardBatch(batch, count, { holder = REVIEWER } = {}) {
     }
     if (holder) await takeReview(batch, holder);
 }
+
+test('review page: bounds from the keyboard: t focuses the start, typed m:ss saves with the verdict, the same bounds again is no change, a non-keep verdict clears them, half-filled or short bounds are refused', async () => {
+    const batch = 'e2e-review-bounds-kbd';
+    await seedKeyboardBatch(batch, 2);
+    const storages = { local: memoryStorage(), session: memoryStorage() };
+    const itemPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
+    let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
+    assert.ok(html.includes(RU('bounds_hint')) && html.includes(RU('rules_bounds_html')), 'hint and boundary rule');
+    assert.match(html, /<kbd>t<\/kbd>/, 'the t hotkey in the hotkeys line');
+
+    page.key('1');
+    page.key('t');
+    assert.equal(page.active(), 'bound-start');
+    page.els['bound-start'].value = '0:08';
+    page.els['bound-end'].value = '0:20';
+    page.key('Escape');
+    await saveAndFollow(page);
+    const [v] = await dbQuery(`SELECT v.verdict, v.start, v."end", v.bounds_source FROM prv_review_verdicts v
+        JOIN prv_review_items i ON i.id = v.item_id WHERE i.batch = $1 AND i.item_code = 'C1'`, [batch]);
+    assert.deepEqual(v, { verdict: 'sponsor', start: 8, end: 20, bounds_source: 'typed' });
+
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    assert.equal(page.els.status.textContent, savedFlash('C1', 'sponsor', { bounds: ['0:08', '0:20'] }));
+    page.key('1');
+    page.els['bound-start'].value = '0:30';
+    page.key('Enter');
+    assert.deepEqual([page.els.status.textContent, page.els.status.className], [RU.text('js_bounds_both'), 'status error']);
+    page.els['bound-end'].value = '0:32';
+    page.key('Enter');
+    assert.equal(page.els.status.textContent, RU.text('error_bounds_short'));
+    page.key('3');
+    assert.deepEqual([page.els['bound-start'].value, page.els['bound-end'].value, page.els['bound-start'].disabled], ['', '', true],
+        'not an ad: no bounds');
+
+    ({ page, html } = await openKeyboardPage(itemPath('C1'), storages));
+    assert.deepEqual([page.els['bound-start'].value, page.els['bound-end'].value], ['0:08', '0:20'], 'pre-filled from the own verdict');
+    assert.ok(html.includes(RU('item_corrected', { start: '0:08', end: '0:20', name: REVIEWER })));
+    page.key('Enter');
+    assert.equal(page.els.status.textContent, noChangeText('C1', 'sponsor'));
+    page.els['bound-end'].value = '0:21';
+    await saveAndFollow(page);
+    const rows = await dbQuery(`SELECT v.start, v."end" FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id
+        WHERE i.batch = $1 AND i.item_code = 'C1' ORDER BY v.id`, [batch]);
+    assert.deepEqual(rows.map(r => [r.start, r.end]), [[8, 20], [8, 21]], 'a bounds-only change saves');
+});
 
 test('review page: keyboard-only pass (1–4, Enter, c, Ctrl+Enter, Esc, j/k, o) decides a whole batch', async () => {
     const batch = 'e2e-review-keyboard';
@@ -6237,16 +6505,18 @@ test('review page: onboarding block, closed by default, on the batch list and th
             assert.equal(status, 200);
             assert.ok(body.includes(`<details class="card onboarding">\n        <summary>${t('onb_summary')}</summary>`), `${t.lang} ${path}`);
             assert.ok(!/<details[^>]*\bopen\b/.test(body), 'closed by default');
-            for (const s of ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'hotkeys', 'comments']) {
+            for (const s of ['what', 'workflow', 'verdicts', 'track', 'player', 'timing', 'bounds', 'hotkeys', 'comments']) {
                 assert.ok(body.includes(`<h3>${t(`onb_${s}_title`)}</h3>`), `${t.lang} section ${s}`);
             }
             // Hotkeys come from the list the key handler uses (STATE.letters on the item page).
             assert.ok(body.includes(`<td><kbd>1</kbd></td><td>${t('hotkey_verdict', { label: t.text('verdict_sponsor') })}</td>`));
             assert.ok(body.includes(`<td><kbd>5</kbd></td><td>${t('hotkey_track')}</td>`));
             assert.ok(body.includes(`<td><kbd>o</kbd></td><td>${t('hotkey_player')}</td>`));
+            assert.ok(body.includes(`<td><kbd>t</kbd></td><td>${t('hotkey_bounds')}</td>`));
+            assert.ok(body.includes(t('onb_bounds_html', { bounds: 't' })));
             assert.ok(body.includes(t('onb_player_html', { player: 'o', next: 'j', prev: 'k' })));
         }
     }
     const page = loadKeyboardPage((await request('GET', paths[1], null)).body, { local: memoryStorage(), session: memoryStorage() });
-    assert.deepEqual({ ...page.state().letters }, { c: 'comment', j: 'next', k: 'prev', o: 'player' });
+    assert.deepEqual({ ...page.state().letters }, { c: 'comment', j: 'next', k: 'prev', o: 'player', t: 'bounds' });
 });

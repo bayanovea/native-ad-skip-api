@@ -1,7 +1,7 @@
 const { QueryTypes } = require('sequelize');
 const { voteRating } = require('../../lib/segment-rating');
+const { ReviewInputError, KEEP_VERDICTS } = require('./review');
 
-const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
 // A prv video id (`<owner>_<id>`, owner negative for a community); anything else is never queued for `ai detect`
 // (ai/pipeline/queue.go nativeIDRegex is the same pattern).
 const PRV_NATIVE_ID = /^-?\d+_\d+$/;
@@ -10,15 +10,23 @@ const RESTORABLE_BY = new Set(['judge', 'review']);
 
 module.exports = function createAiRepository(models, sequelize) {
     // Every entry of the row has a keep verdict as its latest one, decided after the row was withdrawn.
+    // An item refers to the entry at its effective bounds (those of its latest verdict with bounds, else its own;
+    // prv/repository/review.js effectiveOf), and of several items on one entry the latest verdict counts.
     async function allKept(row, data, transaction) {
-        const latest = await sequelize.query(
-            `SELECT DISTINCT ON (i.start, i."end") i.start, i."end", v.verdict, v.decided_at
-               FROM prv_review_items i JOIN prv_review_verdicts v ON v.item_id = i.id
+        const items = await sequelize.query(
+            `SELECT COALESCE(b.start, i.start) AS start, COALESCE(b."end", i."end") AS "end", l.verdict, l.decided_at
+               FROM prv_review_items i
+               JOIN LATERAL (SELECT verdict, decided_at FROM prv_review_verdicts v WHERE v.item_id = i.id
+                              ORDER BY v.decided_at DESC, v.id DESC LIMIT 1) l ON true
+               LEFT JOIN LATERAL (SELECT start, "end" FROM prv_review_verdicts v WHERE v.item_id = i.id AND v.start IS NOT NULL
+                                   ORDER BY v.decided_at DESC, v.id DESC LIMIT 1) b ON true
               WHERE i.kind = 'ai' AND i.video_id = :videoId
-              ORDER BY i.start, i."end", v.decided_at DESC, v.id DESC`,
+              ORDER BY l.decided_at DESC`,
             { replacements: { videoId: row.video_id }, type: QueryTypes.SELECT, transaction });
-        return data.every(e => latest.some(l => l.start === e.start && l.end === e.end
-            && KEEP_VERDICTS.has(l.verdict) && l.decided_at >= row.withdrawn_at));
+        return data.every(e => {
+            const l = items.find(it => it.start === e.start && it.end === e.end);
+            return l && KEEP_VERDICTS.has(l.verdict) && l.decided_at >= row.withdrawn_at;
+        });
     }
 
     return {
@@ -55,29 +63,40 @@ module.exports = function createAiRepository(models, sequelize) {
         },
 
         /**
-         * Apply a review verdict on a kind='ai' item to its AI row (the entry with the item's bounds), under the
-         * row's lock in the caller's `transaction`: not_ad / unclear remove the entry (the row is withdrawn by
-         * `review` when none is left); sponsor / self_promotion keep it, or put it back, with that category. A row
-         * withdrawn by judge or review is served again once every entry has a keep verdict. Idempotent; returns
-         * true when the row changed.
+         * Apply a review verdict on a kind='ai' item to its AI row, under the row's lock in the caller's
+         * `transaction`. `from` is the item's effective bounds before this verdict (the entry it refers to), `to`
+         * the verdict's bounds (default `from`): not_ad / unclear remove the entry at `from` (the row is withdrawn
+         * by `review` when none is left); sponsor / self_promotion keep it, or put it back, with that category at
+         * `to` (`source: 'review'` once moved; its rating from the votes on the new category and bounds). Bounds
+         * overlapping another entry are refused (ReviewInputError, nothing written). A row withdrawn by judge or
+         * review is served again once every entry has a keep verdict. Idempotent; returns true when the row changed.
          */
-        async applyVerdict(item, verdict, { transaction }) {
+        async applyVerdict(item, verdict, { from = item, to = from, transaction }) {
             if (item.kind !== 'ai' || item.video_id == null) return false;
             const row = await models.AiVideoCalculated.findOne({
                 where: { video_id: item.video_id }, lock: transaction.LOCK.UPDATE, transaction });
             if (!row) return false;
-            const at = row.data.findIndex(e => e.start === item.start && e.end === item.end);
+            const at = row.data.findIndex(e => e.start === from.start && e.end === from.end);
             let data = row.data;
             if (KEEP_VERDICTS.has(verdict)) {
                 const category = await models.MarkupCategory.findOne({ where: { category: verdict }, transaction });
-                const old = at === -1 ? { start: item.start, end: item.end, source: 'ai' } : data[at];
-                if (old.category_id !== category.id) {
+                // An entry put back at bounds a reviewer set is theirs, not the detector's.
+                const old = at === -1
+                    ? { start: from.start, end: from.end, source: from.start === item.start && from.end === item.end ? 'ai' : 'review' }
+                    : data[at];
+                const moved = to.start !== old.start || to.end !== old.end;
+                if (moved && data.some((e, i) => i !== at && e.start < to.end && to.start < e.end)) {
+                    throw new ReviewInputError(`bounds ${to.start}-${to.end} overlap another AI segment of the video`, 'bounds_overlap');
+                }
+                if (moved || old.category_id !== category.id) {
                     const { rating: _, ...rest } = old;
-                    const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: item.start, end: item.end }, { transaction });
-                    const entry = { ...rest, category_id: category.id, ...(rating ? { rating } : {}) };
-                    data = at === -1
-                        ? [...data, entry].sort((a, b) => a.start - b.start)
-                        : data.map((e, i) => (i === at ? entry : e));
+                    const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: to.start, end: to.end }, { transaction });
+                    const entry = {
+                        ...rest, category_id: category.id, start: to.start, end: to.end,
+                        ...(moved && { source: 'review' }), ...(rating ? { rating } : {}),
+                    };
+                    data = (at === -1 ? [...data, entry] : data.map((e, i) => (i === at ? entry : e)))
+                        .sort((a, b) => a.start - b.start);
                 }
             } else if (at !== -1) {
                 data = data.filter((_, i) => i !== at);

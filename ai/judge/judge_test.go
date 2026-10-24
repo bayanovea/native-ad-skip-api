@@ -59,8 +59,8 @@ func expectKept(mock sqlmock.Sqlmock, judged time.Time, keptAt any) {
 	if keptAt != nil {
 		rows.AddRow(30, 70, keptAt)
 	}
-	mock.ExpectQuery(`(?s)i.kind = 'ai' AND i.video_id = \$1.*ORDER BY r.decided_at DESC, r.id DESC LIMIT 1.*`+
-		regexp.QuoteMeta(`WHERE l.verdict IN ('sponsor', 'self_promotion') AND l.decided_at > $3`)).
+	mock.ExpectQuery(`(?s)i.kind = 'ai' AND i.video_id = \$1.*ORDER BY l.decided_at DESC, l.id DESC LIMIT 1.*`+
+		regexp.QuoteMeta(`WHERE k.verdict IN ('sponsor', 'self_promotion') AND k.decided_at > $3`)).
 		WithArgs(7, testVideo.Data, judged).WillReturnRows(rows)
 }
 
@@ -391,7 +391,7 @@ func TestJudgeVideoBaselineIsPerEntry(t *testing.T) {
 	keptA, keptB := published.Add(26*time.Hour), published.Add(28*time.Hour)
 	mock.ExpectQuery("i.kind = 'ai'").WithArgs(7, v.Data, since).
 		WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(30, 70, keptA).AddRow(200, 230, keptB))
-	bounds, _ := json.Marshal([]baseline{{Entry{2, 30, 70}, keptA}, {Entry{2, 200, 230}, keptB}})
+	bounds, _ := json.Marshal([]baseline{{Entry{CategoryID: 2, Start: 30, End: 70}, keptA}, {Entry{CategoryID: 2, Start: 200, End: 230}, keptB}})
 	mock.ExpectQuery("FROM votes").WithArgs(7, bounds, r.now).
 		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, 0, 0))
 	for _, table := range []string{"prv_events_interval_undo", "prv_events_interval_click"} {
@@ -404,6 +404,60 @@ func TestJudgeVideoBaselineIsPerEntry(t *testing.T) {
 	expectLockAndJudgement(mock, "ok", "llm", "fine", "claude-sonnet-5-5", cost)
 	mock.ExpectExec("judged_at = \\$3").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
+// movedVideo: testVideo whose entry an assessor moved from 30-70 to 25-75.
+func movedVideo(v Video) Video {
+	v.Data = []byte(`[{"category_id":2,"start":25,"end":75,"confidence":"high","source":"review"}]`)
+	return v
+}
+
+// expectMovedSignals: the signal queries on the moved entry's bounds with its baseline, two undo
+// events, `newUndo` of them after the baseline.
+func expectMovedSignals(mock sqlmock.Sqlmock, baselineAt, now time.Time, newUndo int) {
+	b, _ := json.Marshal([]baseline{{Entry{CategoryID: 2, Start: 25, End: 75}, baselineAt}})
+	mock.ExpectQuery("FROM votes").WithArgs(7, b, now).WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, 0, 0))
+	mock.ExpectQuery("prv_events_interval_undo").WithArgs("-1_456000001", b, now).
+		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(2, newUndo))
+	mock.ExpectQuery("prv_events_interval_click").WithArgs("-1_456000001", b, now).WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
+	mock.ExpectQuery("FROM markups").WithArgs(7, published, now).WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "dated"}))
+	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(0, 0))
+}
+
+// The keep that moved the entry to 25-75 is found on the new bounds: the entry's baseline is
+// that verdict, the undo before it is not new, the tick records the rules' ok.
+func TestJudgeVideoAMovedEntrysKeepSetsItsBaseline(t *testing.T) {
+	r, mock, v, llm := llmCase(t, "", true)
+	v = movedVideo(v)
+	keptAt := published.Add(28 * time.Hour)
+	mock.ExpectQuery(`(?s)COALESCE\(b.start, i.start\) = e.start`).WithArgs(7, v.Data, since).
+		WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(25, 75, keptAt))
+	expectMovedSignals(mock, keptAt, r.now, 0)
+	expectLockAndJudgement(mock, "ok", "rules", "every entry kept on review since the last judgement", nil, nil)
+	expectCounters(mock, r.now)
+	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
+// The item's verdict moved the entry, so the item no longer matches its old bounds and no keep
+// came after the last judgement on the new ones: the baseline stays the judgement, a new undo
+// on the moved entry reaches the LLM, and the open item already on 25-75 gets no twin.
+func TestJudgeVideoAMovedEntryWithoutANewKeepReachesTheLLM(t *testing.T) {
+	r, mock, v, llm := llmCase(t, `{"decision":"review","reason":"undo on the moved entry","segments":[{"index":0,"keep":true}]}`, true)
+	v = movedVideo(v)
+	mock.ExpectQuery(`(?s)COALESCE\(b.start, i.start\) = e.start`).WithArgs(7, v.Data, since).
+		WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}))
+	expectMovedSignals(mock, since, r.now, 1)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT r.transcript FROM prv_ai_video_calculateds a JOIN prv_ai_runs r")).WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{"transcript"}).AddRow([]byte(`{"meta":{},"cues":[]}`)))
+	expectLockAndJudgement(mock, "review", "llm", "undo on the moved entry", "claude-sonnet-5-5", cost)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT i.start, i."end" FROM prv_review_items i`)).WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{"start", "end"}).AddRow(25, 75))
+	expectCounters(mock, r.now)
 	if err := r.judgeVideo(v); err != nil || llm.calls != 1 {
 		t.Fatal(err, llm.calls)
 	}

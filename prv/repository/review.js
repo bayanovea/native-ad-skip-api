@@ -1,9 +1,13 @@
 const { QueryTypes } = require('sequelize');
-const { VERDICTS, splitSheet } = require('../../lib/review-sheet');
+const { VERDICTS, splitSheet, validateVerdictBounds } = require('../../lib/review-sheet');
 const { REVIEWER_MAX } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
+// How a verdict's bounds were set: a transcript selection, typed times, or scripts/import-verdict-bounds.js.
+const BOUNDS_SOURCES = ['cue', 'typed', 'import'];
+// Bounds come only with a verdict that keeps the segment.
+const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
 // Video-level flags a reviewer may set (prv_review_video_flags.flag).
 const VIDEO_FLAGS = ['track_mismatch'];
 const VALID_FLAGS = new Set(VIDEO_FLAGS);
@@ -17,11 +21,13 @@ const PRIORITY_RANK = `array_position(ARRAY['urgent','important','optional']::te
 const MAX_ITEM_ID = 2147483647;
 
 // Bad input from a caller: the decide route maps it to 400 and sends the
-// message. Anything else thrown here is a bug or a DB failure (500).
+// message (translated `error_<code>` when `code` is set). Anything else thrown
+// here is a bug or a DB failure (500).
 class ReviewInputError extends Error {
-    constructor(message) {
+    constructor(message, code = null) {
         super(message);
         this.name = 'ReviewInputError';
+        this.code = code;
     }
 }
 
@@ -95,17 +101,27 @@ const STATE = `CASE
  *
  * Factory shape matches `prv/repository/moderation.js`.
  */
+// An item's effective bounds: those of its latest verdict that has bounds
+// (`history` newest first), else the item's own (reviewer and source null).
+// The AI entry an ai item refers to sits at these bounds.
+function effectiveOf(item, history) {
+    const v = history.find((h) => h.bounds);
+    return v
+        ? { start: v.bounds.start, end: v.bounds.end, reviewer: v.reviewer, source: v.bounds.source }
+        : { start: item.start, end: item.end, reviewer: null, source: null };
+}
+
 module.exports = function createReviewRepository(models, sequelize) {
     // Attach `verdict` (latest or null) and `history` (newest first) to item
     // rows, and apply the blind rule. One query for all rows.
-    async function hydrate(rows) {
+    async function hydrate(rows, transaction) {
         if (rows.length === 0) return [];
         const verdicts = await sequelize.query(
-            `SELECT id, item_id, verdict, comment, reviewer, source, decided_at
+            `SELECT id, item_id, verdict, comment, reviewer, source, start, "end", bounds_source, decided_at
                FROM prv_review_verdicts
               WHERE item_id IN (:ids)
               ORDER BY item_id, decided_at DESC, id DESC`,
-            { replacements: { ids: rows.map((r) => r.id) }, type: QueryTypes.SELECT }
+            { replacements: { ids: rows.map((r) => r.id) }, type: QueryTypes.SELECT, transaction }
         );
         const byItem = new Map();
         for (const v of verdicts) {
@@ -116,29 +132,30 @@ module.exports = function createReviewRepository(models, sequelize) {
                 comment: v.comment,
                 reviewer: v.reviewer,
                 source: v.source,
+                bounds: v.start == null ? null : { start: v.start, end: v.end, source: v.bounds_source },
                 decided_at: v.decided_at,
             });
         }
         return rows.map((r) => {
             const history = byItem.get(r.id) || [];
             const { flagged_by, ...columns } = r;
-            const item = { ...columns, verdict: history[0] || null, history };
+            const item = { ...columns, verdict: history[0] || null, history, effective_bounds: effectiveOf(r, history) };
             if (item.verdict) item.flagged_by = flagged_by || [];
             return item;
         });
     }
 
     // One full item (hydrated, blind rule applied) or null.
-    async function selectOne(whereSql, orderSql, replacements) {
+    async function selectOne(whereSql, orderSql, replacements, transaction) {
         const rows = await sequelize.query(
             `SELECT ${ITEM_COLUMNS}
                FROM prv_review_items i
               WHERE ${whereSql}
               ORDER BY ${orderSql}
               LIMIT 1`,
-            { replacements, type: QueryTypes.SELECT }
+            { replacements, type: QueryTypes.SELECT, transaction }
         );
-        const [item] = await hydrate(rows);
+        const [item] = await hydrate(rows, transaction);
         return item || null;
     }
 
@@ -425,9 +442,21 @@ module.exports = function createReviewRepository(models, sequelize) {
             return selectOne('i.batch = :batch AND i.item_code = :item_code', 'i.id', { batch, item_code: itemCode });
         },
 
-        getItemById(itemId) {
+        getItemById(itemId, { transaction } = {}) {
             if (!validItemId(itemId)) return Promise.resolve(null);
-            return selectOne('i.id = :id', 'i.id', { id: itemId });
+            return selectOne('i.id = :id', 'i.id', { id: itemId }, transaction);
+        },
+
+        /**
+         * `{ id, batch }` of the items with `item_code` in the sheet or batch
+         * named `name` (a sheet's code is unique in it, so more than one row
+         * means `name` is a part of one sheet and the sheet of another).
+         */
+        itemsByCode(name, itemCode) {
+            return sequelize.query(
+                `SELECT i.id, i.batch FROM prv_review_items i
+                  WHERE (i.sheet = :name OR i.batch = :name) AND i.item_code = :itemCode ORDER BY i.id`,
+                { replacements: { name, itemCode }, type: QueryTypes.SELECT });
         },
 
         /**
@@ -588,7 +617,7 @@ module.exports = function createReviewRepository(models, sequelize) {
          * prv_review_reviewers) and comment are trimmed, empty comment → null.
          * Returns the created row.
          */
-        async recordVerdict({ item_id, verdict, comment, reviewer, source, transaction } = {}) {
+        async recordVerdict({ item_id, verdict, comment, reviewer, source, bounds = null, transaction } = {}) {
             // source is set by the callers themselves, never by user input.
             if (!VALID_SOURCES.has(source)) throw new Error(`recordVerdict: bad source ${source}`);
             if (!VALID_VERDICTS.has(verdict)) {
@@ -607,6 +636,14 @@ module.exports = function createReviewRepository(models, sequelize) {
             if (comment != null && typeof comment !== 'string') {
                 throw new ReviewInputError('comment must be a string');
             }
+            if (bounds != null) {
+                if (!KEEP_VERDICTS.has(verdict)) throw new ReviewInputError(`bounds only with a keep verdict, not ${verdict}`, 'bounds_not_keep');
+                if (!BOUNDS_SOURCES.includes(bounds.source)) {
+                    throw new ReviewInputError(`bounds source must be one of ${BOUNDS_SOURCES.join(', ')}`, 'bounds_source');
+                }
+                const why = validateVerdictBounds(bounds);
+                if (why) throw new ReviewInputError(`bad bounds ${bounds.start}-${bounds.end}: ${why}`, `bounds_${why}`);
+            }
             const item = await models.ReviewItem.findByPk(item_id, { attributes: ['id'], transaction });
             if (!item) throw new ReviewInputError(`unknown review item ${item_id}`);
 
@@ -618,7 +655,56 @@ module.exports = function createReviewRepository(models, sequelize) {
                 comment: text === '' ? null : text,
                 reviewer: who,
                 source,
+                ...(bounds != null && { start: bounds.start, end: bounds.end, bounds_source: bounds.source }),
             }, { transaction });
+        },
+
+        /**
+         * The item's effective bounds `{ start, end, reviewer, source }` (see
+         * effectiveOf), read in `transaction`; null for an unknown item.
+         */
+        async effectiveBounds(itemId, { transaction } = {}) {
+            const [item] = await sequelize.query('SELECT id, start, "end" FROM prv_review_items WHERE id = :itemId',
+                { replacements: { itemId }, type: QueryTypes.SELECT, transaction });
+            if (!item) return null;
+            const history = await sequelize.query(
+                `SELECT reviewer, start, "end", bounds_source FROM prv_review_verdicts
+                  WHERE item_id = :itemId AND start IS NOT NULL
+                  ORDER BY decided_at DESC, id DESC LIMIT 1`,
+                { replacements: { itemId }, type: QueryTypes.SELECT, transaction });
+            return effectiveOf(item, history.map((v) => ({ reviewer: v.reviewer, bounds: { start: v.start, end: v.end, source: v.bounds_source } })));
+        },
+
+        /**
+         * The detector's transcript around an ai item: the cues of its run
+         * (prv_ai_runs.transcript via the AI row's run_id) overlapping
+         * [lo − context, hi + context], where lo / hi span the item's own and
+         * effective bounds, clamped at 0. Cues carry `words: [{t, text}]` when
+         * the run stored them (`has_words`: some cue in the window does).
+         * Returns `{ from, to, has_words, cues: [{start, end, text, words?}] }`,
+         * or null for a sheet item or a video without an AI row.
+         */
+        async getTranscript(item, contextSeconds) {
+            if (item.kind !== 'ai' || item.video_id == null) return null;
+            const eff = item.effective_bounds || item;
+            const from = Math.max(0, Math.min(item.start, eff.start) - contextSeconds);
+            const to = Math.max(item.end, eff.end) + contextSeconds;
+            const [row] = await sequelize.query(
+                `SELECT (SELECT jsonb_agg(x.cue ORDER BY x.ord)
+                           FROM jsonb_array_elements(r.transcript->'cues') WITH ORDINALITY AS x(cue, ord)
+                          WHERE (x.cue->>'end')::float >= :from AND (x.cue->>'start')::float <= :to) AS cues
+                   FROM prv_ai_video_calculateds c
+                   JOIN prv_ai_runs r ON r.id = c.run_id
+                  WHERE c.video_id = :videoId`,
+                { replacements: { videoId: item.video_id, from, to }, type: QueryTypes.SELECT });
+            if (!row) return null;
+            const cues = (row.cues || []).map((cue) => ({
+                start: cue.start,
+                end: cue.end,
+                text: cue.text,
+                ...(Array.isArray(cue.words) && cue.words.length > 0 && { words: cue.words.map((w) => ({ t: w.t, text: w.text })) }),
+            }));
+            return { from, to, has_words: cues.some((c) => c.words), cues };
         },
 
         /**
@@ -713,6 +799,8 @@ module.exports = function createReviewRepository(models, sequelize) {
 };
 
 module.exports.ReviewInputError = ReviewInputError;
+module.exports.BOUNDS_SOURCES = BOUNDS_SOURCES;
+module.exports.KEEP_VERDICTS = KEEP_VERDICTS;
 module.exports.ReviewConflictError = ReviewConflictError;
 module.exports.mayDecide = mayDecide;
 module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;

@@ -140,6 +140,41 @@ test('review export: mapping, latest verdict wins, open items skipped, note sani
     assert.equal(await exportTsv(b), expected);
 });
 
+async function addBoundsVerdict(itemId, verdict, decidedAt, start, end, reviewer = 'owner') {
+    await q(
+        `INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, start, "end", bounds_source, decided_at)
+         VALUES ($1, $2, NULL, $3, 'page', $4, $5, 'typed', $6)`,
+        [itemId, verdict, reviewer, start, end, decidedAt]);
+}
+
+test('review export: a keep verdict exports the corrected bounds, a later keep without bounds keeps them, other verdicts the item\'s', async () => {
+    const b = 'export-bounds';
+    const c1 = await addItem(b, 'C1', 1, '-21_21', 100, 130, 'sponsor');
+    const c2 = await addItem(b, 'C2', 2, '-22_22', 200, 230, 'sponsor');
+    const c3 = await addItem(b, 'C3', 3, '-23_23', 300, 330, 'sponsor');
+    const c4 = await addItem(b, 'C4', 4, '-24_24', 400, 430, 'sponsor');
+    await addBoundsVerdict(c1, 'sponsor', '2026-10-15T10:00:00Z', 95, 140);
+    await addBoundsVerdict(c2, 'sponsor', '2026-10-15T10:00:00Z', 190, 235);
+    await addVerdict(c2, 'self_promotion', null, '2026-10-15T11:00:00Z');
+    await addBoundsVerdict(c3, 'sponsor', '2026-10-15T10:00:00Z', 290, 335);
+    await addVerdict(c3, 'not_ad', null, '2026-10-15T11:00:00Z');
+    await addVerdict(c4, 'sponsor', null, '2026-10-15T10:00:00Z');
+    // Another reviewer's bounds stay out of a per-reviewer export.
+    await addBoundsVerdict(c4, 'sponsor', '2026-10-15T09:00:00Z', 395, 440, 'gkshi');
+
+    const header = 'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n';
+    assert.equal(await exportTsv(b), header
+        + 'prv\t-21_21\tsponsor\t95.0\t140.0\tgold_missing\tC1\t\n'
+        + 'prv\t-22_22\tself_promotion\t190.0\t235.0\tgold_missing\tC2\t\n'
+        + 'prv\t-23_23\tsponsor\t300.0\t330.0\tmodel_wrong\tC3\t\n'
+        + 'prv\t-24_24\tsponsor\t395.0\t440.0\tgold_missing\tC4\t\n');
+    assert.equal(await exportTsv(b, 'owner'), header
+        + 'prv\t-21_21\tsponsor\t95.0\t140.0\tgold_missing\tC1\t\n'
+        + 'prv\t-22_22\tself_promotion\t190.0\t235.0\tgold_missing\tC2\t\n'
+        + 'prv\t-23_23\tsponsor\t300.0\t330.0\tmodel_wrong\tC3\t\n'
+        + 'prv\t-24_24\tsponsor\t400.0\t430.0\tgold_missing\tC4\t\n');
+});
+
 test('review export: batch without verdicts yields the header only', async () => {
     await addItem('export-open', 'C1', 1, '-7_7', 10, 20, 'sponsor');
     assert.equal(await exportTsv('export-open'), 'provider\tnative_id\tcategory\tstart\tend\tverdict\titem\tnote\n');
@@ -272,5 +307,76 @@ test('review export: a split sheet exports the same TSV under its name; a part e
         assert.equal(fs.readFileSync(out, 'utf8'), whole);
     } finally {
         fs.rmSync(data, { recursive: true, force: true });
+    }
+});
+
+test('import-verdict-bounds: appends a copy of the reviewer\'s keep verdict with the bounds, skips what cannot be bounds, a bad line writes nothing', async () => {
+    const b = 'bounds-import';
+    await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi'), ('owner') ON CONFLICT DO NOTHING");
+    await q(`INSERT INTO prv_review_batches (batch) VALUES ('${b}')`);
+    const c1 = await addItem(b, 'C1', 1, '-31_31', 1391.7, 1412, 'sponsor');
+    const c2 = await addItem(b, 'C2', 2, '-32_32', 100, 130, 'sponsor');
+    const c3 = await addItem(b, 'C3', 3, '-33_33', 200, 230, 'sponsor');
+    const c4 = await addItem(b, 'C4', 4, '-34_34', 300, 330, 'sponsor');
+    await addItem(b, 'C5', 5, '-35_35', 400, 430, 'sponsor');
+    const c6 = await addItem(b, 'C6', 6, '-36_36', 500, 530, 'sponsor');
+    await addVerdict(c1, 'sponsor', 'реклама началась раньше 23:01', '2026-10-15T10:00:00Z', 'gkshi');
+    await addVerdict(c2, 'not_ad', 'the ad starts at 1:30', '2026-10-15T10:00:00Z', 'gkshi');
+    await addVerdict(c3, 'sponsor', null, '2026-10-15T10:00:00Z', 'gkshi');
+    await addVerdict(c3, 'not_ad', null, '2026-10-15T11:00:00Z', 'owner');
+    await addVerdict(c4, 'self_promotion', null, '2026-10-15T10:00:00Z', 'gkshi');
+    await addBoundsVerdict(c6, 'sponsor', '2026-10-15T10:00:00Z', 495, 535, 'gkshi');
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounds-import-'));
+    const run = (text, ...args) => {
+        const file = path.join(dir, 'bounds.tsv');
+        fs.writeFileSync(file, text);
+        return spawnSync('node', [path.join(__dirname, '..', 'scripts', 'import-verdict-bounds.js'), file, ...args], {
+            encoding: 'utf8', env: { ...process.env, DB_NAME: TEST_DB, DB_HOST, DB_PORT: String(DB_PORT) } });
+    };
+    const rows = async (id) => q('SELECT verdict, comment, reviewer, source, start, "end", bounds_source FROM prv_review_verdicts WHERE item_id = $1 ORDER BY id', [id]);
+    try {
+        const tsv = [
+            'sheet\titem_code\treviewer\tstart\tend',
+            '# checked by the owner',
+            `${b}\tC1\tgkshi\t23:01\t23:32`,
+            `${b}\tC2\tgkshi\t1:30\t2:10`,
+            `${b}\tC3\tgkshi\t3:10\t3:55`,
+            `${b}\tC4\t-\t5:00\t5:03`,
+            `${b}\tC5\t-\t6:40\t7:10`,
+            `${b}\tC6\tgkshi\t495\t535`,
+            '',
+        ].join('\n');
+        const dry = run(tsv, '--dry-run');
+        assert.equal(dry.status, 0, dry.stderr);
+        assert.match(dry.stdout, /would apply bounds-import C1 gkshi 1381-1412/);
+        assert.match(dry.stdout, /dry run: 1 applied, 5 skipped/);
+        assert.equal((await rows(c1)).length, 1, 'a dry run writes nothing');
+
+        const r = run(tsv);
+        assert.equal(r.status, 0, r.stderr);
+        assert.deepEqual(r.stdout.trim().split('\n'), [
+            'applied bounds-import C1 gkshi 1381-1412',
+            'skipped bounds-import C2 gkshi 90-130: latest verdict is not_ad, not a keep',
+            'skipped bounds-import C3 gkshi 190-235: a later verdict by owner',
+            'skipped bounds-import C4 gkshi 300-303: bounds 300-303: short',
+            'skipped bounds-import C5 - 400-430: no verdict by anyone',
+            'skipped bounds-import C6 gkshi 495-535: already has these bounds',
+            '1 applied, 5 skipped',
+        ]);
+        assert.deepEqual((await rows(c1)).at(-1), { verdict: 'sponsor', comment: 'реклама началась раньше 23:01', reviewer: 'gkshi',
+            source: 'import', start: 1381, end: 1412, bounds_source: 'import' });
+        assert.equal(await exportTsv(b).then((t) => t.split('\n')[1]), 'prv\t-31_31\tsponsor\t1381.0\t1412.0\tgold_missing\tC1\tреклама началась раньше 23:01');
+
+        for (const bad of [`${b}\tC1\tgkshi\t23:01`, `${b}\tC1\tgkshi\t23-01\t23:32`, `${b}\tC9\tgkshi\t1:00\t2:00`, `${b}\tC1\tnobody\t1:00\t2:00`]) {
+            const before = (await rows(c1)).length;
+            const e = run(`${b}\tC4\tgkshi\t5:00\t5:30\n${bad}\n`);
+            assert.equal(e.status, 1, bad);
+            assert.match(e.stderr, /import failed: /);
+            assert.equal((await rows(c1)).length, before);
+            assert.equal((await rows(c4)).length, 1, `${bad}: nothing written`);
+        }
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
     }
 });

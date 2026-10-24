@@ -9,4 +9,6 @@ added: 2026-10-22
 
 What a re-detect needs: run ids on review items (or ignore items created before `published_at`), ratings recomputed from votes at publish, the judge's `judged_at` / `judge_counters` reset, the old row withdrawn when the new run ends `timeline_unreliable` / `no_track` / `failed`, and a decision whether a withdrawn row may be re-detected at all. Worth it once a prompt change is good enough to re-run the published videos.
 
+Since 2026-10-24 an entry may carry bounds an assessor set (`source: "review"`, the verdict's `start` / `end` in `prv_review_verdicts`): a re-detect must keep such entries (or re-apply the item's effective bounds) rather than replace them with the new run's, or a human correction is lost.
+
 From the 2026-10-22 review of the AI-first branch (`docs/plans/completed/20261022-ai-first-segments.md`).
