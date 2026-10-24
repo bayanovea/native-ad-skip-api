@@ -27,7 +27,7 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{MinViews: 10000, FallbackRequests: 5, DailyBudget: 200, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
+	want := Config{MinViews: 10000, FallbackRequests: 10, DailyBudget: 300, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
 	if c.DetectEnabled || c.MinViews != want.MinViews || c.FallbackRequests != want.FallbackRequests ||
 		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||

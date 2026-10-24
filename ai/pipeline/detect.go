@@ -62,8 +62,8 @@ func ConfigFromEnv() (Config, error) {
 		dst  *int
 	}{
 		{"AI_MIN_VIEWS", 10000, &c.MinViews},
-		{"AI_FALLBACK_REQUESTS", 5, &c.FallbackRequests},
-		{"AI_DAILY_BUDGET_VIDEOS", 200, &c.DailyBudget},
+		{"AI_FALLBACK_REQUESTS", 10, &c.FallbackRequests},
+		{"AI_DAILY_BUDGET_VIDEOS", 300, &c.DailyBudget},
 		{"AI_BATCH_MAX", 5, &c.BatchMax},
 	} {
 		*v.dst = v.def

@@ -222,7 +222,7 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0]
-      # 10 = AI_DAILY_BUDGET_VIDEOS (default 200) × $0.05: the daily budget's cost
+      # 15 = AI_DAILY_BUDGET_VIDEOS (default 300) × $0.05: the daily budget's cost
       # ($0.025 a video) twice over. Grafana cannot read the env: change it with the budget.
       - uid: ai-cost-daily
         title: AiCostDaily
@@ -254,4 +254,4 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [10]
+                    params: [15]

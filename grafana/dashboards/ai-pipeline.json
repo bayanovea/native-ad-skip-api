@@ -45,10 +45,10 @@
         "type": "constant",
         "name": "fallback_requests",
         "label": "AI_FALLBACK_REQUESTS",
-        "query": "5",
+        "query": "10",
         "current": {
-          "text": "5",
-          "value": "5"
+          "text": "10",
+          "value": "10"
         },
         "hide": 2,
         "description": "Копия AI_FALLBACK_REQUESTS из env прода (Grafana env не читает): менять здесь вместе с env."
@@ -57,10 +57,10 @@
         "type": "constant",
         "name": "daily_budget",
         "label": "AI_DAILY_BUDGET_VIDEOS",
-        "query": "200",
+        "query": "300",
         "current": {
-          "text": "200",
-          "value": "200"
+          "text": "300",
+          "value": "300"
         },
         "hide": 2,
         "description": "Копия AI_DAILY_BUDGET_VIDEOS из env прода (Grafana env не читает): менять здесь вместе с env."
@@ -87,7 +87,7 @@
   "timezone": "",
   "title": "AI-разметка",
   "uid": "ai-pipeline",
-  "version": 2,
+  "version": 3,
   "panels": [
     {
       "type": "row",
@@ -535,11 +535,11 @@
               },
               {
                 "color": "orange",
-                "value": 5
+                "value": 7.5
               },
               {
                 "color": "red",
-                "value": 10
+                "value": 15
               }
             ]
           },
@@ -579,7 +579,7 @@
           "refId": "A"
         }
       ],
-      "description": "Алерт AiCostDaily срабатывает от $10 (бюджет 200 видео × $0.025 вдвое)."
+      "description": "Алерт AiCostDaily срабатывает от $15 (бюджет 300 видео × $0.025 вдвое)."
     },
     {
       "id": 8,
