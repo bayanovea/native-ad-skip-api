@@ -1018,7 +1018,7 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES
         ('-1_456000201', 50000, 1), ('-1_456000202', 50000, 1), ('-1_456000203', 50000, 1), ('-1_456000204', 5, 1),
-        ('-1_456000205', NULL, 5), ('-1_456000206', NULL, 6), ('-1_456000208', 50000, 1)`);
+        ('-1_456000205', NULL, 10), ('-1_456000206', NULL, 11), ('-1_456000208', 50000, 1)`); // 205 / 206: at and past the AI_FALLBACK_REQUESTS default
     // -1_456000208: players reported only a 900-s cut, so yt-dlp's 600.4 s is another cut.
     await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES
         ('-1_456000201', 601, NOW(), NOW()), ('-1_456000201', 900, NOW(), NOW()), ('-1_456000208', 900, NOW(), NOW())`);
