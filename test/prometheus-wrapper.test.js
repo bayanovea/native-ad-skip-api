@@ -9,6 +9,8 @@ const client = require('prom-client');
 beforeEach(() => {
     client.register.clear();
     delete require.cache[require.resolve('../prometheus-wrapper.js')];
+    delete require.cache[require.resolve('../lib/find-ai-calculated.js')]; // reads AI_FIRST when it loads
+    delete process.env.AI_FIRST;
 });
 
 async function counterValue(name, labels) {
@@ -100,6 +102,21 @@ test('registerAiMetrics: one refresh per scrape fills the AI gauges', async () =
     assert.match(output, /^ai_cost_usd_24h\{kind="judge"\} 0$/m);
     assert.match(output, /^ai_judgements\{decision="review",by="llm"\} 2$/m);
     assert.match(output, /^ai_review_open 4$/m);
+});
+
+test('registerAiMetrics: ai_first_enabled is the AI_FIRST switch as read at boot', async () => {
+    process.env.AI_FIRST = 'on';
+    let wrapper = require('../prometheus-wrapper.js');
+    wrapper.registerAiMetrics(fakeDb(aiRows([])));
+    assert.match(await client.register.metrics(), /^ai_first_enabled 1$/m);
+
+    client.register.clear();
+    delete require.cache[require.resolve('../prometheus-wrapper.js')];
+    delete require.cache[require.resolve('../lib/find-ai-calculated.js')];
+    process.env.AI_FIRST = 'off';
+    wrapper = require('../prometheus-wrapper.js');
+    wrapper.registerAiMetrics(fakeDb(aiRows([])));
+    assert.match(await client.register.metrics(), /^ai_first_enabled 0$/m);
 });
 
 test('registerAiMetrics: a failing query logs once and leaves the gauges empty; a later scrape fills them again', async () => {

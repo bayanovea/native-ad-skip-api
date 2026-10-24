@@ -1,4 +1,5 @@
 const client = require('prom-client');
+const { AI_FIRST } = require('./lib/find-ai-calculated');
 
 const videoCalculatedLookupTotal = new client.Counter({
     name: 'video_calculated_lookup_total',
@@ -97,6 +98,12 @@ function registerAiMetrics(sequelize) {
         name: 'ai_review_open',
         help: 'AI review items without a verdict',
     });
+    // The serving switch as Node read it at boot, so the dashboard can say whether the
+    // "ready to serve" rows reach clients; set once, no query behind it.
+    new client.Gauge({
+        name: 'ai_first_enabled',
+        help: 'AI_FIRST at boot: 1 = prv_ai_video_calculateds is served instead of video_calculateds',
+    }).set(AI_FIRST ? 1 : 0);
     const costOf = (kind, table) => `SELECT '${kind}' AS kind, COALESCE(SUM(cost_usd), 0) AS total,
         COALESCE(SUM(cost_usd) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) AS day FROM ${table}`;
     let logged = false;
