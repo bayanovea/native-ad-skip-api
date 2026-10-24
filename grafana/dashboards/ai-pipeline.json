@@ -30,7 +30,7 @@
   "templating": {
     "list": [
       {
-        "type": "textbox",
+        "type": "constant",
         "name": "min_views",
         "label": "AI_MIN_VIEWS",
         "query": "10000",
@@ -38,11 +38,11 @@
           "text": "10000",
           "value": "10000"
         },
-        "hide": 0,
-        "description": "Порог просмотров очереди детектора, как в env прода (Grafana env не читает)."
+        "hide": 2,
+        "description": "Копия AI_MIN_VIEWS из env прода (Grafana env не читает): менять здесь вместе с env."
       },
       {
-        "type": "textbox",
+        "type": "constant",
         "name": "fallback_requests",
         "label": "AI_FALLBACK_REQUESTS",
         "query": "5",
@@ -50,11 +50,11 @@
           "text": "5",
           "value": "5"
         },
-        "hide": 0,
-        "description": "Порог запросов к API для видео без известных просмотров."
+        "hide": 2,
+        "description": "Копия AI_FALLBACK_REQUESTS из env прода (Grafana env не читает): менять здесь вместе с env."
       },
       {
-        "type": "textbox",
+        "type": "constant",
         "name": "daily_budget",
         "label": "AI_DAILY_BUDGET_VIDEOS",
         "query": "200",
@@ -62,8 +62,8 @@
           "text": "200",
           "value": "200"
         },
-        "hide": 0,
-        "description": "Запусков модели за скользящие 24 ч."
+        "hide": 2,
+        "description": "Копия AI_DAILY_BUDGET_VIDEOS из env прода (Grafana env не читает): менять здесь вместе с env."
       },
       {
         "type": "textbox",
@@ -87,7 +87,7 @@
   "timezone": "",
   "title": "AI-разметка",
   "uid": "ai-pipeline",
-  "version": 1,
+  "version": 2,
   "panels": [
     {
       "type": "row",
