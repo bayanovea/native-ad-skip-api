@@ -27,7 +27,7 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{MinViews: 10000, FallbackRequests: 3, DailyBudget: 200, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
+	want := Config{MinViews: 10000, FallbackRequests: 5, DailyBudget: 200, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
 	if c.DetectEnabled || c.MinViews != want.MinViews || c.FallbackRequests != want.FallbackRequests ||
 		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||
@@ -250,6 +250,19 @@ func TestFetchTrackWithoutCues(t *testing.T) {
 				t.Fatalf("failed = %d, want 0: one failed fetch is the video's", failed)
 			}
 		})
+	}
+}
+
+func TestFetchWithoutViewCountPassesOnRequests(t *testing.T) {
+	r, mock, _ := batchRun(t)
+	r.ytdlp = stubYtdlp(t, "WEBVTT\n\n") // no cues: stops right after the views gate
+	r.prv, _ = provider.Lookup("prv")
+	// Only the no-track attempt: no views_max write, no `seen`.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
+		WithArgs("-1_456000001", "queued", 1, sqlmock.AnyArg(), "no ru subtitle track").WillReturnResult(sqlmock.NewResult(0, 1))
+	p, err := r.fetch(context.Background(), queued{nativeID: "-1_456000001"}, true)
+	if p != nil || err != nil {
+		t.Fatalf("got %+v %v", p, err)
 	}
 }
 

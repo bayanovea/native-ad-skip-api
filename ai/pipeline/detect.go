@@ -62,7 +62,7 @@ func ConfigFromEnv() (Config, error) {
 		dst  *int
 	}{
 		{"AI_MIN_VIEWS", 10000, &c.MinViews},
-		{"AI_FALLBACK_REQUESTS", 3, &c.FallbackRequests},
+		{"AI_FALLBACK_REQUESTS", 5, &c.FallbackRequests},
 		{"AI_DAILY_BUDGET_VIDEOS", 200, &c.DailyBudget},
 		{"AI_BATCH_MAX", 5, &c.BatchMax},
 	} {
@@ -335,12 +335,9 @@ func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pend
 	if err != nil {
 		return nil, r.fetchError(q, err)
 	}
-	if checkViews && !q.viewsMax.Valid {
-		// A missing count is 0: the row waits for the extension to report views instead of being fetched every tick.
-		views, known := viewCount(raw)
-		if !known {
-			log.Printf("ai detect: %s: no view_count in yt-dlp's info, waiting for views from clients", q.nativeID)
-		}
+	// prv's yt-dlp info never carries view_count (null on every video, 2026-10-24): the
+	// row was queued by our own requests (AI_FALLBACK_REQUESTS), and that gate stands alone.
+	if views, known := viewCount(raw); checkViews && !q.viewsMax.Valid && known {
 		status := statusFetching
 		if views < int64(r.cfg.MinViews) {
 			status = statusSeen
