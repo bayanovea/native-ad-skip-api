@@ -245,10 +245,24 @@ func TestFetchTrackWithoutCues(t *testing.T) {
 			r.prv, _ = provider.Lookup("prv")
 			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
 				WithArgs("-1_456000001", c.status, 1, sqlmock.AnyArg(), c.lastErr).WillReturnResult(sqlmock.NewResult(0, 1))
-			p, err := r.fetch(context.Background(), queued{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}}, true)
-			if p != nil || err != nil {
-				t.Fatalf("got %+v %v", p, err)
+			q := queued{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}}
+			if failed := r.detect(context.Background(), []queued{q}, true); failed != 0 {
+				t.Fatalf("failed = %d, want 0: one failed fetch is the video's", failed)
 			}
 		})
+	}
+}
+
+func TestDetectEveryFetchFailedIsTheHosts(t *testing.T) {
+	r, _, _ := batchRun(t)
+	r.ytdlp = stubYtdlp(t, "")
+	r.prv, _ = provider.Lookup("prv")
+	claimed := []queued{
+		{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}},
+		{nativeID: "-1_456000002", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}},
+	}
+	// No UPDATE expected: no attempt spent, the rows stay `fetching`.
+	if failed := r.detect(context.Background(), claimed, true); failed != 2 {
+		t.Fatalf("failed = %d, want 2", failed)
 	}
 }

@@ -162,7 +162,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'calculator {{ $labels.provider }}: a video fails on every run, look for "Calculate video failed: <video_id>" in docker logs'
+          summary: 'calculator {{ $labels.provider }}: a video fails on every run, look for "Calculate video failed: <video_id>" in docker logs (ai_detect: "ai detect:" lines; "every fetch of the tick failed" = prv may be refusing the host, set AI_DETECT_ENABLED=off)'
         data:
           - refId: A
             relativeTimeRange:

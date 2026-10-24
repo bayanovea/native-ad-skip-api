@@ -1158,6 +1158,21 @@ test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed 
     await dbQuery(`UPDATE prv_ai_videos SET status = 'queued', next_attempt_at = NOW() + INTERVAL '1 day' WHERE native_id = '-1_456000207'`);
 });
 
+test('ai detect: a tick whose every fetch fails is the host’s (prv refusing it): failed videos, no attempt spent', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000212', 50000, 1), ('-1_456000213', 50000, 1)`);
+    const r = runAi(['detect']);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: every fetch of the tick failed \(2 videos\)/);
+    for (const id of ['-1_456000212', '-1_456000213']) {
+        const v = await aiVideo(id);
+        assert.deepEqual([v.status, v.attempts], ['fetching', 0], 'claimed again after an hour');
+    }
+    const hb = await heartbeat('ai_detect');
+    assert.equal(hb.failed_videos, 2);
+    assert.equal(hb.last_success_at.getTime(), hb.last_run_at.getTime(), 'CalculatorFailedVideos, not CalculatorStale');
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'failed' WHERE native_id IN ('-1_456000212', '-1_456000213')`);
+});
+
 test('ai detect: a run with no model result after 24 h fails, also while the switch is off', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, status, batch_id, updated_at) VALUES
         ('-1_456000210', 'detecting', 'msgbatch_lost', NOW() - INTERVAL '25 hours'), ('-1_456000211', 'detecting', NULL, NOW() - INTERVAL '23 hours')`);

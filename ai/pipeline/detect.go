@@ -125,7 +125,17 @@ type detectRun struct {
 	ytdlp       *ytdlp.Runner
 	prv          provider.Provider
 	fetchPause  time.Duration // 0 for the manual run
+	fetchErrs   []fetchErr    // this detect call's yt-dlp errors, recorded once the call knows whether all failed
 }
+
+type fetchErr struct {
+	q   queued
+	msg string
+}
+
+// blockedMin is how many fetches of one tick must all fail before the tick blames
+// the host instead of the videos: one unavailable video is ordinary.
+const blockedMin = 2
 
 // pending is a fetched video that passed the gate, waiting for its model call.
 type pending struct {
@@ -263,6 +273,7 @@ func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
 // detect fetches the claimed videos and submits the ones that passed the gate.
 func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews bool) (failed int) {
 	var ready []pending
+	r.fetchErrs = nil
 	for _, q := range claimed {
 		time.Sleep(jitter(r.fetchPause))
 		p, err := r.fetch(ctx, q, checkViews)
@@ -271,6 +282,23 @@ func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews boo
 			failed++
 		} else if p != nil {
 			ready = append(ready, *p)
+		}
+	}
+	if n := len(r.fetchErrs); n >= blockedMin && n == len(claimed) {
+		// Every fetch failing looks like prv refusing the host, not like n broken videos:
+		// the tick's failure (CalculatorFailedVideos), and no attempt spent, as for a
+		// yt-dlp that cannot start; the rows stay `fetching`, claimed again after an hour.
+		for _, e := range r.fetchErrs {
+			log.Printf("ai detect: %s fetch failed: %s", e.q.nativeID, e.msg)
+		}
+		log.Printf("ai detect: every fetch of the tick failed (%d videos): prv may be refusing the host", n)
+		failed += n
+	} else {
+		for _, e := range r.fetchErrs {
+			if err := r.recordFetchError(e); err != nil {
+				log.Printf("ai detect: %s %v", e.q.nativeID, err)
+				failed++
+			}
 		}
 	}
 	return failed + r.submit(ctx, ready)
@@ -406,21 +434,26 @@ func readVTT(base string) ([]vtt.Cue, error) {
 	return vtt.Collapse(raw), nil
 }
 
-// fetchError records a failed yt-dlp call as an attempt of the video; its message
-// is flattened to one line (the runner joins the attempts' errors with newlines).
-// A yt-dlp that cannot start is the host's fault, not the video's: it is returned
-// unrecorded, and the row, left in `fetching`, is claimed again after an hour.
+// fetchError keeps a failed yt-dlp call for detect to record as an attempt of the
+// video; its message is flattened to one line (the runner joins the attempts'
+// errors with newlines). A yt-dlp that cannot start is the host's fault, not the
+// video's: it is returned unrecorded, and the row, left in `fetching`, is claimed
+// again after an hour.
 func (r *detectRun) fetchError(q queued, err error) error {
 	var execErr *exec.Error
 	if errors.As(err, &execErr) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
 		return err
 	}
-	msg := strings.ReplaceAll(err.Error(), "\n", ": ")
-	status, uerr := markAttempt(r.db, q, false, msg)
-	if uerr != nil {
-		return errors.Join(err, uerr)
+	r.fetchErrs = append(r.fetchErrs, fetchErr{q, strings.ReplaceAll(err.Error(), "\n", ": ")})
+	return nil
+}
+
+func (r *detectRun) recordFetchError(e fetchErr) error {
+	status, err := markAttempt(r.db, e.q, false, e.msg)
+	if err != nil {
+		return err
 	}
-	log.Printf("ai detect: %s %s after fetch attempt %d: %s", q.nativeID, status, q.attempts+1, msg)
+	log.Printf("ai detect: %s %s after fetch attempt %d: %s", e.q.nativeID, status, e.q.attempts+1, e.msg)
 	return nil
 }
 
