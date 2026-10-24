@@ -128,6 +128,7 @@ jobs:
         AI_JUDGE_MODEL: ${{ vars.AI_JUDGE_MODEL }}
         AI_JUDGE_MIN_INTERVAL: ${{ vars.AI_JUDGE_MIN_INTERVAL }}
         AI_MIN_VIEWS: ${{ vars.AI_MIN_VIEWS }}
+        AI_FALLBACK_REQUESTS: ${{ vars.AI_FALLBACK_REQUESTS }}
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
@@ -158,6 +159,7 @@ jobs:
             AI_JUDGE_MODEL "$AI_JUDGE_MODEL" \
             AI_JUDGE_MIN_INTERVAL "$AI_JUDGE_MIN_INTERVAL" \
             AI_MIN_VIEWS "$AI_MIN_VIEWS" \
+            AI_FALLBACK_REQUESTS "$AI_FALLBACK_REQUESTS" \
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
             HOST_IP "$HOST_IP" \
             IMAGE_NAME "$IMAGE_NAME" \
