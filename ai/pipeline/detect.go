@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,16 +32,17 @@ import (
 
 // Config is the detector's environment. Every switch defaults off.
 type Config struct {
-	DetectEnabled    bool   // AI_DETECT_ENABLED=on
-	MinViews         int    // AI_MIN_VIEWS
-	FallbackRequests int    // AI_FALLBACK_REQUESTS: GET count that queues a video whose views are unknown
-	DailyBudget      int    // AI_DAILY_BUDGET_VIDEOS: model calls per 24 h
-	BatchMax         int    // AI_BATCH_MAX: videos per tick
-	Model            string // AI_MODEL
-	Client           string // AI_CLIENT: anthropic (Batches API) | messages (one call per video) | fixture
-	FixtureDir       string // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
-	PromptPath       string // AI_PROMPT
-	YtdlpBin         string // YTDLP_BIN
+	DetectEnabled    bool          // AI_DETECT_ENABLED=on
+	MinViews         int           // AI_MIN_VIEWS
+	FallbackRequests int           // AI_FALLBACK_REQUESTS: GET count that queues a video whose views are unknown
+	DailyBudget      int           // AI_DAILY_BUDGET_VIDEOS: model calls per 24 h
+	BatchMax         int           // AI_BATCH_MAX: videos per tick
+	FetchPause       time.Duration // AI_FETCH_PAUSE: mean pause before each video's fetch on a cron tick
+	Model            string        // AI_MODEL
+	Client           string        // AI_CLIENT: anthropic (Batches API) | messages (one call per video) | fixture
+	FixtureDir       string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
+	PromptPath       string        // AI_PROMPT
+	YtdlpBin         string        // YTDLP_BIN
 }
 
 // ConfigFromEnv reads Config; an empty variable takes the default.
@@ -62,7 +64,7 @@ func ConfigFromEnv() (Config, error) {
 		{"AI_MIN_VIEWS", 10000, &c.MinViews},
 		{"AI_FALLBACK_REQUESTS", 3, &c.FallbackRequests},
 		{"AI_DAILY_BUDGET_VIDEOS", 200, &c.DailyBudget},
-		{"AI_BATCH_MAX", 100, &c.BatchMax},
+		{"AI_BATCH_MAX", 5, &c.BatchMax},
 	} {
 		*v.dst = v.def
 		if s := os.Getenv(v.name); s != "" {
@@ -72,6 +74,14 @@ func ConfigFromEnv() (Config, error) {
 			}
 			*v.dst = n
 		}
+	}
+	c.FetchPause = 40 * time.Second
+	if s := os.Getenv("AI_FETCH_PAUSE"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d < 0 {
+			return c, fmt.Errorf("AI_FETCH_PAUSE must be a non-negative duration, got %q", s)
+		}
+		c.FetchPause = d
 	}
 	return c, nil
 }
@@ -114,6 +124,7 @@ type detectRun struct {
 	categories  map[string]int
 	ytdlp       *ytdlp.Runner
 	prv          provider.Provider
+	fetchPause  time.Duration // 0 for the manual run
 }
 
 // pending is a fetched video that passed the gate, waiting for its model call.
@@ -190,6 +201,9 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	}
 	r := &detectRun{cfg: cfg, prompt: prompt, priceFactor: 1,
 		ytdlp: &ytdlp.Runner{Bin: cfg.YtdlpBin, Attempts: 2, Timeout: 90 * time.Second, Backoff: 2 * time.Second, Logf: log.Printf}}
+	if !manual {
+		r.fetchPause = cfg.FetchPause
+	}
 	if r.prv, err = provider.Lookup("prv"); err != nil {
 		return nil, err
 	}
@@ -250,6 +264,7 @@ func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
 func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews bool) (failed int) {
 	var ready []pending
 	for _, q := range claimed {
+		time.Sleep(jitter(r.fetchPause))
 		p, err := r.fetch(ctx, q, checkViews)
 		if err != nil {
 			log.Printf("ai detect: %s %v", q.nativeID, err)
@@ -259,6 +274,15 @@ func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews boo
 		}
 	}
 	return failed + r.submit(ctx, ready)
+}
+
+// jitter spreads a pause over [d/2, 3d/2), so prv never sees our host's fetches
+// as a burst at the cron minute: a ban of the shared IP would stop every fetch.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return d/2 + rand.N(d)
 }
 
 // manualOutcome is the manual run's exit: an error unless the video ended published.

@@ -36,6 +36,9 @@ services:
       YTDLP_BIN: /app/test/fixtures/ai/yt-dlp-stub.sh
       AI_CLIENT: fixture
       AI_FIXTURE_DIR: /app/test/fixtures/ai
+      # One tick claims every queued test video, with no pause between fetches
+      AI_BATCH_MAX: "100"
+      AI_FETCH_PAUSE: "0"
     command: node --test test/e2e.js test/moderation-resolver.test.js test/review-export.test.js
     networks:
       - e2e-network

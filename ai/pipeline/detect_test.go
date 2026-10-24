@@ -20,17 +20,17 @@ import (
 )
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
-	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_FALLBACK_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
+	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_FALLBACK_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{MinViews: 10000, FallbackRequests: 3, DailyBudget: 200, BatchMax: 100, Model: "claude-sonnet-5-5", Client: "anthropic",
+	want := Config{MinViews: 10000, FallbackRequests: 3, DailyBudget: 200, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
 	if c.DetectEnabled || c.MinViews != want.MinViews || c.FallbackRequests != want.FallbackRequests ||
-		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.Model != want.Model || c.Client != want.Client ||
+		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||
 		c.YtdlpBin != want.YtdlpBin {
 		t.Fatalf("got %+v", c)
 	}
@@ -40,9 +40,29 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 	if c, err = ConfigFromEnv(); err != nil || !c.DetectEnabled || c.MinViews != 500 {
 		t.Fatalf("got %+v, %v", c, err)
 	}
+	t.Setenv("AI_FETCH_PAUSE", "0")
+	if c, err = ConfigFromEnv(); err != nil || c.FetchPause != 0 {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+	t.Setenv("AI_FETCH_PAUSE", "-1s")
+	if _, err := ConfigFromEnv(); err == nil {
+		t.Fatal("negative pause: want an error")
+	}
+	t.Setenv("AI_FETCH_PAUSE", "")
 	t.Setenv("AI_BATCH_MAX", "ten")
 	if _, err := ConfigFromEnv(); err == nil {
 		t.Fatal("bad integer: want an error")
+	}
+}
+
+func TestJitter(t *testing.T) {
+	if jitter(0) != 0 {
+		t.Fatal("no pause: want 0")
+	}
+	for range 1000 {
+		if d := jitter(40 * time.Second); d < 20*time.Second || d >= 60*time.Second {
+			t.Fatalf("jitter(40s) = %v, want [20s, 60s)", d)
+		}
 	}
 }
 
