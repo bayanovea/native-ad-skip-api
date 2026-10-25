@@ -21,3 +21,9 @@ Re-running the script later imports only new detections (duplicates by native_id
 | sponsor low | 2 | 0 | 2 not_ad (B30, B42) |
 
 `self_promotion medium` reads 98 % ad, over the 80 % bar → candidate: lower `self_promotion` to `medium` in `accepted()`. `sponsor low` stays out (0 of 2). Caveats: one reviewer; verdicts judge the text, not the viewer's experience of the cut; the eval held-out gate must be re-scored with the new threshold first (precision-first). Owner's decision pending.
+
+## Decision 2026-10-26: keep `self_promotion` at `high`
+
+The eval disagrees with the prod batch. Held-out v2.2 (217 videos, reviewed gold, IoU 0.3) re-scored with `self_promotion: medium` in `cmd/adskip/scorecore.go`: SCORE 0.40 → 0.35 (ad removed 52 % → 57 %, wrongly cut 374 s → 663 s); claude -p run 0.41 → 0.40; dev 0.39 → 0.13. Per-segment precision of `self_promotion medium` against gold: 0.74 / 0.82 / 0.67 (batch / cli / dev) vs 0.98 on the prod batch. Part of the gap is assessor-confirmed: several of the 18 held-out medium FPs carry `model_wrong` verdicts (C29, C84, C159, C160), so it is not only missing gold; the rest of them were never in a sheet. The prod batch is 50 requested videos, text-only verdicts, one reviewer. Stake on prod: 118 raw `self_promotion medium` segments vs 121 published `high`.
+
+Nothing in the review queue settles it: `2026-10-24-corpus-1` (177) and `-misses` (83) are built under the product thresholds / from human labels. What would: a small blind sheet of the held-out + dev `self_promotion medium` false positives without a verdict (~15–20 items), then the re-score above; lower only if SCORE with `medium` ≥ SCORE with `high` (precision-first).
