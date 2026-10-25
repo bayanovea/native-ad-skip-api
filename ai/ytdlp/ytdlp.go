@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,16 +69,43 @@ func (r *Runner) Info(ctx context.Context, url string) (*Info, []byte, error) {
 
 // WriteSubs downloads subtitle tracks for lang as VTT into outBase (yt-dlp appends
 // ".<lang>.vtt"). auto selects --write-auto-subs instead of --write-subs.
+//
+// A prv video whose only track is the player's (no manifest entry) has the label as
+// its ext ("Ru AUTO"), so yt-dlp writes "<outBase>.ru.Ru AUTO", a VTT file all the
+// same; yt-dlp refuses such an ext unless allow-unsafe-ext, which is safe here (a
+// fixed name in our own directory, read as text only), and the file is renamed to
+// the ".<lang>.vtt" callers look for.
 func (r *Runner) WriteSubs(ctx context.Context, url, outBase, lang string, auto bool) error {
 	flag := "--write-subs"
 	if auto {
 		flag = "--write-auto-subs"
 	}
-	return r.retry(ctx, "subs "+url, func(ctx context.Context) error {
+	err := r.retry(ctx, "subs "+url, func(ctx context.Context) error {
 		_, err := r.run(ctx, flag, "--sub-langs", lang, "--sub-format", "vtt",
+			"--compat-options", "allow-unsafe-ext",
 			"--skip-download", "--no-warnings", "-o", outBase, url)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	return normalizeSubsExt(outBase, lang)
+}
+
+// normalizeSubsExt renames a "<outBase>.<lang>.<label>" track to "<outBase>.<lang>.vtt"
+// when no .vtt was written.
+func normalizeSubsExt(outBase, lang string) error {
+	want := outBase + "." + lang + ".vtt"
+	if _, err := os.Stat(want); err == nil {
+		return nil
+	}
+	matches, _ := filepath.Glob(outBase + "." + lang + ".*")
+	for _, m := range matches {
+		if !strings.HasSuffix(m, ".vtt") {
+			return os.Rename(m, want)
+		}
+	}
+	return nil
 }
 
 func (r *Runner) run(ctx context.Context, args ...string) ([]byte, error) {
