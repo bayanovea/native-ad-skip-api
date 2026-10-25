@@ -1204,10 +1204,25 @@ test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed 
     await dbQuery(`UPDATE prv_ai_videos SET status = 'queued', next_attempt_at = NOW() + INTERVAL '1 day' WHERE native_id = '-1_456000207'`);
 });
 
-test('ai detect: a tick whose every fetch fails is the host’s (prv refusing it): failed videos, no attempt spent', async () => {
-    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000212', 50000, 1), ('-1_456000213', 50000, 1)`);
+test('ai detect: a tick whose every fetch fails while a published video still fetches is the videos’: attempts spent, no failed tick', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000214', 50000, 1), ('-1_456000215', 50000, 1)`);
     const r = runAi(['detect']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: every fetch of the tick failed, control video \S+ did not/);
+    assert.doesNotMatch(r.stderr, /prv may be refusing the host/);
+    for (const id of ['-1_456000214', '-1_456000215']) {
+        const v = await aiVideo(id);
+        assert.deepEqual([v.status, v.attempts], ['queued', 1]);
+    }
+    assert.equal((await heartbeat('ai_detect')).failed_videos, 0);
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'failed' WHERE native_id IN ('-1_456000214', '-1_456000215')`);
+});
+
+test('ai detect: a tick whose every fetch fails, the control video’s too, is the host’s (prv refusing it): failed videos, no attempt spent', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000212', 50000, 1), ('-1_456000213', 50000, 1)`);
+    const r = runAi(['detect'], { YTDLP_STUB_REFUSE: '1' });
     assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: control video \S+ failed too/);
     assert.match(r.stderr, /ai detect: every fetch of the tick failed \(2 videos\)/);
     for (const id of ['-1_456000212', '-1_456000213']) {
         const v = await aiVideo(id);

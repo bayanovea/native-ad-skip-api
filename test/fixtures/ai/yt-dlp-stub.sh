@@ -1,6 +1,7 @@
 #!/bin/sh
 # Stand-in for yt-dlp in e2e (YTDLP_BIN): `-j` prints <native_id>.info.json, a subtitle
-# download copies <native_id>.ru.vtt to <-o>.ru.vtt. No info file = yt-dlp failing.
+# download copies <native_id>.ru.vtt to <-o>.ru.vtt. No info file = yt-dlp failing;
+# YTDLP_STUB_REFUSE=1 fails every call (prv refusing the host).
 dir=$(dirname "$0")
 mode=info
 out=
@@ -14,6 +15,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 id=${url#https://example.invalid/video}
+if [ -n "$YTDLP_STUB_REFUSE" ]; then
+  echo "ERROR: [prv] $id: HTTP Error 403: Forbidden" >&2
+  exit 1
+fi
 if [ ! -f "$dir/$id.info.json" ]; then
   echo "ERROR: [prv] $id: This video is unavailable" >&2
   exit 1

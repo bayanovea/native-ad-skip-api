@@ -284,10 +284,11 @@ func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews boo
 			ready = append(ready, *p)
 		}
 	}
-	if n := len(r.fetchErrs); n >= blockedMin && n == len(claimed) {
-		// Every fetch failing looks like prv refusing the host, not like n broken videos:
-		// the tick's failure (CalculatorFailedVideos), and no attempt spent, as for a
-		// yt-dlp that cannot start; the rows stay `fetching`, claimed again after an hour.
+	if n := len(r.fetchErrs); n >= blockedMin && n == len(claimed) && !r.hostFetches(ctx) {
+		// Every fetch failing, a known-good video's too, looks like prv refusing the host,
+		// not like n broken videos: the tick's failure (CalculatorFailedVideos), and no
+		// attempt spent, as for a yt-dlp that cannot start; the rows stay `fetching`,
+		// claimed again after an hour.
 		for _, e := range r.fetchErrs {
 			log.Printf("ai detect: %s fetch failed: %s", e.q.nativeID, e.msg)
 		}
@@ -302,6 +303,28 @@ func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews boo
 		}
 	}
 	return failed + r.submit(ctx, ready)
+}
+
+// hostFetches tells broken videos from a refused host: it fetches the info of the
+// latest published video. A quiet tick may claim only videos that fail on their own,
+// and calling that a ban kept them `fetching` and alerting every hour (2026-10-25).
+// No published video yet, or a failing one, leaves the ban standing.
+func (r *detectRun) hostFetches(ctx context.Context) bool {
+	var nativeID string
+	err := r.db.QueryRow(`SELECT native_id FROM prv_ai_videos WHERE status = $1 ORDER BY updated_at DESC LIMIT 1`, statusPublished).Scan(&nativeID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("ai detect: control video: %v", err)
+		}
+		return false
+	}
+	time.Sleep(jitter(r.fetchPause))
+	if _, _, err := r.ytdlp.Info(ctx, r.prv.VideoURL(nativeID)); err != nil {
+		log.Printf("ai detect: control video %s failed too: %s", nativeID, strings.ReplaceAll(err.Error(), "\n", ": "))
+		return false
+	}
+	log.Printf("ai detect: every fetch of the tick failed, control video %s did not: the videos' errors", nativeID)
+	return true
 }
 
 // jitter spreads a pause over [d/2, 3d/2), so prv never sees our host's fetches
