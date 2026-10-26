@@ -37,6 +37,7 @@ services:
       - AI_MIN_VIEWS=${AI_MIN_VIEWS:-}
       - AI_FALLBACK_REQUESTS=${AI_FALLBACK_REQUESTS:-}
       - AI_DAILY_BUDGET_VIDEOS=${AI_DAILY_BUDGET_VIDEOS:-}
+      - AI_MIN_SEGMENT_SECONDS=${AI_MIN_SEGMENT_SECONDS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
   prometheus:
     image: prom/prometheus:v2.45.2

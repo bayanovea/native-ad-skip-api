@@ -130,6 +130,7 @@ jobs:
         AI_MIN_VIEWS: ${{ vars.AI_MIN_VIEWS }}
         AI_FALLBACK_REQUESTS: ${{ vars.AI_FALLBACK_REQUESTS }}
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
+        AI_MIN_SEGMENT_SECONDS: ${{ vars.AI_MIN_SEGMENT_SECONDS }}
         HOST_IP: ${{ secrets.HOST_IP }}
         IMAGE_NAME: native-ad-skip-api
         GHCR_USER: ${{ github.actor }}
@@ -161,6 +162,7 @@ jobs:
             AI_MIN_VIEWS "$AI_MIN_VIEWS" \
             AI_FALLBACK_REQUESTS "$AI_FALLBACK_REQUESTS" \
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
+            AI_MIN_SEGMENT_SECONDS "$AI_MIN_SEGMENT_SECONDS" \
             HOST_IP "$HOST_IP" \
             IMAGE_NAME "$IMAGE_NAME" \
             IMAGE_TAG "$IMAGE_TAG" \

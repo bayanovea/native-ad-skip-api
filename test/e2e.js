@@ -1050,13 +1050,17 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     const out = r.stdout + r.stderr;
     assert.equal(r.status, 0, out);
 
-    // Only the sponsor at high passes: self-promotion at medium and a 3-s sponsor are dropped.
+    // Only the sponsor at high is served: self-promotion at medium and a 3-s sponsor are kept hidden with the reason.
     let v = await aiVideo('-1_456000201');
     assert.deepEqual([v.status, v.batch_id, v.last_error], ['published', null, null]);
     assert.equal(v.judge_counters, null, 'the judge owns judge_counters');
     const ai = await aiCalculated('-1_456000201');
     assert.equal(ai.video_id, videoId, 'keyed by the videos row within ±2 s of yt-dlp’s 600.4 s');
     assert.deepEqual(ai.data, [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai', rating: 2 }]);
+    assert.deepEqual(ai.hidden, [
+        { category_id: cats.prv.self_promotion, start: 300, end: 320, confidence: 'medium', source: 'ai', reason: 'confidence' },
+        { category_id: cats.prv.sponsor, start: 480, end: 483, confidence: 'high', source: 'ai', reason: 'short' },
+    ]);
     assert.equal(ai.withdrawn_at, null);
     const [run] = await dbQuery(`SELECT * FROM prv_ai_runs WHERE native_id = '-1_456000201'`);
     assert.equal(ai.run_id, run.id);
@@ -1072,7 +1076,7 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.equal(run.raw_output.segments.length, 3);
     assert.ok(Math.abs(run.cost_usd - FIXTURE_COST / 2) < 1e-12, `batch: half price, got ${run.cost_usd}`);
     assert.match(out, /ai detect: duration variants: -1_456000201 has 1 videos rows/);
-    assert.match(out, /ai detect: -1_456000201 published: 1 entries of 3 segments/);
+    assert.match(out, /ai detect: -1_456000201 published: 1 served, 2 hidden of 3 segments/);
 
     v = await aiVideo('-1_456000202');
     assert.deepEqual([v.status, v.attempts], ['queued', 1], 'no ru track: retried later');
@@ -1094,7 +1098,9 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.deepEqual([v.status, v.views_max], ['seen', 120], 'fallback: yt-dlp’s view_count is below the minimum');
     v = await aiVideo('-1_456000206');
     assert.deepEqual([v.status, v.views_max], ['published', 20000], 'fallback: enough views');
-    assert.deepEqual((await aiCalculated('-1_456000206')).data, [], 'nothing passed the thresholds: published empty');
+    const empty = await aiCalculated('-1_456000206');
+    assert.deepEqual(empty.data, [], 'nothing passed the thresholds: published empty');
+    assert.deepEqual(empty.hidden, [{ category_id: cats.prv.sponsor, start: 20, end: 30, confidence: 'low', source: 'ai', reason: 'confidence' }]);
     assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs`))[0].n, 2, 'one run per detected video');
 
     const hb = await heartbeat('ai_detect');
@@ -2050,7 +2056,7 @@ test('ai full path: views request → detect → served → vote → undo → ju
     // A huge fallback keeps rows that earlier tests requested without views out of this tick.
     let r = runAi(['detect'], { AI_FALLBACK_REQUESTS: '1000000' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout + r.stderr, /ai detect: -1_456000601 published: 1 entries of 3 segments/);
+    assert.match(r.stdout + r.stderr, /ai detect: -1_456000601 published: 1 served, 2 hidden of 3 segments/);
     const videoId = await prvVideoId(vid);
     assert.equal((await aiCalculated(vid)).video_id, videoId, 'the human markup’s videos row');
     assert.deepEqual(await served(), [[sp, 30, 70, undefined]]);

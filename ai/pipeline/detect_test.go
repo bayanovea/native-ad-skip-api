@@ -20,17 +20,17 @@ import (
 )
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
-	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_FALLBACK_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
+	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_FALLBACK_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{MinViews: 10000, FallbackRequests: 10, DailyBudget: 300, BatchMax: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
+	want := Config{MinViews: 10000, FallbackRequests: 10, DailyBudget: 300, BatchMax: 5, MinSegmentSeconds: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
 	if c.DetectEnabled || c.MinViews != want.MinViews || c.FallbackRequests != want.FallbackRequests ||
-		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||
+		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.MinSegmentSeconds != want.MinSegmentSeconds || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||
 		c.YtdlpBin != want.YtdlpBin {
 		t.Fatalf("got %+v", c)
 	}
@@ -49,6 +49,17 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 		t.Fatal("negative pause: want an error")
 	}
 	t.Setenv("AI_FETCH_PAUSE", "")
+	t.Setenv("AI_MIN_SEGMENT_SECONDS", "3")
+	if c, err = ConfigFromEnv(); err != nil || c.MinSegmentSeconds != 3 {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+	for _, bad := range []string{"0", "-1", "2.5"} {
+		t.Setenv("AI_MIN_SEGMENT_SECONDS", bad)
+		if _, err := ConfigFromEnv(); err == nil {
+			t.Fatalf("AI_MIN_SEGMENT_SECONDS=%s: want an error", bad)
+		}
+	}
+	t.Setenv("AI_MIN_SEGMENT_SECONDS", "")
 	t.Setenv("AI_BATCH_MAX", "ten")
 	if _, err := ConfigFromEnv(); err == nil {
 		t.Fatal("bad integer: want an error")

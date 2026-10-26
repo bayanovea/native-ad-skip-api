@@ -15,28 +15,46 @@ func pred(cat, conf string, start, end float64) detector.Prediction {
 	return detector.Prediction{Segment: detector.Segment{Category: cat, Confidence: conf}, Start: start, End: end}
 }
 
-func TestEntriesThresholds(t *testing.T) {
+func TestEntriesSplitsServedAndHidden(t *testing.T) {
 	cats := map[string]int{"sponsor": 2, "self_promotion": 3}
-	got := entries([]detector.Prediction{
-		pred("sponsor", "high", 10.2, 40.8),        // kept, shrunk to whole seconds
-		pred("sponsor", "medium", 50, 60),          // kept
-		pred("sponsor", "low", 70, 90),             // low: dropped
-		pred("self_promotion", "high", 100, 130),   // kept
+	served, hidden := entries([]detector.Prediction{
+		pred("sponsor", "high", 10.2, 40.8),        // served, shrunk to whole seconds
+		pred("sponsor", "medium", 50, 60),          // served
+		pred("sponsor", "low", 70, 90),             // low: confidence
+		pred("self_promotion", "high", 100, 130),   // served
 		pred("self_promotion", "medium", 140, 170), // self-promotion needs high
-		pred("sponsor", "high", 200.5, 205.4),      // 201..205 is 4 s: dropped
-		pred("sponsor", "high", 300, 305),          // exactly 5 s: kept
-	}, cats)
-	want := []Entry{
-		{2, 11, 40, "high", "ai"},
-		{2, 50, 60, "medium", "ai"},
-		{3, 100, 130, "high", "ai"},
-		{2, 300, 305, "high", "ai"},
+		pred("sponsor", "high", 200.5, 205.4),      // 201..205 is 4 s: short
+		pred("sponsor", "high", 300, 305),          // exactly 5 s: served
+		pred("sponsor", "low", 400, 402),           // both: confidence first (the truth layer before the serving filter)
+	}, cats, 5)
+	wantServed := []Entry{
+		{2, 11, 40, "high", "ai", ""},
+		{2, 50, 60, "medium", "ai", ""},
+		{3, 100, 130, "high", "ai", ""},
+		{2, 300, 305, "high", "ai", ""},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	wantHidden := []Entry{
+		{2, 70, 90, "low", "ai", "confidence"},
+		{3, 140, 170, "medium", "ai", "confidence"},
+		{2, 201, 205, "high", "ai", "short"},
+		{2, 400, 402, "low", "ai", "confidence"},
 	}
-	if got := entries(nil, cats); got == nil || len(got) != 0 {
-		t.Fatalf("no predictions: want an empty, non-nil list (published as []), got %#v", got)
+	if !reflect.DeepEqual(served, wantServed) || !reflect.DeepEqual(hidden, wantHidden) {
+		t.Fatalf("got %+v / %+v\nwant %+v / %+v", served, hidden, wantServed, wantHidden)
+	}
+
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 200.5, 205.4), pred("sponsor", "high", 300, 305)}, cats, 3)
+	if !reflect.DeepEqual(served, []Entry{{2, 201, 205, "high", "ai", ""}, {2, 300, 305, "high", "ai", ""}}) || len(hidden) != 0 {
+		t.Fatalf("threshold 3: got %+v / %+v", served, hidden)
+	}
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 300, 305)}, cats, 6)
+	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{{2, 300, 305, "high", "ai", "short"}}) {
+		t.Fatalf("threshold 6: got %+v / %+v", served, hidden)
+	}
+
+	served, hidden = entries(nil, cats, 5)
+	if served == nil || len(served) != 0 || hidden == nil || len(hidden) != 0 {
+		t.Fatalf("no predictions: want empty, non-nil lists (published as []), got %#v / %#v", served, hidden)
 	}
 }
 
@@ -86,8 +104,10 @@ func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testin
 	mock.ExpectExec(regexp.QuoteMeta("SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)DISTINCT ON \(user_id, category_id, start, "end"\).*FROM votes`).WithArgs("7").
 		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating"}).AddRow(2, 11.0, 40.0, -2).AddRow(2, 50.0, 60.0, 0))
+	// Hidden entries go as they are: no ratings, nothing there reaches a player.
 	mock.ExpectExec("INSERT INTO prv_ai_video_calculateds").
-		WithArgs(7, "-1_456000001", int64(3), []byte(`[{"category_id":2,"confidence":"high","end":40,"rating":-2,"source":"ai","start":11},{"category_id":2,"confidence":"medium","end":60,"source":"ai","start":50}]`)).
+		WithArgs(7, "-1_456000001", int64(3), []byte(`[{"category_id":2,"confidence":"high","end":40,"rating":-2,"source":"ai","start":11},{"category_id":2,"confidence":"medium","end":60,"source":"ai","start":50}]`),
+			[]byte(`[{"category_id":2,"start":70,"end":90,"confidence":"low","source":"ai","reason":"confidence"}]`)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -95,7 +115,8 @@ func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai"}, {2, 50, 60, "medium", "ai"}}); err != nil {
+	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai", ""}, {2, 50, 60, "medium", "ai", ""}},
+		[]Entry{{2, 70, 90, "low", "ai", "confidence"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

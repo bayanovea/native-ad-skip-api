@@ -246,13 +246,15 @@ module.exports = function(sequelize) {
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_runs', timestamps: false, indexes: [{ fields: ['native_id'] }, { fields: ['created_at'] }] });
 
-    // The AI's final segments per videos row (entries as video_calculateds.data plus confidence, source "ai").
+    // The AI's final segments per videos row (entries as video_calculateds.data plus confidence, source "ai"):
+    // `data` is what is served, `hidden` every other detected segment with its `reason`.
     // Withdrawn rows keep `data` for the record; serving checks withdrawn_at IS NULL.
     const AiVideoCalculated = sequelize.define('ai_video_calculated', {
         video_id: { type: DataTypes.INTEGER, primaryKey: true, references: { model: 'videos', key: 'id' } },
         native_id: { type: DataTypes.STRING, allowNull: false },
         run_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'prv_ai_runs', key: 'id' } },
         data: { type: DataTypes.JSONB, allowNull: false },
+        hidden: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         published_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
         withdrawn_at: { type: DataTypes.DATE, allowNull: true },
         withdrawn_by: { type: DataTypes.TEXT, allowNull: true },

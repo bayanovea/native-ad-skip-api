@@ -10,18 +10,24 @@ import (
 	"odedohbest/video-calculate/calculator"
 )
 
-// Entry is one published segment, the shape of a video_calculateds.data entry
-// plus confidence and source; publish adds the rating from the votes.
+// Entry is one detected segment, the shape of a video_calculateds.data entry
+// plus confidence and source; publish adds the rating from the votes to the
+// served ones. A hidden entry carries the reason it is not served.
 type Entry struct {
 	CategoryID int    `json:"category_id"`
 	Start      int    `json:"start"`
 	End        int    `json:"end"`
 	Confidence string `json:"confidence"`
 	Source     string `json:"source"`
+	Reason     string `json:"reason,omitempty"`
 }
 
-// minSegmentSeconds is the eval's scoring floor: shorter predictions are noise.
-const minSegmentSeconds = 5
+// Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet)
+// or shorter than AI_MIN_SEGMENT_SECONDS (the serving filter).
+const (
+	reasonConfidence = "confidence"
+	reasonShort      = "short"
+)
 
 // accepted is the product threshold the held-out SCORE was measured with:
 // sponsor from medium confidence, self-promotion only at high.
@@ -35,19 +41,26 @@ func accepted(p detector.Prediction) bool {
 	return false
 }
 
-// entries filters predictions by the thresholds and maps them to whole seconds
-// inside the predicted span (start up, end down): a skip never cuts content the
-// model did not mark, and votes match segments by integer bounds.
-func entries(preds []detector.Prediction, categories map[string]int) []Entry {
-	out := []Entry{}
+// entries maps predictions to whole seconds inside the predicted span (start up,
+// end down: a skip never cuts content the model did not mark, and votes match
+// segments by integer bounds) and splits them into served and hidden.
+func entries(preds []detector.Prediction, categories map[string]int, minSeconds int) (served, hidden []Entry) {
+	served, hidden = []Entry{}, []Entry{}
 	for _, p := range preds {
 		start, end := int(math.Ceil(p.Start)), int(math.Floor(p.End))
-		if !accepted(p) || end-start < minSegmentSeconds {
+		e := Entry{CategoryID: categories[p.Category], Start: start, End: end, Confidence: p.Confidence, Source: "ai"}
+		switch {
+		case !accepted(p):
+			e.Reason = reasonConfidence
+		case end-start < minSeconds:
+			e.Reason = reasonShort
+		default:
+			served = append(served, e)
 			continue
 		}
-		out = append(out, Entry{CategoryID: categories[p.Category], Start: start, End: end, Confidence: p.Confidence, Source: "ai"})
+		hidden = append(hidden, e)
 	}
-	return out
+	return served, hidden
 }
 
 // loadCategories maps the detector's category names to markup_categories ids.
@@ -77,15 +90,20 @@ func loadCategories(db *sql.DB) (map[string]int, error) {
 	return m, nil
 }
 
-// publish writes the video's AI row; an empty data still marks the video done
-// (serving treats it as no AI row). claimOne refuses a native_id that has one, so
+// publish writes the video's AI row: data is what is served, hidden the rest
+// (no ratings: nothing there reaches a player). An empty data still marks the
+// video done (serving treats it as no AI row). claimOne refuses a native_id that has one, so
 // the conflict branch is a safety net, and it never serves a withdrawn row again.
 // Each entry starts with the rating of the votes already on its exact bounds
 // (one interval, one vote), read under the video_calculateds lock: the vote
 // handlers take it before the AI row, so no vote on the video commits between
 // this read and the row becoming visible.
-func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry) error {
+func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data, hidden []Entry) error {
 	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	h, err := json.Marshal(hidden)
 	if err != nil {
 		return err
 	}
@@ -95,11 +113,11 @@ func publish(tx *sql.Tx, videoID int, nativeID string, runID int64, data []Entry
 	if b, err = calculator.WithVoteRatings(tx, videoID, b); err != nil {
 		return fmt.Errorf("publish ratings: %w", err)
 	}
-	_, err = tx.Exec(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, published_at, updated_at)
-		VALUES ($1, $2, $3, $4, NOW(), NOW())
+	_, err = tx.Exec(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data, hidden, published_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 		ON CONFLICT (video_id) DO UPDATE SET native_id = EXCLUDED.native_id, run_id = EXCLUDED.run_id, data = EXCLUDED.data,
-			published_at = NOW(), updated_at = NOW()`,
-		videoID, nativeID, runID, b)
+			hidden = EXCLUDED.hidden, published_at = NOW(), updated_at = NOW()`,
+		videoID, nativeID, runID, b, h)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}

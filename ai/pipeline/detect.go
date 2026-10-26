@@ -32,17 +32,18 @@ import (
 
 // Config is the detector's environment. Every switch defaults off.
 type Config struct {
-	DetectEnabled    bool          // AI_DETECT_ENABLED=on
-	MinViews         int           // AI_MIN_VIEWS
-	FallbackRequests int           // AI_FALLBACK_REQUESTS: GET count that queues a video whose views are unknown
-	DailyBudget      int           // AI_DAILY_BUDGET_VIDEOS: model calls per 24 h
-	BatchMax         int           // AI_BATCH_MAX: videos per tick
-	FetchPause       time.Duration // AI_FETCH_PAUSE: mean pause before each video's fetch on a cron tick
-	Model            string        // AI_MODEL
-	Client           string        // AI_CLIENT: anthropic (Batches API) | messages (one call per video) | fixture
-	FixtureDir       string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
-	PromptPath       string        // AI_PROMPT
-	YtdlpBin         string        // YTDLP_BIN
+	DetectEnabled     bool          // AI_DETECT_ENABLED=on
+	MinViews          int           // AI_MIN_VIEWS
+	FallbackRequests  int           // AI_FALLBACK_REQUESTS: GET count that queues a video whose views are unknown
+	DailyBudget       int           // AI_DAILY_BUDGET_VIDEOS: model calls per 24 h
+	BatchMax          int           // AI_BATCH_MAX: videos per tick
+	MinSegmentSeconds int           // AI_MIN_SEGMENT_SECONDS: shorter entries are hidden, not served (lib/ai-rules.js reads it too)
+	FetchPause        time.Duration // AI_FETCH_PAUSE: mean pause before each video's fetch on a cron tick
+	Model             string        // AI_MODEL
+	Client            string        // AI_CLIENT: anthropic (Batches API) | messages (one call per video) | fixture
+	FixtureDir        string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
+	PromptPath        string        // AI_PROMPT
+	YtdlpBin          string        // YTDLP_BIN
 }
 
 // ConfigFromEnv reads Config; an empty variable takes the default.
@@ -65,6 +66,7 @@ func ConfigFromEnv() (Config, error) {
 		{"AI_FALLBACK_REQUESTS", 10, &c.FallbackRequests},
 		{"AI_DAILY_BUDGET_VIDEOS", 300, &c.DailyBudget},
 		{"AI_BATCH_MAX", 5, &c.BatchMax},
+		{"AI_MIN_SEGMENT_SECONDS", 5, &c.MinSegmentSeconds},
 	} {
 		*v.dst = v.def
 		if s := os.Getenv(v.name); s != "" {
@@ -74,6 +76,9 @@ func ConfigFromEnv() (Config, error) {
 			}
 			*v.dst = n
 		}
+	}
+	if c.MinSegmentSeconds < 1 {
+		return c, fmt.Errorf("AI_MIN_SEGMENT_SECONDS must be at least 1, got %d", c.MinSegmentSeconds)
 	}
 	c.FetchPause = 40 * time.Second
 	if s := os.Getenv("AI_FETCH_PAUSE"); s != "" {
@@ -695,8 +700,8 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		return nil
 	}
 
-	data := entries(detector.Resolve(units, res.Output), r.categories)
-	if err := publish(tx, videoID, nativeID, runID, data); err != nil {
+	data, hidden := entries(detector.Resolve(units, res.Output), r.categories, r.cfg.MinSegmentSeconds)
+	if err := publish(tx, videoID, nativeID, runID, data, hidden); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'published', batch_id = NULL, last_error = NULL, updated_at = NOW()
@@ -706,8 +711,8 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit published: %w", err)
 	}
-	log.Printf("ai detect: %s published: %d entries of %d segments, video %d, run %d, $%.4f",
-		nativeID, len(data), len(res.Output.Segments), videoID, runID, cost)
+	log.Printf("ai detect: %s published: %d served, %d hidden of %d segments, video %d, run %d, $%.4f",
+		nativeID, len(data), len(hidden), len(res.Output.Segments), videoID, runID, cost)
 	return nil
 }
 

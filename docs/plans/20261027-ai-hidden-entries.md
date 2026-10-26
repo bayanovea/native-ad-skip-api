@@ -37,7 +37,7 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 ## Testing Strategy
 
 - **unit**: `go test -mod=vendor ./ai/... ./calculator`, `make test-unit`
-- **e2e**: `make test-e2e` (the `ai…:` tests drive the real binary with the fixture client; the detect fixtures already contain below-threshold segments: `-1_456000201` 300–320 `self_promotion medium`, `-1_456000206` 20–30 `sponsor low` and a 3-s sponsor)
+- **e2e**: `make test-e2e` (the `ai…:` tests drive the real binary with the fixture client; the detect fixtures already contain below-threshold segments: `-1_456000201` 300–320 `self_promotion medium`, `-1_456000206` 20–30 `sponsor low`; `-1_456000201` also a 3-s sponsor 480–483)
 - no UI e2e framework; the page's bounds handling is covered through `format=json` + `POST /decide` in e2e and the inlined helpers in `test/review-sheet.test.js`
 
 ## Progress Tracking
@@ -101,13 +101,13 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Modify: `ai/pipeline/publish.go`, `ai/pipeline/detect.go` (`Config.MinSegmentSeconds`, `ConfigFromEnv`, `finish()`), `ai/pipeline/publish_test.go`, `ai/pipeline/detect_test.go`
 - Modify: `docker-compose.yml`, `.github/workflows/deploy.yml` (both lists), `test/e2e.js`
 
-- [ ] `ALTER TABLE prv_ai_video_calculateds ADD COLUMN IF NOT EXISTS hidden JSONB NOT NULL DEFAULT '[]'` in `syncSchema()`; model field
-- [ ] `lib/ai-rules.js` + `test/ai-rules.test.js` (default, valid value, invalid → throws at boot); add to `make test-unit`
-- [ ] Go: `Entry.Reason`, `entries(preds, categories, minSeconds) (served, hidden)` with `reason` `confidence` before `short`; `publish(tx, …, served, hidden)`; `ConfigFromEnv` reads `AI_MIN_SEGMENT_SECONDS`
-- [ ] `finish()` passes both; log line with served / hidden counts
-- [ ] wire the variable in compose and the workflow (unset = default)
-- [ ] tests: `publish_test.go` (split by confidence and length, reason precedence, custom threshold), `detect_test.go` env parsing; e2e `ai detect:` assertions read `hidden` of the fixture rows (`-1_456000201`: 300–320 `confidence`; `-1_456000206`: 20–30 `confidence`, the 3-s sponsor `short`)
-- [ ] run `go test -mod=vendor ./ai/...`, `make test-unit`, `make test-e2e` — green before task 2
+- [x] `ALTER TABLE prv_ai_video_calculateds ADD COLUMN IF NOT EXISTS hidden JSONB NOT NULL DEFAULT '[]'` in `syncSchema()`; model field
+- [x] `lib/ai-rules.js` + `test/ai-rules.test.js` (default, valid value, invalid → throws at boot); add to `make test-unit`
+- [x] Go: `Entry.Reason`, `entries(preds, categories, minSeconds) (served, hidden)` with `reason` `confidence` before `short`; `publish(tx, …, served, hidden)`; `ConfigFromEnv` reads `AI_MIN_SEGMENT_SECONDS`
+- [x] `finish()` passes both; log line with served / hidden counts
+- [x] wire the variable in compose and the workflow (unset = default)
+- [x] tests: `publish_test.go` (split by confidence and length, reason precedence, custom threshold), `detect_test.go` env parsing; e2e `ai detect:` assertions read `hidden` of the fixture rows (`-1_456000201`: 300–320 `confidence`, the 3-s sponsor 480–483 `short`; `-1_456000206`: 20–30 `confidence`)
+- [x] run `go test -mod=vendor ./ai/...`, `make test-unit`, `make test-e2e` — green before task 2
 
 ### Task 2: `ai regate` and `ai regate --backfill`
 
