@@ -22,11 +22,13 @@ type Entry struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-// Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet)
-// or shorter than AI_MIN_SEGMENT_SECONDS (the serving filter).
+// Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet),
+// shorter than AI_MIN_SEGMENT_SECONDS (the serving filter), or not an ad on
+// review (prv/repository/ai.js applyVerdict; no rule ever serves it again).
 const (
 	reasonConfidence = "confidence"
 	reasonShort      = "short"
+	reasonReview     = "review"
 )
 
 // accepted is the product threshold the held-out SCORE was measured with:

@@ -1151,6 +1151,55 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'below-test%'`);
 });
 
+test('ai regate: a threshold change moves entries both ways with the votes’ rating; --backfill fills an emptied hidden from the run', async () => {
+    const before = await aiCalculated('-1_456000201');
+    const videoId = before.video_id;
+    const sponsor = { category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' };
+    const promo = { category_id: cats.prv.self_promotion, start: 300, end: 320, confidence: 'medium', source: 'ai', reason: 'confidence' };
+    const short = { category_id: cats.prv.sponsor, start: 480, end: 483, confidence: 'high', source: 'ai' };
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
+        VALUES ('regate-voter', $1, $2, 480, 483, 1, NOW(), NOW())`, [videoId, cats.prv.sponsor]);
+
+    let r = runAi(['regate']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /ai regate: 2 rows, 0 changed, 0 failed \(min 5 s\)/);
+
+    r = runAi(['regate'], { AI_MIN_SEGMENT_SECONDS: '3' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 2 served, 1 hidden \\(\\+1 −0\\), 0 backfilled`));
+    let ai = await aiCalculated('-1_456000201');
+    assert.deepEqual(ai.data, [{ ...sponsor, rating: 2 }, { ...short, rating: 1 }], 'the 3-s sponsor is served with the vote already on its bounds');
+    assert.deepEqual(ai.hidden, [promo], 'self-promotion at medium stays below the confidence rule');
+
+    r = runAi(['regate'], { AI_MIN_SEGMENT_SECONDS: '41' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 0 served, 3 hidden \\(\\+0 −2\\)`));
+    ai = await aiCalculated('-1_456000201');
+    assert.deepEqual(ai.data, []);
+    assert.deepEqual(ai.hidden, [{ ...sponsor, reason: 'short' }, promo, { ...short, reason: 'short' }], 'hidden entries carry no rating');
+    assert.equal(ai.withdrawn_at, null, 'a regate never withdraws');
+
+    await dbQuery(`DELETE FROM votes WHERE user_id = 'regate-voter'`);
+    r = runAi(['regate']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual((await aiCalculated('-1_456000201')).data, before.data, 'back at the default: the rating comes from the votes again');
+    assert.deepEqual((await aiCalculated('-1_456000201')).hidden, before.hidden);
+
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = '[]' WHERE native_id = '-1_456000201'`);
+    r = runAi(['regate', '--backfill']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 1 served, 2 hidden \\(\\+0 −0\\), 2 backfilled`));
+    assert.match(r.stderr, /ai regate: 2 rows, 1 changed, 0 failed/, 'the other row has a hidden list: not rebuilt');
+    ai = await aiCalculated('-1_456000201');
+    assert.deepEqual([ai.data, ai.hidden], [before.data, before.hidden]);
+    r = runAi(['regate', '--backfill']);
+    assert.match(r.stderr, /ai regate: 2 rows, 0 changed, 0 failed/, 'idempotent');
+
+    r = runAi(['regate', '--bogus']);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /usage: .*ai regate \[--backfill\]/);
+});
+
 test('ai detect <native_id>: the manual run ignores views and the switch, calls the model synchronously, writes no heartbeat; a video with an AI row is never re-detected', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000204', 5, 1) ON CONFLICT DO NOTHING`);
     const hb = await heartbeat('ai_detect');

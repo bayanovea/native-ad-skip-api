@@ -116,12 +116,12 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Modify: `prv/commands/ai/main.go` (usage), `ai/judge/signals.go` (`entryKeepsAll()` shared; or move the keep query to a small package both import)
 - Modify: `test/e2e.js`, CLAUDE.md (Commands, Ops)
 
-- [ ] `Regate(cfg, backfill bool)`: list AI rows; per row one transaction: `video_calculateds` lock (`lockVideoCalculated`), AI row `FOR UPDATE`, read `data`, `hidden`, pinned set
-- [ ] backfill: for a row with empty `hidden` and an object `raw_output` + transcript, rebuild all predictions (`requestFormat.Apply`, `detector.Resolve`, inward rounding), add those not in `data` with the rules' reason; then fall through to the regate pass
-- [ ] regate pass: `review` entries untouched; `confidence` ↔ `data` only for unpinned entries; `short` ↔ `data` for all; entries entering `data` get `WithVoteRatings`; sort; write only on change; per-row log and summary; exit 1 when a row failed
-- [ ] `main.go`: `ai regate [--backfill]`; usage string
-- [ ] tests: `regate_test.go` with sqlmock (threshold drop serves a `short` entry with its vote rating; threshold rise hides a served one; a pinned low-confidence entry stays served; a `review` entry never moves; backfill fills only empty `hidden` and skips rows without `raw_output`); e2e: change the threshold via env for one `ai regate` run inside the container and assert the move both ways, `--backfill` on a row whose `hidden` was emptied by SQL
-- [ ] run the Go tests and `make test-e2e` — green before task 3
+- [x] `Regate(cfg, backfill bool)`: list AI rows; per row one transaction: `video_calculateds` lock (`lockVideoCalculated`), AI row `FOR UPDATE`, read `data`, `hidden`, pinned set
+- [x] backfill: for a row with empty `hidden` and an object `raw_output` + transcript, rebuild all predictions (`requestFormat.Apply`, `detector.Resolve`, inward rounding), add those not in `data` with the rules' reason; then fall through to the regate pass
+- [x] regate pass: `review` entries untouched; `confidence` ↔ `data` only for unpinned entries; `short` ↔ `data` for all; entries entering `data` get `WithVoteRatings`; sort; write only on change; per-row log and summary; exit 1 when a row failed
+- [x] `main.go`: `ai regate [--backfill]`; usage string
+- [x] tests: `regate_test.go` with sqlmock (threshold drop serves a `short` entry with its vote rating; threshold rise hides a served one; a pinned low-confidence entry stays served; a `review` entry never moves; backfill fills only empty `hidden` and skips rows without `raw_output`); e2e: change the threshold via env for one `ai regate` run inside the container and assert the move both ways, `--backfill` on a row whose `hidden` was emptied by SQL
+- [x] run the Go tests and `make test-e2e` — green before task 3
 
 ### Task 3: `applyVerdict` over both arrays; short bounds accepted server-side
 

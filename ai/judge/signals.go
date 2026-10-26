@@ -259,7 +259,30 @@ func storedRecut(stored []byte) int {
 // else its own; a later verdict without bounds leaves the entry where it was moved
 // (prv/repository/ai.js allKept matches the items the same way).
 func entryKeeps(db *sql.DB, v Video) (map[entryKey]time.Time, error) {
-	rows, err := db.Query(`SELECT e.start, e."end", k.decided_at FROM `+entryBounds+`
+	return keepVerdicts(db, v.VideoID, v.Data, v.JudgedAt.Time)
+}
+
+// EntryKeepsAll is the bounds of the entries (JSON of the row's entries) whose latest ai-item
+// verdict keeps them, whenever decided: the entries ai regate pins in the truth layer.
+func EntryKeepsAll(q querier, videoID int, entries []byte) (map[[2]int]bool, error) {
+	keeps, err := keepVerdicts(q, videoID, entries, time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	out := map[[2]int]bool{}
+	for k := range keeps {
+		out[[2]int{k.start, k.end}] = true
+	}
+	return out, nil
+}
+
+// querier is *sql.DB or *sql.Tx.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func keepVerdicts(q querier, videoID int, entries []byte, after time.Time) (map[entryKey]time.Time, error) {
+	rows, err := q.Query(`SELECT e.start, e."end", k.decided_at FROM `+entryBounds+`
 		JOIN LATERAL (SELECT l.verdict, l.decided_at FROM prv_review_items i
 			JOIN LATERAL (SELECT r.id, r.verdict, r.decided_at FROM prv_review_verdicts r WHERE r.item_id = i.id
 				ORDER BY r.decided_at DESC, r.id DESC LIMIT 1) l ON TRUE
@@ -268,7 +291,7 @@ func entryKeeps(db *sql.DB, v Video) (map[entryKey]time.Time, error) {
 			WHERE i.kind = 'ai' AND i.video_id = $1 AND COALESCE(b.start, i.start) = e.start AND COALESCE(b."end", i."end") = e."end"
 			ORDER BY l.decided_at DESC, l.id DESC LIMIT 1) k ON TRUE
 		WHERE k.verdict IN ('sponsor', 'self_promotion') AND k.decided_at > $3`,
-		v.VideoID, v.Data, v.JudgedAt.Time)
+		videoID, entries, after)
 	if err != nil {
 		return nil, err
 	}
