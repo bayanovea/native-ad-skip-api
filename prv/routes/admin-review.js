@@ -98,7 +98,7 @@ function parseBodyBounds(raw, verdict) {
     }
     const bounds = { start: parsePlayerTime(raw.start), end: parsePlayerTime(raw.end), source: raw.source };
     const why = validateVerdictBounds(bounds);
-    if (why) throw new ReviewInputError(`bad bounds ${raw.start}-${raw.end}: ${why}`, `bounds_${why}`);
+    if (why && why !== 'short') throw new ReviewInputError(`bad bounds ${raw.start}-${raw.end}: ${why}`, `bounds_${why}`);
     return bounds;
 }
 

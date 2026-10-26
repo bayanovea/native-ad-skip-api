@@ -256,7 +256,7 @@ test('parsePlayerTime: NaN on anything else', () => {
     for (const value of [null, undefined, {}, [], true]) assert.ok(Number.isNaN(parsePlayerTime(value)));
 });
 
-test('validateVerdictBounds: whole seconds, 0…86400, start before end, at least 5 s', () => {
+test('validateVerdictBounds: whole seconds, 0…86400, start before end; short (under the threshold, default 5 s) is its own code', () => {
     assert.equal(validateVerdictBounds({ start: 0, end: 5 }), null);
     assert.equal(validateVerdictBounds({ start: 86395, end: 86400 }), null);
     assert.equal(validateVerdictBounds({ start: 10.5, end: 40 }), 'format');
@@ -267,4 +267,7 @@ test('validateVerdictBounds: whole seconds, 0…86400, start before end, at leas
     assert.equal(validateVerdictBounds({ start: 40, end: 40 }), 'order');
     assert.equal(validateVerdictBounds({ start: 40, end: 10 }), 'order');
     assert.equal(validateVerdictBounds({ start: 10, end: 14 }), 'short');
+    assert.equal(validateVerdictBounds({ start: 10, end: 17 }, 8), 'short');
+    assert.equal(validateVerdictBounds({ start: 10, end: 18 }, 8), null);
+    assert.equal(validateVerdictBounds({ start: 10, end: 9 }, 8), 'order', 'errors before the warning');
 });

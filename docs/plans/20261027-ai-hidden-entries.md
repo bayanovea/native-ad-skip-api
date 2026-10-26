@@ -129,11 +129,11 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Modify: `prv/repository/ai.js`, `prv/repository/review.js` (`recordVerdict`: `short` is not an error), `prv/routes/admin-review.js` (`parseBodyBounds`), `lib/review-sheet.js` (doc comment: `short` is a warning code)
 - Modify: `test/e2e.js` (`review…` / `ai judge…` tests on verdicts), `test/review-sheet.test.js`
 
-- [ ] `applyVerdict`: locate the entry in `data` or `hidden` by `from`; drop → `hidden` with `reason: 'review'`; keep → category / bounds / `source`, then `data` or `hidden short` by `MIN_SEGMENT_SECONDS`; overlap check against `data` only; withdraw / restore rules as in Solution Overview; `changed` covers both arrays
-- [ ] server accepts short bounds (`parseBodyBounds`, `recordVerdict`): only `format` / `range` / `order` are errors
-- [ ] e2e: keep with 4-s bounds on a served entry → entry in `hidden short`, GET no longer serves it, `ai_applied: true`; a later keep with 10-s bounds → back in `data` with the votes' rating; `not_ad` → `hidden review`; keep on a `confidence` entry (an ai item created by SQL in the test, as task 5 will) → served; `unclear` on a hidden entry → `review`
-- [ ] unit: `review-sheet.test.js` keeps `short` as the returned code
-- [ ] run `make test-unit`, `make test-e2e` — green before task 4
+- [x] `applyVerdict`: locate the entry in `data` or `hidden` by `from`; drop → `hidden` with `reason: 'review'`; keep → category / bounds / `source`, then `data` or `hidden short` by `MIN_SEGMENT_SECONDS`; overlap check against `data` only; withdraw / restore rules as in Solution Overview; `changed` covers both arrays
+- [x] server accepts short bounds (`parseBodyBounds`, `recordVerdict`): only `format` / `range` / `order` are errors
+- [x] e2e: keep with 4-s bounds on a served entry → entry in `hidden short`, GET no longer serves it, `ai_applied: true`; a later keep with 10-s bounds → back in `data` with the votes' rating; `not_ad` → `hidden review`; keep on a `confidence` entry (an ai item created by SQL in the test, as task 5 will) → served; `unclear` on a hidden entry → `review`
+- [x] unit: `review-sheet.test.js` keeps `short` as the returned code (`validateVerdictBounds` takes an optional `minSeconds`, default 5, for task 4's `STATE`)
+- [x] run `make test-unit`, `make test-e2e` — green before task 4
 
 ### Task 4: review page: short bounds as a warning, threshold in `STATE`
 

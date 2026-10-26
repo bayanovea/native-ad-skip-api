@@ -1758,7 +1758,7 @@ async function decideAi(item, verdict, comment = null) {
 const servedBounds = async (nativeId) => (await getCalculatedOn(AI_PORT, nativeId, { v: '1', duration: 600 })).body
     .map(({ category_id, start, end }) => [category_id, start, end]);
 
-test('ai review: not_ad removes the entry, the last one withdraws the row (human path); a keep verdict sets the category or puts the entry back; sheet items untouched', async () => {
+test('ai review: not_ad hides the entry (review), the last served one withdraws the row (human path); a keep verdict sets the category or serves the entry again; sheet items untouched', async () => {
     await aiFirstServer();
     const vid = '-1_456000501';
     const batch = 'e2e-ai-apply';
@@ -1791,7 +1791,8 @@ test('ai review: not_ad removes the entry, the last one withdraws the row (human
     html = await itemHtml('A1');
     assert.ok(html.includes(RU.text('ai_badge')), 'the AI badge after the verdict');
     assert.ok(html.includes(`${RU.text('ai_judge_reason')}</span> e2e reason ${vid}`), 'the judge’s reason after the verdict');
-    assert.equal((await decideAi(a1, 'unclear')).ai_applied, false, 'the entry is already gone');
+    assert.deepEqual((await aiCalculated(vid)).hidden, [{ category_id: sp, start: 30, end: 70, confidence: 'high', source: 'ai', reason: 'review' }]);
+    assert.equal((await decideAi(a1, 'unclear')).ai_applied, false, 'the entry is already hidden by review');
 
     await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
         VALUES ('ai-apply-voter', $1, $2, 200, 230, 1, NOW(), NOW())`, [videoId, self]);
@@ -1810,8 +1811,9 @@ test('ai review: not_ad removes the entry, the last one withdraws the row (human
 
     assert.equal((await decideAi(a2, 'sponsor')).ai_applied, true);
     row = await aiCalculated(vid);
-    assert.deepEqual([row.withdrawn_at, row.withdrawn_by, row.data], [null, null, [{ category_id: sp, start: 200, end: 230, source: 'ai' }]],
-        'a changed mind puts the entry back and serves a row withdrawn by review again');
+    assert.deepEqual([row.withdrawn_at, row.withdrawn_by, row.data], [null, null, [{ category_id: sp, start: 200, end: 230, confidence: 'high', source: 'ai' }]],
+        'a changed mind serves the hidden entry again and a row withdrawn by review with it');
+    assert.equal(row.hidden.length, 1, 'only A1 stays hidden');
     assert.equal((await aiVideo(vid)).status, 'published');
     assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]]);
 });
@@ -1944,7 +1946,6 @@ test('ai review bounds: a keep with bounds replaces the entry (source review) an
         ['sponsor', { start: 20.5, end: 80, source: 'typed' }, 'error_bounds_format'],
         ['sponsor', { start: 20, end: '24:00:01', source: 'typed' }, 'error_bounds_range'],
         ['sponsor', { start: 80, end: 20, source: 'typed' }, 'error_bounds_order'],
-        ['sponsor', { start: 20, end: 24, source: 'typed' }, 'error_bounds_short'],
         ['sponsor', [20, 80], 'error_bounds_format'],
     ]) {
         res = await decideBounds(a1, verdict, bounds);
@@ -1973,6 +1974,58 @@ test('ai review bounds: a keep with bounds replaces the entry (source review) an
     // /admin/video marks the review-set entry.
     const admin = await request('GET', `/admin/video/${videoId}?verifyBearerToken=${MOD_AUTH}`, null);
     assert.equal((admin.body.match(/class="badge review-badge"/g) || []).length, 1, 'one entry has review bounds');
+});
+
+test('ai review hidden: short keep bounds hide the entry (short), longer ones serve it with the votes\' rating; a keep serves a confidence entry; not_ad / unclear hide with review; a keep never withdraws', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000516';
+    const batch = 'e2e-ai-hidden';
+    const sp = cats.prv.sponsor;
+    const self = cats.prv.self_promotion;
+    const { videoId, items: [a1, a2] } = await aiReviewSeed(vid, batch, [[30, 70], [200, 230]]);
+    const below = [[self, 300, 320, 'medium', 'self_promotion'], [sp, 400, 410, 'low', 'sponsor']];
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = $2 WHERE video_id = $1`, [videoId, JSON.stringify(below.map(
+        ([category_id, start, end, confidence]) => ({ category_id, start, end, confidence, source: 'ai', reason: 'confidence' })))]);
+    // Items on the hidden entries, as scripts/import-below-threshold.js will create them.
+    const items = [];
+    for (const [i, [, start, end, , proposed]] of below.entries()) {
+        items.push((await dbQuery(`INSERT INTO prv_review_items (sheet, batch, item_code, position, native_id, start, "end", proposed, link, kind, video_id)
+            VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, 'ai', $9) RETURNING id, item_code`,
+        [batch, `A${3 + i}`, 3 + i, vid, start, end, proposed, `https://example.invalid/video${vid}?t=${start - 2}s`, videoId]))[0]);
+    }
+    const [a3, a4] = items;
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt")
+        VALUES ('hidden-voter', $1, $2, 30, 40, 1, NOW(), NOW())`, [videoId, sp]);
+    await takeReview(batch);
+    const hidden = async () => (await aiCalculated(vid)).hidden.map(({ category_id, start, end, source, reason, rating }) =>
+        [category_id, start, end, source, reason, rating]);
+
+    let res = await decideBounds(a1, 'sponsor', { start: 30, end: 34, source: 'typed' });
+    assert.deepEqual([res.status, res.body.ai_applied, res.body.bounds], [201, true, { start: 30, end: 34, source: 'typed' }], JSON.stringify(res.body));
+    assert.deepEqual((await hidden())[0], [sp, 30, 34, 'review', 'short', undefined], 'saved at the short bounds, hidden');
+    assert.deepEqual(await servedBounds(vid), [[sp, 200, 230]], 'nothing short is served');
+
+    res = await decideBounds(a1, 'sponsor', { start: 30, end: 40, source: 'typed' });
+    assert.deepEqual([res.status, res.body.ai_applied], [201, true]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 30, 40, 'review', 1], [sp, 200, 230, 'ai', undefined]], 'served again with the votes on its bounds');
+    assert.deepEqual(await hidden(), [[self, 300, 320, 'ai', 'confidence', undefined], [sp, 400, 410, 'ai', 'confidence', undefined]]);
+
+    assert.equal((await decideAi(a3, 'self_promotion')).ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 40], [sp, 200, 230], [self, 300, 320]], 'a keep verdict serves a confidence entry');
+    assert.equal((await aiData(videoId))[2].confidence, 'medium', 'its confidence kept');
+    assert.equal((await decideAi(a4, 'unclear')).ai_applied, true);
+    assert.deepEqual(await hidden(), [[sp, 400, 410, 'ai', 'review', undefined]], 'unclear on a hidden entry: hidden by review');
+    assert.equal((await decideAi(a2, 'not_ad')).ai_applied, true);
+    assert.deepEqual((await hidden())[0], [sp, 200, 230, 'ai', 'review', undefined]);
+
+    // The last served entries go: not_ad would withdraw, a keep with short bounds hides it and leaves the row published.
+    assert.equal((await decideAi(a1, 'not_ad')).ai_applied, true);
+    res = await decideBounds(a3, 'self_promotion', { start: 300, end: 303, source: 'cue' });
+    assert.deepEqual([res.status, res.body.ai_applied], [201, true]);
+    const row = await aiCalculated(vid);
+    assert.deepEqual([row.data, row.withdrawn_at], [[], null]);
+    assert.equal((await aiVideo(vid)).status, 'published');
+    assert.equal((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).status, 204, 'nothing served, no human path either');
 });
 
 test('ai review bounds: a sheet item stores them and applies nothing; a judge-withdrawn row with a moved entry is restored through its new bounds; an admin-withdrawn one stays withdrawn', async () => {

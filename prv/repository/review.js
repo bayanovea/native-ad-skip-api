@@ -642,7 +642,7 @@ module.exports = function createReviewRepository(models, sequelize) {
                     throw new ReviewInputError(`bounds source must be one of ${BOUNDS_SOURCES.join(', ')}`, 'bounds_source');
                 }
                 const why = validateVerdictBounds(bounds);
-                if (why) throw new ReviewInputError(`bad bounds ${bounds.start}-${bounds.end}: ${why}`, `bounds_${why}`);
+                if (why && why !== 'short') throw new ReviewInputError(`bad bounds ${bounds.start}-${bounds.end}: ${why}`, `bounds_${why}`);
             }
             const item = await models.ReviewItem.findByPk(item_id, { attributes: ['id'], transaction });
             if (!item) throw new ReviewInputError(`unknown review item ${item_id}`);
