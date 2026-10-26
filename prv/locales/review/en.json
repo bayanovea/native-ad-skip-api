@@ -146,7 +146,7 @@
   "error_bounds_format": "Cannot read the time: use whole seconds, m:ss or h:mm:ss.",
   "error_bounds_range": "Times must be between 0 and 24 hours.",
   "error_bounds_order": "The start must come before the end.",
-  "error_bounds_short": "Shorter than 5 seconds: such a segment is never served.",
+  "warn_bounds_short": "Shorter than {seconds} s: it will be saved, but viewers will not get this segment while the {seconds}-second limit stands.",
   "error_bounds_overlap": "These times overlap another AI segment of this video. Decide that item first.",
   "item_corrected": "→ corrected: {start} – {end} ({name})",
   "transcript_title": "Subtitles around the item",
@@ -155,7 +155,7 @@
   "transcript_no_words": "This video has no per-word times: a selection takes the times of whole lines (about 2 s off). For more precision, type the time from the player.",
   "transcript_legend_html": "<span class=\"hl-item\">this</span> — what the detector found, <span class=\"hl-eff\">this</span> — the corrected times.",
   "bounds_label": "Start and end of the ad",
-  "bounds_hint": "Optional: only when the timing is visibly off and a viewer would notice. Select the text in the subtitles above or type the time from the player (m:ss).",
+  "bounds_hint": "Optional: only when the timing is visibly off and a viewer would notice. Select the text in the subtitles above or type the time from the player (m:ss). A segment shorter than {seconds} s is saved but not served.",
   "bounds_start": "Start",
   "bounds_end": "End",
   "bounds_clear": "Clear",
@@ -163,7 +163,7 @@
   "hotkey_bounds": "Go to the start time",
   "rules_bounds_html": "<strong>Times</strong> (optional): the lead-in (\"and now a word from our sponsor\") is part of the ad, the return to the topic is not, \"link in the description\" is part of the ad.",
   "onb_bounds_title": "Start and end times",
-  "onb_bounds_html": "<p>The detector often puts an ad's times slightly inside it: it starts a few seconds late and ends early. If you see that and a viewer would notice, correct the times. It is optional: most items leave the fields empty.</p><ul><li>Select a stretch of text in \"Subtitles around the item\" with the mouse: the start is the first selected word, the end the last one. Or type the time from the player: 1:05, 1:02:30 or plain seconds. Key <kbd>{bounds}</kbd> goes to the Start field.</li><li>Where the edge is: the lead-in (\"and now a word from our sponsor\") is part of the ad; the return to the topic is not; \"link in the description\" is part of the ad.</li><li>Times go only with a Sponsor or Self-promotion verdict.</li><li>Viewers get the corrected times right away.</li></ul>",
+  "onb_bounds_html": "<p>The detector often puts an ad's times slightly inside it: it starts a few seconds late and ends early. If you see that and a viewer would notice, correct the times. It is optional: most items leave the fields empty.</p><ul><li>Select a stretch of text in \"Subtitles around the item\" with the mouse: the start is the first selected word, the end the last one. Or type the time from the player: 1:05, 1:02:30 or plain seconds. Key <kbd>{bounds}</kbd> goes to the Start field.</li><li>Where the edge is: the lead-in (\"and now a word from our sponsor\") is part of the ad; the return to the topic is not; \"link in the description\" is part of the ad.</li><li>Times go only with a Sponsor or Self-promotion verdict.</li><li>Viewers get the corrected times right away. A segment shorter than {seconds} seconds is saved with your times but not served while this limit stands: still set the real times.</li></ul>",
   "js_bounds_both": "Fill in both start and end (or clear both).",
   "js_saved_bounds": ", times {start} – {end}"
 }

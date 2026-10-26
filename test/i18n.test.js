@@ -29,7 +29,9 @@ test('every batch state and conflict reason has its strings', () => {
         ...['mine', 'available', 'locked', 'done', 'closed'].flatMap(s => [`state_${s}`, `lock_${s}`]),
         ...['available', 'locked', 'done', 'closed'].map(r => `conflict_${r}`),
         // ReviewInputError codes of the bounds checks (prv/repository/review.js, prv/repository/ai.js).
-        ...['not_keep', 'source', 'format', 'range', 'order', 'short', 'overlap'].map(c => `error_bounds_${c}`),
+        ...['not_keep', 'source', 'format', 'range', 'order', 'overlap'].map(c => `error_bounds_${c}`),
+        // Short bounds are saved; the page only warns.
+        'warn_bounds_short',
     ];
     for (const lang of LANGS) {
         for (const key of keys) assert.equal(typeof LOCALES[lang][key], 'string', `${lang}.${key}`);

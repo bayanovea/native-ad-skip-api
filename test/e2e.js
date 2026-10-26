@@ -5758,6 +5758,7 @@ function loadKeyboardPage(html, storages, { opener: openerKind = 'player' } = {}
     if (html.includes('id="player-link"')) els['player-link'] = field('A', 'player-link');
     if (html.includes('id="lock-status"')) els['lock-status'] = field('SPAN', 'lock-status');
     if (html.includes('id="auto-advance"')) els['auto-advance'] = Object.assign(field('INPUT', 'auto-advance'), { checked: true });
+    if (html.includes('id="bounds-warn"')) els['bounds-warn'] = field('DIV', 'bounds-warn');
     const buttons = [...html.matchAll(/<button\b[^>]*\bdata-verdict="([^"]+)"[^>]*>/g)].map(m => {
         const classAttr = (m[0].match(/\bclass="([^"]*)"/) || [, ''])[1];
         const classes = new Set(classAttr.split(/\s+/).filter(Boolean));
@@ -5866,13 +5867,14 @@ async function seedKeyboardBatch(batch, count, { holder = REVIEWER } = {}) {
     if (holder) await takeReview(batch, holder);
 }
 
-test('review page: bounds from the keyboard: t focuses the start, typed m:ss saves with the verdict, the same bounds again is no change, a non-keep verdict clears them, half-filled or short bounds are refused', async () => {
+test('review page: bounds from the keyboard: t focuses the start, typed m:ss saves with the verdict, the same bounds again is no change, a non-keep verdict clears them, half-filled bounds are refused, short ones save with a warning', async () => {
     const batch = 'e2e-review-bounds-kbd';
     await seedKeyboardBatch(batch, 2);
     const storages = { local: memoryStorage(), session: memoryStorage() };
     const itemPath = (code) => `/admin/review/${batch}?item=${code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`;
     let { page, html } = await openKeyboardPage(itemPath('C1'), storages);
-    assert.ok(html.includes(RU('bounds_hint')) && html.includes(RU('rules_bounds_html')), 'hint and boundary rule');
+    assert.ok(html.includes(RU('bounds_hint', { seconds: 5 })) && html.includes(RU('rules_bounds_html')), 'hint and boundary rule');
+    assert.equal(page.state().min_segment_seconds, 5);
     assert.match(html, /<kbd>t<\/kbd>/, 'the t hotkey in the hotkeys line');
 
     page.key('1');
@@ -5893,11 +5895,18 @@ test('review page: bounds from the keyboard: t focuses the start, typed m:ss sav
     page.key('Enter');
     assert.deepEqual([page.els.status.textContent, page.els.status.className], [RU.text('js_bounds_both'), 'status error']);
     page.els['bound-end'].value = '0:32';
-    page.key('Enter');
-    assert.equal(page.els.status.textContent, RU.text('error_bounds_short'));
+    page.els['bound-end'].listeners.input.forEach(fn => fn());
+    const shortWarning = RU.text('warn_bounds_short', { seconds: 5 });
+    assert.equal(page.els['bounds-warn'].textContent, shortWarning, 'warned while typing');
+    await saveAndFollow(page);
+    ({ page } = await openKeyboardPage(itemPath('C2'), storages));
+    assert.equal(page.els.status.textContent, `${savedFlash('C2', 'sponsor', { bounds: ['0:30', '0:32'] })}. ${shortWarning}`, 'saved, with the warning');
+    assert.equal(page.els['bounds-warn'].textContent, shortWarning, 'the own short bounds warn on load');
+    const json = (await request('GET', `${itemPath('C2')}&format=json`, null)).body;
+    assert.deepEqual([json.item.own_bounds, json.min_segment_seconds], [{ start: 30, end: 32, source: 'typed' }, 5]);
     page.key('3');
-    assert.deepEqual([page.els['bound-start'].value, page.els['bound-end'].value, page.els['bound-start'].disabled], ['', '', true],
-        'not an ad: no bounds');
+    assert.deepEqual([page.els['bound-start'].value, page.els['bound-end'].value, page.els['bound-start'].disabled, page.els['bounds-warn'].textContent],
+        ['', '', true, ''], 'not an ad: no bounds, no warning');
 
     ({ page, html } = await openKeyboardPage(itemPath('C1'), storages));
     assert.deepEqual([page.els['bound-start'].value, page.els['bound-end'].value], ['0:08', '0:20'], 'pre-filled from the own verdict');
@@ -6695,7 +6704,7 @@ test('review page: onboarding block, closed by default, on the batch list and th
             assert.ok(body.includes(`<td><kbd>5</kbd></td><td>${t('hotkey_track')}</td>`));
             assert.ok(body.includes(`<td><kbd>o</kbd></td><td>${t('hotkey_player')}</td>`));
             assert.ok(body.includes(`<td><kbd>t</kbd></td><td>${t('hotkey_bounds')}</td>`));
-            assert.ok(body.includes(t('onb_bounds_html', { bounds: 't' })));
+            assert.ok(body.includes(t('onb_bounds_html', { bounds: 't', seconds: 5 })));
             assert.ok(body.includes(t('onb_player_html', { player: 'o', next: 'j', prev: 'k' })));
         }
     }

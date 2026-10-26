@@ -141,11 +141,11 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Modify: `prv/routes/admin-review.js` (`readBounds()`, the save flow, `STATE.minSegmentSeconds`, hint under the inputs), `prv/locales/review/ru.json`, `prv/locales/review/en.json` (`error_bounds_short` → `warn_bounds_short` with `{seconds}`; `bounds_hint` mentions the rule), `test/i18n.test.js` if keys are listed there
 - Modify: `test/e2e.js` (`format=json` exposes `min_segment_seconds`)
 
-- [ ] `readBounds()` returns `{bounds, warning}` for `short`; the warning shows live under the inputs and in the save flash; the save goes through
-- [ ] onboarding / rules card: one line on short segments (saved, not served while the threshold stands)
-- [ ] both locales, parity test green
-- [ ] e2e: decide with short bounds via the page's JSON path returns 201 and the item page JSON shows the bounds and `min_segment_seconds`
-- [ ] run `make test-unit`, `make test-e2e` — green before task 5
+- [x] `readBounds()` returns `{bounds, warning}` for `short`; the warning shows live under the inputs and in the save flash; the save goes through
+- [x] onboarding / rules card: one line on short segments (saved, not served while the threshold stands) — in `onb_bounds_html` and `bounds_hint`; the rules card is about the boundary itself and stays
+- [x] both locales, parity test green
+- [x] e2e: decide with short bounds via the page's JSON path returns 201 and the item page JSON shows the bounds and `min_segment_seconds`
+- [x] run `make test-unit`, `make test-e2e` — green before task 5
 
 ### Task 5: below-threshold items become ai items; adopt the 2026-10-24 sheet
 

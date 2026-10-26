@@ -7,6 +7,7 @@ const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, KEEP_VERDICTS, ma
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
 const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
+const { MIN_SEGMENT_SECONDS } = require('../../lib/ai-rules');
 
 // Assessor review page (prv only). Sibling of admin-moderation.js: same
 // `?verifyBearerToken=` query auth, server-rendered HTML + AJAX decide,
@@ -338,7 +339,7 @@ function renderOnboarding(t) {
         </table>`;
     const sections = ONBOARDING_SECTIONS.map(s => `
         <h3>${t(`onb_${s}_title`)}</h3>
-        ${t(`onb_${s}_html`, HOTKEY_PARAMS)}${s === 'hotkeys' ? table : ''}`).join('');
+        ${t(`onb_${s}_html`, { ...HOTKEY_PARAMS, seconds: MIN_SEGMENT_SECONDS })}${s === 'hotkeys' ? table : ''}`).join('');
     return `
     <details class="card onboarding">
         <summary>${t('onb_summary')}</summary>${sections}
@@ -599,13 +600,14 @@ function renderItemPage(payload, token, t, langLink) {
         can_decide,
         locked_by: batch.locked_by,
         track_mismatch: trackOn,
+        min_segment_seconds: MIN_SEGMENT_SECONDS,
         choices: CHOICES,
         track_key: TRACK_KEY,
         letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
-            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds',
-            ...['format', 'range', 'order', 'short'].map(why => `error_bounds_${why}`)]
+            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds', 'warn_bounds_short',
+            ...['format', 'range', 'order'].map(why => `error_bounds_${why}`)]
             .map(key => [key, t.text(key)])),
     };
 
@@ -649,7 +651,7 @@ function renderItemPage(payload, token, t, langLink) {
         <div class="verdicts">${verdictButtons}
         </div>
         <label for="bound-start">${t('bounds_label')}</label>
-        <div class="muted flags-hint">${t('bounds_hint')}</div>
+        <div class="muted flags-hint">${t('bounds_hint', { seconds: MIN_SEGMENT_SECONDS })}</div>
         <div class="bounds-row">
             <span class="muted">${t('bounds_start')}</span>
             <input type="text" id="bound-start" inputmode="numeric" placeholder="m:ss" value="${ownBounds ? formatPlayerTime(ownBounds.start) : ''}"${boundsOff}>
@@ -658,6 +660,7 @@ function renderItemPage(payload, token, t, langLink) {
             <button type="button" class="clear-btn" id="bounds-clear" onclick="clearBounds()"${boundsOff}>${t('bounds_clear')}</button>
             <span class="muted">${t('bounds_keep_only')}</span>
         </div>
+        <div class="warn" id="bounds-warn"></div>
         <label title="${t('flags_hint')}">${t('flags_label')}</label>
         <div class="muted flags-hint">${t('flags_hint')}</div>
         <div class="flag-row">
@@ -807,15 +810,21 @@ function renderItemPage(payload, token, t, langLink) {
     function clearBounds() {
         boundInputs().forEach(function (el) { el.value = ''; });
         boundsSource = 'typed';
+        showBoundsWarning();
     }
-    // The inputs as {start, end} seconds, null when both are empty, or an error text.
+    // The inputs as {start, end} seconds (with a warning when short: saved, not served),
+    // null when both are empty, or an error text.
     function readBounds() {
         const raw = boundInputs().map(function (el) { return el.value.trim(); });
         if (raw[0] === '' && raw[1] === '') return { bounds: null };
         if (raw[0] === '' || raw[1] === '') return { error: tr('js_bounds_both') };
         const b = { start: parsePlayerTime(raw[0]), end: parsePlayerTime(raw[1]) };
-        const why = validateVerdictBounds(b);
+        const why = validateVerdictBounds(b, STATE.min_segment_seconds);
+        if (why === 'short') return { bounds: b, warning: tr('warn_bounds_short', { seconds: STATE.min_segment_seconds }) };
         return why ? { error: tr('error_bounds_' + why) } : { bounds: b };
+    }
+    function showBoundsWarning() {
+        document.getElementById('bounds-warn').textContent = readBounds().warning || '';
     }
     // A selection over the transcript fills the inputs: the start of the first
     // selected word (or line without word times), the end of the last one,
@@ -831,11 +840,12 @@ function renderItemPage(payload, token, t, langLink) {
         inputs[0].value = formatPlayerTime(Math.floor(Number(leaves[0].dataset.t)));
         inputs[1].value = formatPlayerTime(Math.ceil(Number(leaves[leaves.length - 1].dataset.e)));
         boundsSource = 'cue';
+        showBoundsWarning();
         setStatus('');
     }
     document.addEventListener('selectionchange', boundsFromSelection);
     boundInputs().forEach(function (el) {
-        el.addEventListener('input', function () { boundsSource = 'typed'; setStatus(''); });
+        el.addEventListener('input', function () { boundsSource = 'typed'; showBoundsWarning(); setStatus(''); });
     });
     function toggleTrack() {
         if (readOnly()) return;
@@ -888,6 +898,7 @@ function renderItemPage(payload, token, t, langLink) {
                     flagged: flagged,
                 });
                 // Staying on the item keeps its player tab: the reviewer may still be watching.
+                if (read.warning) flash += '. ' + read.warning;
                 const advance = autoAdvance();
                 if (advance && closePlayerTab() === false) flash += '. ' + tr('js_close_by_hand');
                 storageSet('sessionStorage', FLASH_KEY, flash);
@@ -948,6 +959,7 @@ function renderItemPage(payload, token, t, langLink) {
     });
     (function init() {
         document.getElementById('auto-advance').checked = autoAdvance();
+        showBoundsWarning();
         // The flagged stretch in view inside the scrolling transcript.
         const box = document.getElementById('transcript');
         const mark = box && box.querySelector('.hl-item, .hl-eff');
@@ -1181,6 +1193,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             signals,
             transcript,
             context,
+            min_segment_seconds: MIN_SEGMENT_SECONDS,
         };
 
         if (req.query.format === 'json') {
