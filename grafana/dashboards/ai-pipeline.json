@@ -592,7 +592,7 @@
       "gridPos": {
         "x": 0,
         "y": 5,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "fieldConfig": {
@@ -653,9 +653,9 @@
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
       },
       "gridPos": {
-        "x": 4,
+        "x": 3,
         "y": 5,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "fieldConfig": {
@@ -716,7 +716,7 @@
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
       },
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 5,
         "w": 4,
         "h": 4
@@ -779,7 +779,7 @@
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
       },
       "gridPos": {
-        "x": 12,
+        "x": 10,
         "y": 5,
         "w": 4,
         "h": 4
@@ -833,6 +833,69 @@
       ]
     },
     {
+      "id": 62,
+      "type": "stat",
+      "title": "Скрытых сегментов: почему",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE e ->> 'reason' = 'confidence') AS \"ниже порога\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'short') AS \"короткие\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'review') AS \"сняты асессором\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты модели в hidden неотозванных строк, зрителям не отдаются: уверенность ниже порога (до вердикта асессора), короче AI_MIN_SEGMENT_SECONDS, асессор сказал not_ad / unclear. Порог меняется переменной и ai regate."
+    },
+    {
       "id": 12,
       "type": "stat",
       "title": "Открытых вопросов у асессоров",
@@ -841,9 +904,9 @@
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
       },
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 5,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "fieldConfig": {
@@ -908,9 +971,9 @@
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
       },
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 5,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "fieldConfig": {
@@ -1035,7 +1098,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH v AS (\n  SELECT a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Модель ответила, отдавать нечего (ничего не нашла / не прошло порог)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
+          "rawSql": "WITH v AS (\n  SELECT a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
           "refId": "A"
         }
       ],
@@ -2585,7 +2648,7 @@
     {
       "id": 41,
       "type": "bargauge",
-      "title": "Результат первой разметки (по видео)",
+      "title": "Результат разметки сейчас (по видео)",
       "datasource": {
         "type": "postgres",
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
@@ -2642,11 +2705,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH r AS (\n  SELECT jsonb_array_length(c.data) AS published,\n         CASE WHEN jsonb_typeof(run.raw_output) = 'object' THEN jsonb_array_length(COALESCE(run.raw_output -> 'segments', '[]'::jsonb)) ELSE 0 END AS predicted\n  FROM prv_ai_video_calculateds c JOIN prv_ai_runs run ON run.id = c.run_id)\nSELECT k.name AS \"исход\", COUNT(r.*) AS \"видео\" FROM (VALUES\n  (1, '1. есть сегменты для отдачи'),\n  (2, '2. модель нашла, но ничего не прошло порог (sponsor ≥ medium, self_promotion = high, ≥ 5 с)'),\n  (3, '3. модель ничего не нашла')) AS k(ord, name)\nLEFT JOIN r ON k.ord = CASE WHEN r.published > 0 THEN 1 WHEN r.predicted > 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
+          "rawSql": "WITH r AS (SELECT jsonb_array_length(data) AS served, jsonb_array_length(hidden) AS hidden FROM prv_ai_video_calculateds)\nSELECT k.name AS \"исход\", COUNT(r.*) AS \"видео\" FROM (VALUES\n  (1, '1. есть сегменты для отдачи'),\n  (2, '2. модель нашла, но всё скрыто (ниже порога уверенности, короче порога длины, снято асессором)'),\n  (3, '3. модель ничего не нашла')) AS k(ord, name)\nLEFT JOIN r ON k.ord = CASE WHEN r.served > 0 THEN 1 WHEN r.hidden > 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
           "refId": "A"
         }
       ],
-      "description": "Что получилось сразу после ответа модели, до судьи и асессоров. Исход 2 — «по первой разметке отдать не можем»: уверенность ниже порога или сегмент короче 5 с."
+      "description": "Что сейчас в строках prv_ai_video_calculateds: data — что отдаём, hidden — остальные сегменты модели с причиной. Исход 2 — модель нашла, но отдать нечего: уверенность ниже порога, сегмент короче AI_MIN_SEGMENT_SECONDS или асессор сказал «не реклама»."
     },
     {
       "id": 42,
@@ -4089,10 +4152,10 @@
           "format": "table",
           "rawQuery": true,
           "refId": "A",
-          "rawSql": "SELECT c.native_id, c.video_id, c.published_at AS \"ответ модели\",\n       CASE WHEN jsonb_typeof(r.raw_output) = 'object' THEN jsonb_array_length(COALESCE(r.raw_output -> 'segments', '[]'::jsonb)) ELSE 0 END AS \"модель предлагала (ниже порога)\",\n       h.n AS \"разметок sponsor / self_promo\", h.last AS \"последняя разметка\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.native_id = c.native_id AND i.kind = 'sheet' AND i.flagged_by::text LIKE '%below the publish threshold%') AS \"у асессоров\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nJOIN LATERAL (SELECT COUNT(*) AS n, MAX(m.\"createdAt\") AS last FROM markups m JOIN videos v ON v.id = m.video_id JOIN markup_categories mc ON mc.id = m.category_id\n    WHERE v.native_id = c.native_id AND m.deleted_at IS NULL AND mc.category IN ('sponsor', 'self_promotion')) h ON TRUE\nWHERE jsonb_array_length(c.data) = 0 AND c.withdrawn_at IS NULL AND h.n > 0\nORDER BY h.last DESC LIMIT 50"
+          "rawSql": "SELECT c.native_id, c.video_id, c.published_at AS \"ответ модели\",\n       jsonb_array_length(c.hidden) AS \"скрыто сегментов модели\",\n       h.n AS \"разметок sponsor / self_promo\", h.last AS \"последняя разметка\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.native_id = c.native_id\n          AND (i.flagged_by::text LIKE '%hidden: %' OR i.flagged_by::text LIKE '%below the publish threshold%')) AS \"у асессоров\"\nFROM prv_ai_video_calculateds c\nJOIN LATERAL (SELECT COUNT(*) AS n, MAX(m.\"createdAt\") AS last FROM markups m JOIN videos v ON v.id = m.video_id JOIN markup_categories mc ON mc.id = m.category_id\n    WHERE v.native_id = c.native_id AND m.deleted_at IS NULL AND mc.category IN ('sponsor', 'self_promotion')) h ON TRUE\nWHERE jsonb_array_length(c.data) = 0 AND c.withdrawn_at IS NULL AND h.n > 0\nORDER BY h.last DESC LIMIT 50"
         }
       ],
-      "description": "Те же видео: когда ответила модель, сколько сегментов она предлагала (все ниже порога), сколько пользовательских sponsor / self_promotion разметок и когда последняя, сколько отрезков этого видео уже в батчах «ниже порога»."
+      "description": "Те же видео: когда ответила модель, сколько её сегментов скрыто (hidden: ниже порога, короткие, сняты асессором), сколько пользовательских sponsor / self_promotion разметок и когда последняя, сколько отрезков этого видео уже у асессоров как «ниже порога»."
     }
   ]
 }

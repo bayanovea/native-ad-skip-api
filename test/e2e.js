@@ -1566,6 +1566,17 @@ test('ai-first: the admin withdraw link unpublishes the AI row and the human pat
     assert.match(html, /Served: <strong id="ai-served">yes<\/strong>/);
     assert.match(html, /withdrawAi\(this\)/);
     assert.match(html, /data-start="30" data-end="70"/);
+    assert.doesNotMatch(html, /class="ai-hidden"/);
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = $2 WHERE video_id = $1`, [videoId, JSON.stringify([
+        { category_id: cats.prv.self_promotion, start: 300, end: 320, confidence: 'medium', source: 'ai', reason: 'confidence' },
+        { category_id: cats.prv.sponsor, start: 480, end: 483, confidence: 'high', source: 'review', reason: 'short' }])]);
+    html = await page();
+    assert.equal((html.match(/class="ai-entry"/g) || []).length, 1);
+    assert.equal((html.match(/class="ai-hidden"/g) || []).length, 2, 'hidden entries in their own table under the served one');
+    assert.match(html, /<th>Hidden<\/th>/);
+    assert.match(html, /data-start="300" data-end="320"><\/span><\/td>\s*<td class="muted">medium<\/td>\s*<td class="muted">confidence<\/td>/);
+    assert.match(html, /data-start="480" data-end="483"><\/span> <span class="badge review-badge"[^]*?<td class="muted">high<\/td>\s*<td class="muted">short<\/td>/);
+    assert.match(html, /withdrawAi\(this\)/, 'the withdraw link stays');
     assert.doesNotMatch(await (await requestOn(AI_PORT, 'GET', `/admin/video/${await prvVideoId('__e2e__prv_basic')}?verifyBearerToken=${VOTE_AUTH}`)).body,
         /<h2>AI<\/h2>/, 'no AI block for a video the detector never saw');
 

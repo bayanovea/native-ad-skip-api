@@ -166,9 +166,9 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Modify: `grafana/dashboards/ai-pipeline.json` (panels ~2645, ~4092 read `hidden`; new stat "скрытых сегментов" by reason next to "segments ready"; funnel row 9 wording "ответ без отдаваемых сегментов"), `prv/routes/admin.js` (`aiBlock`: hidden entries greyed with reason), `prometheus-wrapper.js` (optional `ai_hidden_segments{reason}` gauge; skip if the Postgres panel is enough)
 - Modify: `test/e2e.js` (admin page shows the hidden table), `test/prometheus-wrapper.test.js` if a gauge is added
 
-- [ ] dashboard SQL run against a seeded copy of the schema (as every panel was)
-- [ ] admin page: hidden table under the served one, withdraw link unchanged
-- [ ] tests green
+- [x] dashboard SQL run against a seeded copy of the schema (as every panel was): all 45 Postgres targets on a throwaway Postgres 16 after `scripts/sync-db.js` + seeded rows; panel 41 renamed "Результат разметки сейчас" (it reads the current `data` / `hidden`, not the first answer); no `ai_hidden_segments` gauge (the Postgres stat is enough)
+- [x] admin page: hidden table under the served one, withdraw link unchanged
+- [x] tests green
 
 ### Task 7: Verify acceptance criteria
 

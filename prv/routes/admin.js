@@ -12,7 +12,7 @@ function scriptString(value) {
     return JSON.stringify(String(value)).replace(/</g, '\\u003c');
 }
 
-// The video's AI detection state and published entries, or '' when the
+// The video's AI detection state, served and hidden entries, or '' when the
 // detector never saw it.
 async function aiBlock(models, video, token) {
     const [aiVideo, aiRow, served, categories, judgements] = await Promise.all([
@@ -36,17 +36,19 @@ async function aiBlock(models, video, token) {
         const state = aiRow.withdrawn_at
             ? `withdrawn ${escapeHtml(formatDate(aiRow.withdrawn_at))} by ${escapeHtml(aiRow.withdrawn_by)}${aiRow.withdrawn_reason ? `: ${escapeHtml(aiRow.withdrawn_reason)}` : ''}`
             : `published ${escapeHtml(formatDate(aiRow.published_at))}`;
-        const entries = (aiRow.data || []).map(e => {
+        const rows = (list, cls) => list.map(e => {
             const name = categoryName[e.category_id] || e.category_id;
             return `
-            <tr>
+            <tr class="${cls}">
                 <td><span class="badge" style="background:${CATEGORY_COLORS[name] || '#64748b'}">${escapeHtml(name)}</span></td>
                 <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span>${e.source === 'review'
         ? ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>' : ''}</td>
                 <td class="muted">${escapeHtml(e.confidence)}</td>
-                <td class="muted">${escapeHtml(e.rating ?? 0)}</td>
+                <td class="muted">${escapeHtml(cls === 'ai-hidden' ? e.reason : e.rating ?? 0)}</td>
             </tr>`;
         }).join('');
+        const entries = rows(aiRow.data || [], 'ai-entry');
+        const hidden = rows(aiRow.hidden || [], 'ai-hidden');
         row = `
     <div class="meta">
         <span>Run: ${escapeHtml(aiRow.run_id)}</span>
@@ -58,7 +60,11 @@ async function aiBlock(models, video, token) {
     <table class="ai-table">
         <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th></tr></thead>
         <tbody>${entries}</tbody>
-    </table>` : '<div class="no-calc">Nothing passed the thresholds.</div>'}`;
+    </table>` : '<div class="no-calc">No entry to serve.</div>'}${hidden ? `
+    <table class="ai-table">
+        <thead><tr><th>Hidden</th><th>Interval</th><th>Confidence</th><th>Reason</th></tr></thead>
+        <tbody>${hidden}</tbody>
+    </table>` : ''}`;
     }
     if (judgements.length) {
         row += `
@@ -221,6 +227,7 @@ module.exports = function createAdminRoutes(models, { markupRepository, aiReposi
         code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.78rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #93c5fd; }
         .empty { text-align: center; padding: 48px; color: #475569; }
         .ai-table { margin-bottom: 28px; }
+        .ai-hidden td { opacity: 0.5; }
         .no-calc { background: #1e293b; border-radius: 10px; padding: 20px; color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
         a { color: #93c5fd; text-decoration: none; }
         a:hover { text-decoration: underline; }
