@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-10-24 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-10-26 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -71,7 +71,7 @@
     <div class="card"><h3>For the frontend</h3>
       <ul>
         <li>The API and the response format do not change.</li>
-        <li>Start sending <code>views</code> (the video's view count) with the segments request: the AI then picks truly popular videos instead of counting requests.</li>
+        <li>Send <code>views_text</code> with the segments request: the view counter as the page shows it (“39.4K views”); the backend reads the number out of it. The AI then picks truly popular videos instead of counting requests.</li>
       </ul>
     </div>
     <div class="card"><h3>For the assessor</h3>

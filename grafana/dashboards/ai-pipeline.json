@@ -1249,7 +1249,7 @@
           "refId": "A"
         }
       ],
-      "description": "Расширение прислало views (или yt-dlp вернул view_count) ниже порога. Пока клиенты views не шлют, а prv view_count не отдаёт, тут ожидаемо 0."
+      "description": "Число просмотров из views_text расширения (или view_count от yt-dlp) ниже порога. Пока релиз расширения с views_text не вышел, а prv view_count не отдаёт, тут ожидаемо 0."
     },
     {
       "id": 20,

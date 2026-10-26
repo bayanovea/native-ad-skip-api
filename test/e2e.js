@@ -916,40 +916,57 @@ async function waitAiVideo(nativeId, requests) {
     }
 }
 
-test('ai: GET /video-calculated with views upserts prv_ai_videos, keeps the max and counts requests', async () => {
+test('ai: GET /video-calculated with views_text upserts prv_ai_videos, keeps the max count and the latest text, counts requests', async () => {
     const vid = '-1_456000101';
-    assert.equal((await getCalculated('', vid, { v: '1', views: 500 })).status, 204);
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: '500 просмотров' })).status, 204);
     let row = await waitAiVideo(vid, 1);
     assert.ok(row, 'the first request creates the row');
-    assert.deepEqual([row.views_max, row.requests, row.status, row.attempts], [500, 1, 'seen', 0]);
+    assert.deepEqual([row.views_max, row.views_text, row.requests, row.status, row.attempts], [500, '500 просмотров', 1, 'seen', 0]);
 
-    assert.equal((await getCalculated('', vid, { v: '1', views: 200 })).status, 204);
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: '200 views' })).status, 204);
     row = await waitAiVideo(vid, 2);
-    assert.deepEqual([row.views_max, row.requests], [500, 2], 'a smaller views keeps the max');
+    assert.deepEqual([row.views_max, row.views_text, row.requests], [500, '200 views', 2], 'a smaller count keeps the max, the text is the latest');
+
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: 'Загружается...' })).status, 204, 'an unreadable counter is no error');
+    row = await waitAiVideo(vid, 3);
+    assert.deepEqual([row.views_max, row.views_text], [500, 'Загружается...'], 'the unreadable text is kept for a look, the count stays');
 
     assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
-    row = await waitAiVideo(vid, 3);
-    assert.deepEqual([row.views_max, row.requests], [500, 3], 'a request without views keeps views_max');
+    row = await waitAiVideo(vid, 4);
+    assert.deepEqual([row.views_max, row.views_text, row.requests], [500, 'Загружается...', 4], 'a request without the counter keeps both');
     assert.ok(row.last_seen_at >= row.first_seen_at);
     assert.equal(await countVideos('', vid), 0, 'the read path still creates no Video row');
+
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: '39,4 тыс просмотров' })).status, 204);
+    row = await waitAiVideo(vid, 5);
+    assert.equal(row.views_max, 39400, 'an abbreviated counter reads as the count');
 });
 
-test('ai: a request without views leaves views_max NULL; the legacy branch and bad views write nothing', async () => {
+test('ai: an unreadable or missing views_text leaves views_max NULL; the legacy branch, the old views and a non-prv id write nothing', async () => {
     const vid = '-1_456000102';
     const legacy = '-1_456000103';
-    assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
-    const row = await waitAiVideo(vid, 1);
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: '1,2' })).status, 204);
+    let row = await waitAiVideo(vid, 1);
+    assert.deepEqual([row.views_max, row.views_text], [null, '1,2'], 'a doubtful reading sets no count (the requests fallback stays)');
+    assert.equal((await getCalculated('', vid, { v: '1', views: 123 })).status, 204, 'the removed numeric views is an ignored unknown param');
+    row = await waitAiVideo(vid, 2);
     assert.equal(row.views_max, null);
+    const long = 'x'.repeat(300);
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: long })).status, 204, 'a long string is cut, not refused');
+    row = await waitAiVideo(vid, 3);
+    assert.equal(row.views_text, long.slice(0, 128));
+    assert.equal((await getCalculated('', vid, { v: '1', views_text: '7' })).status, 204);
+    assert.equal((await request('GET', `/video-calculated?video_id=${vid}&v=1&views_text=1%20%D0%BC%D0%BB%D0%BD&views_text=2%20%D0%BC%D0%BB%D0%BD`, null)).status, 204,
+        'a repeated param is not a string: ignored');
+    row = await waitAiVideo(vid, 5);
+    assert.deepEqual([row.views_max, row.views_text], [7, '7']);
 
-    assert.equal((await getCalculated('', legacy, { views: 900 })).status, 204);
-    assert.equal((await getCalculated('', legacy, { v: '1', views: -1 })).status, 400);
-    assert.equal((await getCalculated('', legacy, { v: '1', views: 'many' })).status, 400);
-    assert.equal((await getCalculated('', legacy, { v: '1', views: 2147483648 })).status, 400, 'views is an INTEGER column');
+    assert.equal((await getCalculated('', legacy, { views_text: '900 просмотров' })).status, 204);
     const notPrv = '-1_456000104/../../x';
-    assert.equal((await getCalculated('', notPrv, { v: '1', views: 900 })).status, 204, 'served (nothing) as before');
+    assert.equal((await getCalculated('', notPrv, { v: '1', views_text: '900 просмотров' })).status, 204, 'served (nothing) as before');
     // A later request's row landing means the earlier ones had their chance to write.
     assert.equal((await getCalculated('', vid, { v: '1' })).status, 204);
-    await waitAiVideo(vid, 2);
+    await waitAiVideo(vid, 6);
     assert.equal(await waitAiVideo(legacy, 1), null);
     assert.equal(await waitAiVideo(notPrv, 1), null, 'not a prv video id: never queued');
 });
@@ -2026,7 +2043,7 @@ test('ai full path: views request → detect → served → vote → undo → ju
     const human = [[sp, 100, 120, undefined]];
     const served = async () => entryTuples((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).body);
 
-    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600, views: 50000 });
+    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600, views_text: '50 тыс просмотров' });
     assert.deepEqual(entryTuples(res.body), human, 'not detected yet: the human path');
     assert.deepEqual([(await waitAiVideo(vid, 1)).status, (await aiVideo(vid)).views_max], ['seen', 50000]);
 
@@ -2291,7 +2308,7 @@ test('ai defaults: with no AI_* env the app serves and votes as before the plan,
         const { requests } = await aiVideo(vid);
 
         const stored = (await dbQuery(`SELECT data FROM video_calculateds WHERE video_id = $1`, [videoId]))[0].data;
-        for (const query of [{ v: '1', duration: 600, views: 50000 }, { v: '1', duration: 600 }, { duration: 600 }]) {
+        for (const query of [{ v: '1', duration: 600, views_text: '50 тыс просмотров' }, { v: '1', duration: 600 }, { duration: 600 }]) {
             const res = await getCalculatedOn(port, vid, query);
             assert.deepEqual([res.status, res.body], [200, stored], `the stored human data for ${JSON.stringify(query)}`);
             assert.deepEqual((await getCalculatedOn(E2E_PORT, vid, query)).body, stored, 'the same as the default test app');

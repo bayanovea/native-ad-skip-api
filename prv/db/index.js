@@ -216,6 +216,7 @@ module.exports = function(sequelize) {
     const AiVideo = sequelize.define('ai_video', {
         native_id: { type: DataTypes.STRING, primaryKey: true },
         views_max: { type: DataTypes.INTEGER, allowNull: true },
+        views_text: { type: DataTypes.STRING(128), allowNull: true },
         requests: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         first_seen_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
         last_seen_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },

@@ -274,10 +274,10 @@ paths:
         - name: duration
           in: query
           schema: { type: integer }
-        - name: views
+        - name: views_text
           in: query
-          schema: { type: integer, minimum: 0, maximum: 2147483647 }
-          description: "View count the client read from the page. Optional; with `v` present each request is counted per `video_id` (max views kept) for the AI detection queue, after the response is sent. Ignored without `v`."
+          schema: { type: string, maxLength: 128 }
+          description: "The video's view counter as the prv page shows it (`39,4 тыс просмотров`, `1.7M views`); whitespace collapsed, anything after `·` dropped. Optional; never a 400 (longer strings are cut to 128). With `v` present each request is counted per `video_id` for the AI detection queue after the response is sent; the server reads the count out of it (max kept) and keeps the latest string. Ignored without `v`."
         - name: user_id
           in: query
           schema: { type: string }

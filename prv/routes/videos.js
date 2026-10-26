@@ -3,8 +3,12 @@ const { query } = require('express-validator');
 const prometheusWrapper = require('../../prometheus-wrapper');
 const { findVideoForReadWithOutcome } = require('../../lib/find-video-for-read');
 const { findAiCalculated, AI_LOOKUP_OUTCOMES } = require('../../lib/find-ai-calculated');
+const { parseViewsText } = require('../../lib/parse-views-text');
 const validateRequest = require('../../middleware/validate-request');
 const handler = require('../../middleware/handler');
+
+// The extension sends the counter cut to 64 characters; longer is someone else's, kept only this far.
+const VIEWS_TEXT_MAX = 128;
 
 module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository, aiRepository }) {
     const router = express.Router();
@@ -12,7 +16,6 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
     router.get('/video-calculated', [
         query('video_id').isString(),
         query('duration').optional().isInt().toInt(),
-        query('views').optional().isInt({ min: 0, max: 2147483647 }).toInt(),
         query('user_id').optional().isString(),
         query('prv_user_id').optional().isInt({ min: 1 }).toInt(),
         validateRequest,
@@ -37,8 +40,10 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
             return;
         }
 
+        // The page's view counter as text; never a 400, an unreadable one only keeps the raw string for a look.
+        const viewsText = typeof req.query.views_text === 'string' ? req.query.views_text.slice(0, VIEWS_TEXT_MAX) : null;
         res.once('finish', () => {
-            aiRepository.seen(nativeFullVideoId, req.query.views)
+            aiRepository.seen(nativeFullVideoId, { views: parseViewsText(viewsText), viewsText })
                 .catch(err => console.error('ai: seen failed:', nativeFullVideoId, err.message));
         });
 

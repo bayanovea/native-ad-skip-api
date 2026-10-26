@@ -30,17 +30,20 @@ module.exports = function createAiRepository(models, sequelize) {
     }
 
     return {
-        // GREATEST skips NULL, so a request without `views` never lowers or clears views_max.
-        async seen(nativeId, views) {
+        // `views` = the count read from `viewsText` (lib/parse-views-text.js), null when unreadable. GREATEST skips
+        // NULL, so a request without a readable counter never lowers or clears views_max; `views_text` keeps the
+        // latest string sent, readable or not, so a new page format shows up as rows with a text and no views_max.
+        async seen(nativeId, { views = null, viewsText = null } = {}) {
             if (!PRV_NATIVE_ID.test(nativeId)) return;
             await sequelize.query(
-                `INSERT INTO prv_ai_videos (native_id, views_max, requests)
-                 VALUES (:nativeId, :views, 1)
+                `INSERT INTO prv_ai_videos (native_id, views_max, views_text, requests)
+                 VALUES (:nativeId, :views, :viewsText, 1)
                  ON CONFLICT (native_id) DO UPDATE SET
                      views_max = GREATEST(prv_ai_videos.views_max, EXCLUDED.views_max),
+                     views_text = COALESCE(EXCLUDED.views_text, prv_ai_videos.views_text),
                      requests = prv_ai_videos.requests + 1,
                      last_seen_at = CURRENT_TIMESTAMP`,
-                { replacements: { nativeId, views: views ?? null } });
+                { replacements: { nativeId, views, viewsText } });
         },
 
         // Unpublish the video's AI row (`by`: judge | review | admin); `data` stays for the record.
