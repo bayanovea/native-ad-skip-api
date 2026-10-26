@@ -172,10 +172,10 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] every detector segment of a new detection lands in `data` or `hidden` with a reason; backfill fills old rows; regate moves both ways under the threshold env
-- [ ] a verdict is the last word: keep on hidden serves (unless short), drop hides for good, regate respects both
-- [ ] short bounds save with a warning; nothing short is ever served
-- [ ] `make test-unit`, `go test -mod=vendor ./calculator ./ai/...`, `go vet ./...`, `make test-e2e`
+- [x] every detector segment of a new detection lands in `data` or `hidden` with a reason; backfill fills old rows; regate moves both ways under the threshold env — `TestEntriesSplitsServedAndHidden`, `TestRegateRow*`, `TestPlace*`; e2e `ai detect: queue → …` (hidden of both fixture rows), `ai regate: a threshold change …`
+- [x] a verdict is the last word: keep on hidden serves (unless short), drop hides for good, regate respects both — e2e `ai review hidden: …` (➕ added an `ai regate` run there: the kept medium self-promotion stays served, the not_ad high sponsor stays hidden, through the real `EntryKeepsAll` SQL), `import-below-threshold:`, `adopt-review-items:`; `TestPlacePinnedEntries…`, `TestPlaceNeverMovesAReviewEntry`
+- [x] short bounds save with a warning; nothing short is ever served — e2e `review page: bounds from the keyboard: … short ones save with a warning`, `ai review hidden: …` (short keep → `hidden short`, not served, row not withdrawn); every write to `data` checks the threshold (`entries()`, `place()`, `applyVerdict`)
+- [x] `make test-unit`, `go test -mod=vendor ./calculator ./ai/...`, `go vet ./...`, `make test-e2e` — green (locally `./calculator` with `-run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`: the `.env` points `TestIntegration` at `host.docker.internal`)
 
 ### Task 8: [Final] Documentation
 

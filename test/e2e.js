@@ -2107,6 +2107,14 @@ test('ai review hidden: short keep bounds hide the entry (short), longer ones se
     assert.equal((await decideAi(a2, 'not_ad')).ai_applied, true);
     assert.deepEqual((await hidden())[0], [sp, 200, 230, 'ai', 'review', undefined]);
 
+    // Rules never override a verdict: the kept medium self-promotion stays served, the not_ad high sponsor stays hidden.
+    const decided = await aiCalculated(vid);
+    const r = runAi(['regate']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, new RegExp(`ai regate: ${videoId} \\d+ served`));
+    const regated = await aiCalculated(vid);
+    assert.deepEqual([regated.data, regated.hidden], [decided.data, decided.hidden]);
+
     // The last served entries go: not_ad would withdraw, a keep with short bounds hides it and leaves the row published.
     assert.equal((await decideAi(a1, 'not_ad')).ai_applied, true);
     res = await decideBounds(a3, 'self_promotion', { start: 300, end: 303, source: 'cue' });
