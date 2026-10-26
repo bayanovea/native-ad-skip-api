@@ -310,7 +310,7 @@ test('review export: a split sheet exports the same TSV under its name; a part e
     }
 });
 
-test('import-verdict-bounds: appends a copy of the reviewer\'s keep verdict with the bounds, skips what cannot be bounds, a bad line writes nothing', async () => {
+test('import-verdict-bounds: appends a copy of the reviewer\'s keep verdict with the bounds (short ones too), skips what cannot be bounds, a bad line writes nothing', async () => {
     const b = 'bounds-import';
     await q("INSERT INTO prv_review_reviewers (code) VALUES ('gkshi'), ('owner') ON CONFLICT DO NOTHING");
     await q(`INSERT INTO prv_review_batches (batch) VALUES ('${b}')`);
@@ -350,7 +350,7 @@ test('import-verdict-bounds: appends a copy of the reviewer\'s keep verdict with
         const dry = run(tsv, '--dry-run');
         assert.equal(dry.status, 0, dry.stderr);
         assert.match(dry.stdout, /would apply bounds-import C1 gkshi 1381-1412/);
-        assert.match(dry.stdout, /dry run: 1 applied, 5 skipped/);
+        assert.match(dry.stdout, /dry run: 2 applied, 4 skipped/);
         assert.equal((await rows(c1)).length, 1, 'a dry run writes nothing');
 
         const r = run(tsv);
@@ -359,22 +359,21 @@ test('import-verdict-bounds: appends a copy of the reviewer\'s keep verdict with
             'applied bounds-import C1 gkshi 1381-1412',
             'skipped bounds-import C2 gkshi 90-130: latest verdict is not_ad, not a keep',
             'skipped bounds-import C3 gkshi 190-235: a later verdict by owner',
-            'skipped bounds-import C4 gkshi 300-303: bounds 300-303: short',
+            'applied bounds-import C4 gkshi 300-303',
             'skipped bounds-import C5 - 400-430: no verdict by anyone',
             'skipped bounds-import C6 gkshi 495-535: already has these bounds',
-            '1 applied, 5 skipped',
+            '2 applied, 4 skipped',
         ]);
         assert.deepEqual((await rows(c1)).at(-1), { verdict: 'sponsor', comment: 'реклама началась раньше 23:01', reviewer: 'gkshi',
             source: 'import', start: 1381, end: 1412, bounds_source: 'import' });
         assert.equal(await exportTsv(b).then((t) => t.split('\n')[1]), 'prv\t-31_31\tsponsor\t1381.0\t1412.0\tgold_missing\tC1\tреклама началась раньше 23:01');
 
         for (const bad of [`${b}\tC1\tgkshi\t23:01`, `${b}\tC1\tgkshi\t23-01\t23:32`, `${b}\tC9\tgkshi\t1:00\t2:00`, `${b}\tC1\tnobody\t1:00\t2:00`]) {
-            const before = (await rows(c1)).length;
+            const before = [(await rows(c1)).length, (await rows(c4)).length];
             const e = run(`${b}\tC4\tgkshi\t5:00\t5:30\n${bad}\n`);
             assert.equal(e.status, 1, bad);
             assert.match(e.stderr, /import failed: /);
-            assert.equal((await rows(c1)).length, before);
-            assert.equal((await rows(c4)).length, 1, `${bad}: nothing written`);
+            assert.deepEqual([(await rows(c1)).length, (await rows(c4)).length], before, `${bad}: nothing written`);
         }
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });

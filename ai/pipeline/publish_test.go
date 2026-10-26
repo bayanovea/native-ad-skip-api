@@ -28,28 +28,33 @@ func TestEntriesSplitsServedAndHidden(t *testing.T) {
 		pred("sponsor", "low", 400, 402),           // both: confidence first (the truth layer before the serving filter)
 	}, cats, 5)
 	wantServed := []Entry{
-		{2, 11, 40, "high", "ai", ""},
-		{2, 50, 60, "medium", "ai", ""},
-		{3, 100, 130, "high", "ai", ""},
-		{2, 300, 305, "high", "ai", ""},
+		{2, 11, 40, "high", "ai", "", 0},
+		{2, 50, 60, "medium", "ai", "", 0},
+		{3, 100, 130, "high", "ai", "", 0},
+		{2, 300, 305, "high", "ai", "", 0},
 	}
 	wantHidden := []Entry{
-		{2, 70, 90, "low", "ai", "confidence"},
-		{3, 140, 170, "medium", "ai", "confidence"},
-		{2, 201, 205, "high", "ai", "short"},
-		{2, 400, 402, "low", "ai", "confidence"},
+		{2, 70, 90, "low", "ai", "confidence", 0},
+		{3, 140, 170, "medium", "ai", "confidence", 0},
+		{2, 201, 205, "high", "ai", "short", 0},
+		{2, 400, 402, "low", "ai", "confidence", 0},
 	}
 	if !reflect.DeepEqual(served, wantServed) || !reflect.DeepEqual(hidden, wantHidden) {
 		t.Fatalf("got %+v / %+v\nwant %+v / %+v", served, hidden, wantServed, wantHidden)
 	}
 
 	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 200.5, 205.4), pred("sponsor", "high", 300, 305)}, cats, 3)
-	if !reflect.DeepEqual(served, []Entry{{2, 201, 205, "high", "ai", ""}, {2, 300, 305, "high", "ai", ""}}) || len(hidden) != 0 {
+	if !reflect.DeepEqual(served, []Entry{{2, 201, 205, "high", "ai", "", 0}, {2, 300, 305, "high", "ai", "", 0}}) || len(hidden) != 0 {
 		t.Fatalf("threshold 3: got %+v / %+v", served, hidden)
 	}
 	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 300, 305)}, cats, 6)
-	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{{2, 300, 305, "high", "ai", "short"}}) {
+	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{{2, 300, 305, "high", "ai", "short", 0}}) {
 		t.Fatalf("threshold 6: got %+v / %+v", served, hidden)
+	}
+
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "low", 10.2, 10.9), pred("sponsor", "high", 20.5, 21.4)}, cats, 1)
+	if len(served) != 0 || len(hidden) != 0 {
+		t.Fatalf("no whole second inside: want nothing stored, got %+v / %+v", served, hidden)
 	}
 
 	served, hidden = entries(nil, cats, 5)
@@ -115,8 +120,8 @@ func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai", ""}, {2, 50, 60, "medium", "ai", ""}},
-		[]Entry{{2, 70, 90, "low", "ai", "confidence"}}); err != nil {
+	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai", "", 0}, {2, 50, 60, "medium", "ai", "", 0}},
+		[]Entry{{2, 70, 90, "low", "ai", "confidence", 0}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

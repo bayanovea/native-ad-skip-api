@@ -7,17 +7,12 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/judge"
 	"odedohbest/video-calculate/calculator"
 )
-
-// rowEntry is an entry as stored in prv_ai_video_calculateds, with the rating a served one carries.
-type rowEntry struct {
-	Entry
-	Rating int `json:"rating,omitempty"`
-}
 
 // Regate moves every AI row's entries between data and hidden by the current rules
 // (accepted(), AI_MIN_SEGMENT_SECONDS), withdrawn rows included: run by hand after a
@@ -25,9 +20,17 @@ type rowEntry struct {
 func Regate(cfg Config, backfill bool) error {
 	db := calculator.ConnectDb()
 	defer db.Close()
+	return regate(db, cfg.MinSegmentSeconds, backfill)
+}
+
+func regate(db *sql.DB, minSeconds int, backfill bool) error {
 	cats, err := loadCategories(db)
 	if err != nil {
 		return err
+	}
+	names := map[int]string{}
+	for name, id := range cats {
+		names[id] = name
 	}
 	ids, err := aiRowIDs(db)
 	if err != nil {
@@ -35,7 +38,7 @@ func Regate(cfg Config, backfill bool) error {
 	}
 	changed, failed := 0, 0
 	for _, id := range ids {
-		ok, err := regateRow(db, cats, cfg.MinSegmentSeconds, id, backfill)
+		ok, err := regateRow(db, cats, names, minSeconds, id, backfill)
 		if err != nil {
 			log.Printf("ai regate: %d failed: %v", id, err)
 			failed++
@@ -45,7 +48,7 @@ func Regate(cfg Config, backfill bool) error {
 			changed++
 		}
 	}
-	log.Printf("ai regate: %d rows, %d changed, %d failed (min %d s)", len(ids), changed, failed, cfg.MinSegmentSeconds)
+	log.Printf("ai regate: %d rows, %d changed, %d failed (min %d s)", len(ids), changed, failed, minSeconds)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d rows failed", failed, len(ids))
 	}
@@ -71,7 +74,7 @@ func aiRowIDs(db *sql.DB) ([]int, error) {
 
 // regateRow regates one row in its own transaction, under the vote handlers' lock
 // order (video_calculateds, then the AI row); it writes only when an entry moved.
-func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfill bool) (bool, error) {
+func regateRow(db *sql.DB, cats map[string]int, names map[int]string, minSeconds, videoID int, backfill bool) (bool, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return false, err
@@ -86,7 +89,7 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 		Scan(&dataB, &hiddenB, &runID); err != nil {
 		return false, fmt.Errorf("lock AI row: %w", err)
 	}
-	var data, hidden []rowEntry
+	var data, hidden []Entry
 	if err := errors.Join(json.Unmarshal(dataB, &data), json.Unmarshal(hiddenB, &hidden)); err != nil {
 		return false, err
 	}
@@ -98,7 +101,7 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 		added = len(hidden)
 	}
 
-	all, err := json.Marshal(append(append([]rowEntry{}, data...), hidden...))
+	all, err := json.Marshal(append(append([]Entry{}, data...), hidden...))
 	if err != nil {
 		return false, err
 	}
@@ -106,11 +109,7 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 	if err != nil {
 		return false, fmt.Errorf("keep verdicts: %w", err)
 	}
-	names := map[int]string{}
-	for name, id := range cats {
-		names[id] = name
-	}
-	served, hid, in, out, moved := place(data, hidden, pinned, names, minSeconds)
+	served, hid, in, moved := place(data, hidden, pinned, names, minSeconds)
 	if !moved && added == 0 {
 		return false, nil
 	}
@@ -133,27 +132,29 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
+	out := len(data) + in - len(served)
 	log.Printf("ai regate: %d %d served, %d hidden (+%d −%d), %d backfilled", videoID, len(served), len(hid), in, out, added)
 	return true, nil
 }
 
 // place puts each entry where the rules say: a review entry stays hidden, a pinned one
 // (latest verdict a keep) skips the confidence rule, the length rule applies to all,
-// confidence before short as in entries(). in / out count the entries entering /
-// leaving data, moved also a hidden entry whose reason changed. An entry leaving data
-// drops its rating: hidden ratings are not maintained.
-func place(data, hidden []rowEntry, pinned map[[2]int]bool, names map[int]string, minSeconds int) (served, hid []rowEntry, in, out int, moved bool) {
-	served, hid = []rowEntry{}, []rowEntry{}
-	for i, e := range append(append([]rowEntry{}, data...), hidden...) {
+// confidence before short as in entries(). in counts the entries entering data, moved
+// is any change (a hidden entry whose reason changed too). An entry leaving data drops
+// its rating: hidden ratings are not maintained. Served entries never overlap (applyVerdict
+// refuses that), so a hidden one overlapping a served one stays where it is.
+func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, names map[int]string, minSeconds int) (served, hid []Entry, in int, moved bool) {
+	served, hid = []Entry{}, []Entry{}
+	for i, e := range append(append([]Entry{}, data...), hidden...) {
 		wasServed := i < len(data)
-		if !wasServed && e.Reason == reasonReview {
+		if !wasServed && (e.Reason == reasonReview || overlapsAny(e, served)) {
 			hid = append(hid, e)
 			continue
 		}
+		_, kept := pinned[judge.EntryKey{Start: e.Start, End: e.End}]
 		reason := ""
 		switch {
-		case !pinned[[2]int{e.Start, e.End}] &&
-			!accepted(detector.Prediction{Segment: detector.Segment{Category: names[e.CategoryID], Confidence: e.Confidence}}):
+		case !kept && !accepted(names[e.CategoryID], e.Confidence):
 			reason = reasonConfidence
 		case e.End-e.Start < minSeconds:
 			reason = reasonShort
@@ -167,7 +168,7 @@ func place(data, hidden []rowEntry, pinned map[[2]int]bool, names map[int]string
 			served = append(served, e)
 			continue
 		case wasServed:
-			out++
+			moved = true
 			e.Rating = 0
 		case e.Reason != reason:
 			moved = true
@@ -175,17 +176,29 @@ func place(data, hidden []rowEntry, pinned map[[2]int]bool, names map[int]string
 		e.Reason = reason
 		hid = append(hid, e)
 	}
-	for _, s := range [][]rowEntry{served, hid} {
+	for _, s := range [][]Entry{served, hid} {
 		sort.SliceStable(s, func(i, j int) bool { return s[i].Start < s[j].Start })
 	}
-	return served, hid, in, out, moved || in+out > 0
+	return served, hid, in, moved || in > 0
+}
+
+func overlapsAny(e Entry, list []Entry) bool {
+	for _, o := range list {
+		if o.Start < e.End && e.Start < o.End {
+			return true
+		}
+	}
+	return false
 }
 
 // backfillHidden rebuilds the hidden entries of a row published before the column existed,
-// from its run the way finish() does: the segments that fail the current rules and are
-// not in data. An entry a verdict removed from data passed the rules, so none comes back.
-// A run without an object raw_output or a transcript gives none.
-func backfillHidden(tx *sql.Tx, cats map[string]int, minSeconds int, runID int64, data []rowEntry) ([]rowEntry, error) {
+// from its run the way finish() does: the segments that fail the current rules and overlap
+// nothing in data. The detector's segments never overlap each other, so one that overlaps
+// a served entry is that entry (moved or re-categorised by a verdict) and is not added
+// again, and an entry a verdict removed from data passed the rules, so none comes back.
+// A run without an object raw_output or a transcript gives none; one that no longer
+// parses or validates is logged and gives none.
+func backfillHidden(tx *sql.Tx, cats map[string]int, minSeconds int, runID int64, data []Entry) ([]Entry, error) {
 	var raw, tr []byte
 	err := tx.QueryRow(`SELECT raw_output, transcript FROM prv_ai_runs
 		WHERE id = $1 AND jsonb_typeof(raw_output) = 'object' AND transcript IS NOT NULL`, runID).Scan(&raw, &tr)
@@ -195,27 +208,25 @@ func backfillHidden(tx *sql.Tx, cats map[string]int, minSeconds int, runID int64
 	if err != nil {
 		return nil, fmt.Errorf("run %d: %w", runID, err)
 	}
-	out, err := detector.ParseOutput(string(raw))
-	if err != nil {
-		return nil, fmt.Errorf("run %d: %w", runID, err)
-	}
 	var st storedTranscript
 	if err := json.Unmarshal(tr, &st); err != nil {
-		return nil, fmt.Errorf("run %d transcript: %w", runID, err)
+		log.Printf("ai regate: run %d not backfilled: transcript: %v", runID, err)
+		return nil, nil
 	}
 	units := requestFormat.Apply(st.Cues)
-	if err := detector.Validate(units, out); err != nil {
-		return nil, fmt.Errorf("run %d: %w", runID, err)
+	out, err := detector.ParseOutput(string(raw))
+	if err == nil {
+		err = detector.Validate(units, out)
 	}
-	inData := map[[3]int]bool{}
-	for _, e := range data {
-		inData[[3]int{e.CategoryID, e.Start, e.End}] = true
+	if err != nil {
+		log.Printf("ai regate: run %d not backfilled: %v", runID, err)
+		return nil, nil
 	}
 	_, hidden := entries(detector.Resolve(units, out), cats, minSeconds)
-	var add []rowEntry
+	var add []Entry
 	for _, e := range hidden {
-		if !inData[[3]int{e.CategoryID, e.Start, e.End}] {
-			add = append(add, rowEntry{Entry: e})
+		if !overlapsAny(e, data) {
+			add = append(add, e)
 		}
 	}
 	return add, nil

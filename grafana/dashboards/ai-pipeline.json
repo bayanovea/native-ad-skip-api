@@ -960,7 +960,7 @@
           "refId": "A"
         }
       ],
-      "description": "AI-сегменты, отправленные судьёй на ручную проверку и ещё без вердикта (/admin/review)."
+      "description": "AI-сегменты на ручной проверке без вердикта (/admin/review): отправленные судьёй и скрытые сегменты, отправленные scripts/import-below-threshold.js."
     },
     {
       "id": 13,
@@ -2705,11 +2705,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH r AS (SELECT jsonb_array_length(data) AS served, jsonb_array_length(hidden) AS hidden FROM prv_ai_video_calculateds)\nSELECT k.name AS \"исход\", COUNT(r.*) AS \"видео\" FROM (VALUES\n  (1, '1. есть сегменты для отдачи'),\n  (2, '2. модель нашла, но всё скрыто (ниже порога уверенности, короче порога длины, снято асессором)'),\n  (3, '3. модель ничего не нашла')) AS k(ord, name)\nLEFT JOIN r ON k.ord = CASE WHEN r.served > 0 THEN 1 WHEN r.hidden > 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
+          "rawSql": "WITH r AS (SELECT jsonb_array_length(data) AS served, jsonb_array_length(hidden) AS hidden, withdrawn_at IS NOT NULL AS withdrawn FROM prv_ai_video_calculateds)\nSELECT k.name AS \"исход\", COUNT(r.*) AS \"видео\" FROM (VALUES\n  (1, '1. есть сегменты для отдачи'),\n  (2, '2. модель нашла, но всё скрыто (ниже порога уверенности, короче порога длины, снято асессором)'),\n  (3, '3. модель ничего не нашла'),\n  (4, '4. строка отозвана')) AS k(ord, name)\nLEFT JOIN r ON k.ord = CASE WHEN r.withdrawn THEN 4 WHEN r.served > 0 THEN 1 WHEN r.hidden > 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
           "refId": "A"
         }
       ],
-      "description": "Что сейчас в строках prv_ai_video_calculateds: data — что отдаём, hidden — остальные сегменты модели с причиной. Исход 2 — модель нашла, но отдать нечего: уверенность ниже порога, сегмент короче AI_MIN_SEGMENT_SECONDS или асессор сказал «не реклама»."
+      "description": "Что сейчас в строках prv_ai_video_calculateds: data — что отдаём, hidden — остальные сегменты модели с причиной. Исход 2 — модель нашла, но отдать нечего: уверенность ниже порога, сегмент короче AI_MIN_SEGMENT_SECONDS или асессор сказал «не реклама». Отозванные строки (data сохраняется) — отдельно, исход 4."
     },
     {
       "id": 42,
@@ -3221,11 +3221,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (v.item_id) v.verdict FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id\n  WHERE i.kind = 'ai' ORDER BY v.item_id, v.decided_at DESC, v.id DESC)\nSELECT k.name AS \"вердикт\", COUNT(l.verdict) AS \"сегментов\" FROM (VALUES\n  (1, 'sponsor', '1. sponsor (оставить)'), (2, 'self_promotion', '2. self_promotion (оставить)'), (3, 'not_ad', '3. not_ad (убрать)'), (4, 'unclear', '4. unclear (убрать)')) AS k(ord, code, name)\nLEFT JOIN latest l ON l.verdict = k.code GROUP BY k.ord, k.name\nUNION ALL\nSELECT '5. без вердикта', COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)\nORDER BY 1",
+          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (v.item_id) v.verdict FROM prv_review_verdicts v JOIN prv_review_items i ON i.id = v.item_id\n  WHERE i.kind = 'ai' ORDER BY v.item_id, v.decided_at DESC, v.id DESC)\nSELECT k.name AS \"вердикт\", COUNT(l.verdict) AS \"сегментов\" FROM (VALUES\n  (1, 'sponsor', '1. sponsor (оставить)'), (2, 'self_promotion', '2. self_promotion (оставить)'), (3, 'not_ad', '3. not_ad (скрыть)'), (4, 'unclear', '4. unclear (скрыть)')) AS k(ord, code, name)\nLEFT JOIN latest l ON l.verdict = k.code GROUP BY k.ord, k.name\nUNION ALL\nSELECT '5. без вердикта', COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "description": "Последний вердикт по каждому AI-сегменту, отправленному судьёй. sponsor / self_promotion оставляют сегмент (и возвращают отозванную строку), not_ad / unclear убирают его."
+      "description": "Последний вердикт по каждому AI-сегменту на проверке (от судьи и ниже порога). sponsor / self_promotion оставляют сегмент: отдаём, если он не короче порога длины, и возвращают отозванную строку; not_ad / unclear скрывают его (hidden, причина review)."
     },
     {
       "id": 50,
@@ -3669,11 +3669,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT c.native_id, c.video_id, jsonb_array_length(c.data) AS \"сегментов\",\n       (SELECT MIN(COALESCE((e ->> 'rating')::int, 0)) FROM jsonb_array_elements(c.data) e) AS \"мин. рейтинг\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS \"открытых вопросов\",\n       (SELECT j.decision || ' / ' || j.\"by\" || ': ' || COALESCE(j.reason, '') FROM prv_ai_judgements j WHERE j.video_id = c.video_id ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS \"последнее судейство\",\n       c.withdrawn_by AS \"отозвано\", c.withdrawn_reason AS \"почему\", c.updated_at AS \"изменено\"\nFROM prv_ai_video_calculateds c\nWHERE c.withdrawn_at IS NOT NULL OR EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id))\n   OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.data) e WHERE (e ->> 'rating')::int < 0)\nORDER BY c.updated_at DESC LIMIT 50",
+          "rawSql": "SELECT c.native_id, c.video_id, jsonb_array_length(c.data) AS \"сегментов\",\n       (SELECT MIN(COALESCE((e ->> 'rating')::int, 0)) FROM jsonb_array_elements(c.data) e) AS \"мин. рейтинг\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS \"открытых вопросов\",\n       (SELECT j.decision || ' / ' || j.\"by\" || ': ' || COALESCE(j.reason, '') FROM prv_ai_judgements j WHERE j.video_id = c.video_id ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS \"последнее судейство\",\n       c.withdrawn_by AS \"отозвано\", c.withdrawn_reason AS \"почему\", c.updated_at AS \"изменено\"\nFROM prv_ai_video_calculateds c\nWHERE c.withdrawn_at IS NOT NULL OR EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id))\n   OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.data) e WHERE (e ->> 'rating')::int < 0)\nORDER BY c.updated_at DESC LIMIT 50",
           "refId": "A"
         }
       ],
-      "description": "video_id ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv."
+      "description": "video_id ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv. Открытые вопросы — только от судьи: сегменты ниже порога на проверке — не сигнал против."
     },
     {
       "type": "row",

@@ -71,7 +71,8 @@ module.exports = function createAiRepository(models, sequelize) {
          * Apply a review verdict on a kind='ai' item to its AI row, under the row's lock in the caller's
          * `transaction`. `from` is the item's effective bounds before this verdict (the entry it refers to, in `data`
          * or `hidden`), `to` the verdict's bounds (default `from`): not_ad / unclear move the entry at `from` to
-         * `hidden` with reason `review` (the row is withdrawn by `review` when that empties `data`); sponsor /
+         * `hidden` with reason `review`, at `to` (the page passes `from`; the adopt script the bounds an earlier keep
+         * set), and the row is withdrawn by `review` when that empties `data`; sponsor /
          * self_promotion keep it, or put it back, with that category at `to` (`source: 'review'` once moved), in
          * `data` with the rating of the votes on the new category and bounds, or in `hidden` with reason `short` when
          * under MIN_SEGMENT_SECONDS. Bounds overlapping another served entry are refused (ReviewInputError, nothing
@@ -97,6 +98,8 @@ module.exports = function createAiRepository(models, sequelize) {
                 const same = !moved && base.category_id === category.id;
                 const { rating: _, reason: __, ...rest } = base;
                 const entry = { ...rest, category_id: category.id, start: to.start, end: to.end, ...(moved && { source: 'review' }) };
+                // Items find their entry by bounds: a keep onto a hidden entry's exact bounds takes its place.
+                others.hidden = others.hidden.filter(e => e.start !== to.start || e.end !== to.end);
                 if (to.end - to.start < MIN_SEGMENT_SECONDS) {
                     if (!(same && old.reason === 'short')) next = { hidden: { ...entry, reason: 'short' } };
                 } else if (!(same && inData !== -1)) {
@@ -108,7 +111,8 @@ module.exports = function createAiRepository(models, sequelize) {
                 }
             } else if (old && old.reason !== 'review') {
                 const { rating: _, reason: __, ...rest } = old;
-                next = { hidden: { ...rest, reason: 'review' } };
+                const moved = to.start !== old.start || to.end !== old.end;
+                next = { hidden: { ...rest, start: to.start, end: to.end, ...(moved && { source: 'review' }), reason: 'review' } };
             }
             let changed = next !== null;
             const data = next ? (next.data ? [...others.data, next.data].sort(byStart) : others.data) : row.data;

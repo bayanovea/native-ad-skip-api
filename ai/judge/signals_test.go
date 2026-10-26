@@ -183,10 +183,10 @@ func TestEntryKeepsKeysAMovedEntryByItsNewBounds(t *testing.T) {
 	v := testVideo
 	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
 	keeps, err := entryKeeps(db, v)
-	if err != nil || len(keeps) != 1 || !keeps[entryKey{25, 75}].Equal(keptAt) {
+	if err != nil || len(keeps) != 1 || !keeps[EntryKey{25, 75}].Equal(keptAt) {
 		t.Fatalf("got %v %v", keeps, err)
 	}
-	if _, ok := keeps[entryKey{30, 70}]; ok {
+	if _, ok := keeps[EntryKey{30, 70}]; ok {
 		t.Error("the item's old bounds carry no keep")
 	}
 }
@@ -200,7 +200,7 @@ func TestEntryKeepsALaterKeepWithoutBoundsStaysOnTheMovedEntry(t *testing.T) {
 	v := testVideo
 	v.JudgedAt = sql.NullTime{Time: since, Valid: true}
 	keeps, err := entryKeeps(db, v)
-	if err != nil || !keeps[entryKey{25, 75}].Equal(keptAt) {
+	if err != nil || !keeps[EntryKey{25, 75}].Equal(keptAt) {
 		t.Fatalf("got %v %v", keeps, err)
 	}
 }

@@ -61,10 +61,10 @@ type Entry struct {
 	Source     string `json:"source,omitempty"` // "ai", or "review" once an assessor set the bounds
 }
 
-// entryKey is an entry's bounds, by which review items and their verdicts find it.
-type entryKey struct{ start, end int }
+// EntryKey is an entry's bounds, by which review items and their verdicts find it.
+type EntryKey struct{ Start, End int }
 
-func (e Entry) key() entryKey { return entryKey{e.Start, e.End} }
+func (e Entry) key() EntryKey { return EntryKey{e.Start, e.End} }
 
 // Video is one published AI row with its queue state.
 type Video struct {
@@ -258,22 +258,14 @@ func storedRecut(stored []byte) int {
 // effective bounds: those of its latest verdict that has bounds (an assessor moved the entry),
 // else its own; a later verdict without bounds leaves the entry where it was moved
 // (prv/repository/ai.js allKept matches the items the same way).
-func entryKeeps(db *sql.DB, v Video) (map[entryKey]time.Time, error) {
+func entryKeeps(db *sql.DB, v Video) (map[EntryKey]time.Time, error) {
 	return keepVerdicts(db, v.VideoID, v.Data, v.JudgedAt.Time)
 }
 
 // EntryKeepsAll is the bounds of the entries (JSON of the row's entries) whose latest ai-item
 // verdict keeps them, whenever decided: the entries ai regate pins in the truth layer.
-func EntryKeepsAll(q querier, videoID int, entries []byte) (map[[2]int]bool, error) {
-	keeps, err := keepVerdicts(q, videoID, entries, time.Time{})
-	if err != nil {
-		return nil, err
-	}
-	out := map[[2]int]bool{}
-	for k := range keeps {
-		out[[2]int{k.start, k.end}] = true
-	}
-	return out, nil
+func EntryKeepsAll(q querier, videoID int, entries []byte) (map[EntryKey]time.Time, error) {
+	return keepVerdicts(q, videoID, entries, time.Time{})
 }
 
 // querier is *sql.DB or *sql.Tx.
@@ -281,7 +273,7 @@ type querier interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-func keepVerdicts(q querier, videoID int, entries []byte, after time.Time) (map[entryKey]time.Time, error) {
+func keepVerdicts(q querier, videoID int, entries []byte, after time.Time) (map[EntryKey]time.Time, error) {
 	rows, err := q.Query(`SELECT e.start, e."end", k.decided_at FROM `+entryBounds+`
 		JOIN LATERAL (SELECT l.verdict, l.decided_at FROM prv_review_items i
 			JOIN LATERAL (SELECT r.id, r.verdict, r.decided_at FROM prv_review_verdicts r WHERE r.item_id = i.id
@@ -296,11 +288,11 @@ func keepVerdicts(q querier, videoID int, entries []byte, after time.Time) (map[
 		return nil, err
 	}
 	defer rows.Close()
-	keeps := map[entryKey]time.Time{}
+	keeps := map[EntryKey]time.Time{}
 	for rows.Next() {
-		var k entryKey
+		var k EntryKey
 		var at time.Time
-		if err := rows.Scan(&k.start, &k.end, &at); err != nil {
+		if err := rows.Scan(&k.Start, &k.End, &at); err != nil {
 			return nil, err
 		}
 		keeps[k] = at

@@ -557,24 +557,32 @@ module.exports = function createReviewRepository(models, sequelize) {
             );
         },
 
-        /** True when any sheet has an item on `native_id`'s stretch (bounds ± 0.05 s) proposed as `proposed`. */
+        /**
+         * True when any sheet has an item on `native_id`'s stretch (bounds ± 0.05 s) proposed as `proposed`, or a
+         * sheet item (the old below-threshold importer's cue bounds) that holds it (entryInsideSheetItem).
+         */
         async hasItemAt({ native_id, start, end, proposed }, { transaction } = {}) {
             const rows = await sequelize.query(
                 `SELECT 1 FROM prv_review_items
-                  WHERE native_id = :native_id AND proposed = :proposed AND ABS(start - :start) < 0.05 AND ABS("end" - :end) < 0.05 LIMIT 1`,
+                  WHERE native_id = :native_id AND proposed = :proposed
+                    AND (ABS(start - :start) < 0.05 AND ABS("end" - :end) < 0.05
+                         OR kind = 'sheet' AND :start - start > -0.05 AND :start - start < 1.05 AND "end" - :end > -0.05 AND "end" - :end < 1.05)
+                  LIMIT 1`,
                 { replacements: { native_id, start, end, proposed }, type: QueryTypes.SELECT, transaction });
             return rows.length > 0;
         },
 
         /**
-         * Turn sheet item `itemId` into an ai item on the entry of AI row `video_id` at `start`–`end` (its own
-         * bounds become the entry's, so verdicts find it as the page's do). Returns false when it is not a sheet item.
-         * Used by scripts/adopt-review-items.js.
+         * Turn sheet item `itemId` of the old below-threshold importer into an ai item on the entry of AI row
+         * `video_id` at `start`–`end`: its bounds become the entry's, so verdicts find it as the page's do, and its
+         * own (cue) bounds are kept as a `flagged_by` line. Returns false for any other item (an ai item already, or
+         * a sheet item of another origin, whose bounds a sheet re-import checks). Used by scripts/adopt-review-items.js.
          */
         async adoptItem(itemId, { video_id, start, end }, { transaction } = {}) {
             const rows = await sequelize.query(
-                `UPDATE prv_review_items SET kind = 'ai', video_id = :video_id, start = :start, "end" = :end
-                  WHERE id = :itemId AND kind = 'sheet' RETURNING id`,
+                `UPDATE prv_review_items SET kind = 'ai', video_id = :video_id, start = :start, "end" = :end,
+                        flagged_by = COALESCE(flagged_by, '[]'::jsonb) || to_jsonb('adopted: item bounds ' || start || '-' || "end")
+                  WHERE id = :itemId AND kind = 'sheet' AND flagged_by::text LIKE '%below the publish threshold%' RETURNING id`,
                 { replacements: { itemId, video_id, start, end }, type: QueryTypes.SELECT, transaction });
             return rows.length > 0;
         },
@@ -668,7 +676,7 @@ module.exports = function createReviewRepository(models, sequelize) {
                     throw new ReviewInputError(`bounds source must be one of ${BOUNDS_SOURCES.join(', ')}`, 'bounds_source');
                 }
                 const why = validateVerdictBounds(bounds);
-                if (why && why !== 'short') throw new ReviewInputError(`bad bounds ${bounds.start}-${bounds.end}: ${why}`, `bounds_${why}`);
+                if (why) throw new ReviewInputError(`bad bounds ${bounds.start}-${bounds.end}: ${why}`, `bounds_${why}`);
             }
             const item = await models.ReviewItem.findByPk(item_id, { attributes: ['id'], transaction });
             if (!item) throw new ReviewInputError(`unknown review item ${item_id}`);

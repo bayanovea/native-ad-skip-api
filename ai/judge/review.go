@@ -28,10 +28,10 @@ func addReviewItems(tx *sql.Tx, prv provider.Provider, v Video, j judgement, s S
 	if err != nil {
 		return "", 0, fmt.Errorf("open items: %w", err)
 	}
-	open := map[entryKey]bool{}
+	open := map[EntryKey]bool{}
 	for rows.Next() {
-		var k entryKey
-		if err := rows.Scan(&k.start, &k.end); err != nil {
+		var k EntryKey
+		if err := rows.Scan(&k.Start, &k.End); err != nil {
 			rows.Close()
 			return "", 0, fmt.Errorf("open items: %w", err)
 		}

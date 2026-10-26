@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime, parsePlayerTime, validateVerdictBounds, splitSheet } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime, parsePlayerTime, validateVerdictBounds, splitSheet, entryInsideSheetItem } = require('../lib/review-sheet');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -256,7 +256,7 @@ test('parsePlayerTime: NaN on anything else', () => {
     for (const value of [null, undefined, {}, [], true]) assert.ok(Number.isNaN(parsePlayerTime(value)));
 });
 
-test('validateVerdictBounds: whole seconds, 0…86400, start before end; short (under the threshold, default 5 s) is its own code', () => {
+test('validateVerdictBounds: whole seconds, 0…86400, start before end; short bounds are valid', () => {
     assert.equal(validateVerdictBounds({ start: 0, end: 5 }), null);
     assert.equal(validateVerdictBounds({ start: 86395, end: 86400 }), null);
     assert.equal(validateVerdictBounds({ start: 10.5, end: 40 }), 'format');
@@ -266,8 +266,16 @@ test('validateVerdictBounds: whole seconds, 0…86400, start before end; short (
     assert.equal(validateVerdictBounds({ start: 86000, end: 86401 }), 'range');
     assert.equal(validateVerdictBounds({ start: 40, end: 40 }), 'order');
     assert.equal(validateVerdictBounds({ start: 40, end: 10 }), 'order');
-    assert.equal(validateVerdictBounds({ start: 10, end: 14 }), 'short');
-    assert.equal(validateVerdictBounds({ start: 10, end: 17 }, 8), 'short');
-    assert.equal(validateVerdictBounds({ start: 10, end: 18 }, 8), null);
-    assert.equal(validateVerdictBounds({ start: 10, end: 9 }, 8), 'order', 'errors before the warning');
+    assert.equal(validateVerdictBounds({ start: 10, end: 11 }), null);
+});
+
+test('entryInsideSheetItem: the entry inside the item by less than a second at each end (0.05 s slack for the 0.1-s cue times)', () => {
+    const item = { start: 299.6, end: 320.3 };
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, item), true);
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 299, end: 321 }), true, 'a whole second each side');
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 298.95, end: 320 }), false, '1.05 s');
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300, end: 321.1 }), false, '1.1 s');
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300.04, end: 319.96 }), true, 'just outside, within the slack');
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300.05, end: 320 }), false, 'starts 0.05 s before the item');
+    assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300, end: 319.95 }), false, 'ends 0.05 s after the item');
 });

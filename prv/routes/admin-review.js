@@ -99,7 +99,7 @@ function parseBodyBounds(raw, verdict) {
     }
     const bounds = { start: parsePlayerTime(raw.start), end: parsePlayerTime(raw.end), source: raw.source };
     const why = validateVerdictBounds(bounds);
-    if (why && why !== 'short') throw new ReviewInputError(`bad bounds ${raw.start}-${raw.end}: ${why}`, `bounds_${why}`);
+    if (why) throw new ReviewInputError(`bad bounds ${raw.start}-${raw.end}: ${why}`, `bounds_${why}`);
     return bounds;
 }
 
@@ -819,9 +819,10 @@ function renderItemPage(payload, token, t, langLink) {
         if (raw[0] === '' && raw[1] === '') return { bounds: null };
         if (raw[0] === '' || raw[1] === '') return { error: tr('js_bounds_both') };
         const b = { start: parsePlayerTime(raw[0]), end: parsePlayerTime(raw[1]) };
-        const why = validateVerdictBounds(b, STATE.min_segment_seconds);
-        if (why === 'short') return { bounds: b, warning: tr('warn_bounds_short', { seconds: STATE.min_segment_seconds }) };
-        return why ? { error: tr('error_bounds_' + why) } : { bounds: b };
+        const why = validateVerdictBounds(b);
+        if (why) return { error: tr('error_bounds_' + why) };
+        if (b.end - b.start < STATE.min_segment_seconds) return { bounds: b, warning: tr('warn_bounds_short', { seconds: STATE.min_segment_seconds }) };
+        return { bounds: b };
     }
     function showBoundsWarning() {
         document.getElementById('bounds-warn').textContent = readBounds().warning || '';
@@ -1079,11 +1080,13 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
                 const progress = await reviewRepository.getBatchProgress(before.batch, reviewer, { transaction });
                 if (!mayDecide(progress.state)) throw new ReviewConflictError(progress.state, progress.locked_by);
                 if (!same) {
-                    // Read under the batch lock: every verdict on the item is written under it.
+                    // Read under the batch lock: every verdict on the item, and scripts/adopt-review-items.js
+                    // turning it into an ai item, is written under it.
+                    const current = await reviewRepository.getItemById(before.id, { transaction });
                     const from = await reviewRepository.effectiveBounds(before.id, { transaction });
                     await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', bounds, transaction });
-                    if (before.kind === 'ai') {
-                        aiApplied = await aiRepository.applyVerdict(before, body.verdict, { from, to: bounds || from, transaction });
+                    if (current.kind === 'ai') {
+                        aiApplied = await aiRepository.applyVerdict(current, body.verdict, { from, to: bounds || from, transaction });
                     }
                 }
                 if (body.track_mismatch !== undefined) {

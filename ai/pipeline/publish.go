@@ -11,8 +11,8 @@ import (
 )
 
 // Entry is one detected segment, the shape of a video_calculateds.data entry
-// plus confidence and source; publish adds the rating from the votes to the
-// served ones. A hidden entry carries the reason it is not served.
+// plus confidence and source; a served one carries the rating from the votes
+// (sparse), a hidden one the reason it is not served.
 type Entry struct {
 	CategoryID int    `json:"category_id"`
 	Start      int    `json:"start"`
@@ -20,6 +20,7 @@ type Entry struct {
 	Confidence string `json:"confidence"`
 	Source     string `json:"source"`
 	Reason     string `json:"reason,omitempty"`
+	Rating     int    `json:"rating,omitempty"`
 }
 
 // Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet),
@@ -33,26 +34,30 @@ const (
 
 // accepted is the product threshold the held-out SCORE was measured with:
 // sponsor from medium confidence, self-promotion only at high.
-func accepted(p detector.Prediction) bool {
-	switch p.Category {
+func accepted(category, confidence string) bool {
+	switch category {
 	case detector.CategorySponsor:
-		return p.Confidence == "high" || p.Confidence == "medium"
+		return confidence == "high" || confidence == "medium"
 	case detector.CategorySelfPromotion:
-		return p.Confidence == "high"
+		return confidence == "high"
 	}
 	return false
 }
 
 // entries maps predictions to whole seconds inside the predicted span (start up,
 // end down: a skip never cuts content the model did not mark, and votes match
-// segments by integer bounds) and splits them into served and hidden.
+// segments by integer bounds) and splits them into served and hidden. A span
+// with no whole second inside is dropped: no threshold could ever serve it.
 func entries(preds []detector.Prediction, categories map[string]int, minSeconds int) (served, hidden []Entry) {
 	served, hidden = []Entry{}, []Entry{}
 	for _, p := range preds {
 		start, end := int(math.Ceil(p.Start)), int(math.Floor(p.End))
+		if end <= start {
+			continue
+		}
 		e := Entry{CategoryID: categories[p.Category], Start: start, End: end, Confidence: p.Confidence, Source: "ai"}
 		switch {
-		case !accepted(p):
+		case !accepted(p.Category, p.Confidence):
 			e.Reason = reasonConfidence
 		case end-start < minSeconds:
 			e.Reason = reasonShort
