@@ -36,7 +36,7 @@ async function aiBlock(models, video, token) {
         const state = aiRow.withdrawn_at
             ? `withdrawn ${escapeHtml(formatDate(aiRow.withdrawn_at))} by ${escapeHtml(aiRow.withdrawn_by)}${aiRow.withdrawn_reason ? `: ${escapeHtml(aiRow.withdrawn_reason)}` : ''}`
             : `published ${escapeHtml(formatDate(aiRow.published_at))}`;
-        const rows = (list, cls) => list.map(e => {
+        const entryRows = (list, cls, last) => list.map(e => {
             const name = categoryName[e.category_id] || e.category_id;
             return `
             <tr class="${cls}">
@@ -44,11 +44,11 @@ async function aiBlock(models, video, token) {
                 <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span>${e.source === 'review'
         ? ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>' : ''}</td>
                 <td class="muted">${escapeHtml(e.confidence)}</td>
-                <td class="muted">${escapeHtml(cls === 'ai-hidden' ? e.reason : e.rating ?? 0)}</td>
+                <td class="muted">${escapeHtml(last(e))}</td>
             </tr>`;
         }).join('');
-        const entries = rows(aiRow.data || [], 'ai-entry');
-        const hidden = rows(aiRow.hidden || [], 'ai-hidden');
+        const entries = entryRows(aiRow.data || [], 'ai-entry', e => e.rating ?? 0);
+        const hidden = entryRows(aiRow.hidden || [], 'ai-hidden', e => e.reason);
         row = `
     <div class="meta">
         <span>Run: ${escapeHtml(aiRow.run_id)}</span>

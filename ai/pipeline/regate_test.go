@@ -12,14 +12,7 @@ import (
 	"odedohbest/video-calculate/ai/judge"
 )
 
-var (
-	regateNames = map[int]string{2: "sponsor", 3: "self_promotion"}
-	regateCats  = map[string]int{"sponsor": 2, "self_promotion": 3}
-)
-
-func re(cat, start, end int, conf, source, reason string, rating int) Entry {
-	return Entry{cat, start, end, conf, source, reason, rating}
-}
+var regateCats = map[string]int{"sponsor": 2, "self_promotion": 3}
 
 func pins(bounds ...[2]int) map[judge.EntryKey]time.Time {
 	m := map[judge.EntryKey]time.Time{}
@@ -30,7 +23,7 @@ func pins(bounds ...[2]int) map[judge.EntryKey]time.Time {
 }
 
 func TestPlaceThresholdRiseHidesAServedEntryWithoutItsRating(t *testing.T) {
-	served, hid, in, moved := place([]Entry{re(2, 30, 70, "high", "ai", "", 2), re(2, 100, 150, "high", "ai", "", 0)}, []Entry{}, nil, regateNames, 41)
+	served, hid, in, moved := place([]Entry{re(2, 30, 70, "high", "ai", "", 2), re(2, 100, 150, "high", "ai", "", 0)}, []Entry{}, nil, regateCats, 41)
 	if !reflect.DeepEqual(served, []Entry{re(2, 100, 150, "high", "ai", "", 0)}) ||
 		!reflect.DeepEqual(hid, []Entry{re(2, 30, 70, "high", "ai", "short", 0)}) || in != 0 || !moved {
 		t.Fatalf("got %+v / %+v in %d moved %v", served, hid, in, moved)
@@ -39,7 +32,7 @@ func TestPlaceThresholdRiseHidesAServedEntryWithoutItsRating(t *testing.T) {
 
 func TestPlaceThresholdDropServesAShortEntry(t *testing.T) {
 	served, hid, in, moved := place([]Entry{re(2, 30, 70, "high", "ai", "", 2)},
-		[]Entry{re(3, 300, 320, "medium", "ai", "confidence", 0), re(2, 480, 483, "high", "ai", "short", 0)}, nil, regateNames, 3)
+		[]Entry{re(3, 300, 320, "medium", "ai", "confidence", 0), re(2, 480, 483, "high", "ai", "short", 0)}, nil, regateCats, 3)
 	if !reflect.DeepEqual(served, []Entry{re(2, 30, 70, "high", "ai", "", 2), re(2, 480, 483, "high", "ai", "", 0)}) ||
 		!reflect.DeepEqual(hid, []Entry{re(3, 300, 320, "medium", "ai", "confidence", 0)}) || in != 1 || !moved {
 		t.Fatalf("got %+v / %+v in %d moved %v", served, hid, in, moved)
@@ -52,7 +45,7 @@ func TestPlacePinnedEntriesSkipTheConfidenceRuleNotTheLengthRule(t *testing.T) {
 	pinned := pins([2]int{30, 70}, [2]int{100, 130}, [2]int{400, 402})
 	data := []Entry{re(2, 30, 70, "low", "review", "", 1), re(2, 200, 230, "low", "ai", "", 0)}
 	hidden := []Entry{re(3, 100, 130, "medium", "ai", "confidence", 0), re(2, 400, 402, "low", "ai", "confidence", 0)}
-	served, hid, in, moved := place(data, hidden, pinned, regateNames, 5)
+	served, hid, in, moved := place(data, hidden, pinned, regateCats, 5)
 	if !reflect.DeepEqual(served, []Entry{re(2, 30, 70, "low", "review", "", 1), re(3, 100, 130, "medium", "ai", "", 0)}) ||
 		!reflect.DeepEqual(hid, []Entry{re(2, 200, 230, "low", "ai", "confidence", 0), re(2, 400, 402, "low", "ai", "short", 0)}) ||
 		in != 1 || !moved {
@@ -63,7 +56,7 @@ func TestPlacePinnedEntriesSkipTheConfidenceRuleNotTheLengthRule(t *testing.T) {
 // Not an ad on review is the last word: no rule, pin or threshold serves it again.
 func TestPlaceNeverMovesAReviewEntry(t *testing.T) {
 	hidden := []Entry{re(2, 30, 70, "high", "ai", "review", 0)}
-	served, hid, in, moved := place([]Entry{}, hidden, pins([2]int{30, 70}), regateNames, 1)
+	served, hid, in, moved := place([]Entry{}, hidden, pins([2]int{30, 70}), regateCats, 1)
 	if len(served) != 0 || !reflect.DeepEqual(hid, hidden) || in != 0 || moved {
 		t.Fatalf("got %+v / %+v in %d moved %v", served, hid, in, moved)
 	}
@@ -74,7 +67,7 @@ func TestPlaceNeverMovesAReviewEntry(t *testing.T) {
 func TestPlaceKeepsAHiddenEntryOverlappingAServedOneHidden(t *testing.T) {
 	data := []Entry{re(2, 30, 75, "high", "review", "", 0)}
 	hidden := []Entry{re(2, 70, 90, "high", "ai", "short", 0), re(2, 100, 104, "high", "ai", "short", 0), re(2, 103, 110, "high", "ai", "short", 0)}
-	served, hid, in, moved := place(data, hidden, nil, regateNames, 3)
+	served, hid, in, moved := place(data, hidden, nil, regateCats, 3)
 	if !reflect.DeepEqual(served, []Entry{re(2, 30, 75, "high", "review", "", 0), re(2, 100, 104, "high", "ai", "", 0)}) ||
 		!reflect.DeepEqual(hid, []Entry{re(2, 70, 90, "high", "ai", "short", 0), re(2, 103, 110, "high", "ai", "short", 0)}) || in != 1 || !moved {
 		t.Fatalf("got %+v / %+v in %d moved %v", served, hid, in, moved)
@@ -82,7 +75,7 @@ func TestPlaceKeepsAHiddenEntryOverlappingAServedOneHidden(t *testing.T) {
 }
 
 func TestPlaceNothingToMove(t *testing.T) {
-	_, _, _, moved := place([]Entry{re(2, 30, 70, "high", "ai", "", 2)}, []Entry{re(2, 480, 483, "high", "ai", "short", 0)}, nil, regateNames, 5)
+	_, _, _, moved := place([]Entry{re(2, 30, 70, "high", "ai", "", 2)}, []Entry{re(2, 480, 483, "high", "ai", "short", 0)}, nil, regateCats, 5)
 	if moved {
 		t.Fatal("unchanged row reported as moved")
 	}
@@ -117,7 +110,7 @@ func TestRegateRowServesAShortEntryWithTheVotesRatingWhenTheThresholdDrops(t *te
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	changed, err := regateRow(db, regateCats, regateNames, 3, 7, false)
+	changed, err := regateRow(db, regateCats, 3, 7, false)
 	if err != nil || !changed {
 		t.Fatalf("got %v %v", changed, err)
 	}
@@ -148,7 +141,7 @@ func TestRegateRowBackfillsAnEmptyHiddenFromTheRun(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	changed, err := regateRow(db, regateCats, regateNames, 5, 7, true)
+	changed, err := regateRow(db, regateCats, 5, 7, true)
 	if err != nil || !changed {
 		t.Fatalf("got %v %v", changed, err)
 	}
@@ -173,7 +166,7 @@ func TestRegateRowBackfillSkipsAPredictionOverlappingAServedEntry(t *testing.T) 
 	mock.ExpectQuery(regexp.QuoteMeta(`WHERE k.verdict IN ('sponsor', 'self_promotion') AND k.decided_at > $3`)).
 		WithArgs(7, sqlmock.AnyArg(), time.Time{}).WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}).AddRow(302, 318, time.Now()))
 	mock.ExpectRollback()
-	if changed, err := regateRow(db, regateCats, regateNames, 5, 7, true); err != nil || changed {
+	if changed, err := regateRow(db, regateCats, 5, 7, true); err != nil || changed {
 		t.Fatalf("got %v %v", changed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -195,7 +188,7 @@ func TestRegateRowBackfillSkipsARunThatNoLongerValidates(t *testing.T) {
 			[]byte(`{"segments":[{"category":"sponsor","first_cue":9,"last_cue":9,"confidence":"low","quote":"x"}]}`), []byte(backfillTranscript)))
 	expectNoKeeps(mock)
 	mock.ExpectRollback()
-	if changed, err := regateRow(db, regateCats, regateNames, 5, 7, true); err != nil || changed {
+	if changed, err := regateRow(db, regateCats, 5, 7, true); err != nil || changed {
 		t.Fatalf("got %v %v", changed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -239,7 +232,7 @@ func TestRegateRowBackfillSkipsAFilledHiddenAndARunWithoutOutput(t *testing.T) {
 	expectRegateLock(mock, `[]`, `[{"category_id":2,"start":20,"end":30,"confidence":"low","source":"ai","reason":"confidence"}]`, 3)
 	expectNoKeeps(mock)
 	mock.ExpectRollback()
-	if changed, err := regateRow(db, regateCats, regateNames, 5, 7, true); err != nil || changed {
+	if changed, err := regateRow(db, regateCats, 5, 7, true); err != nil || changed {
 		t.Fatalf("filled hidden: got %v %v", changed, err)
 	}
 
@@ -248,7 +241,7 @@ func TestRegateRowBackfillSkipsAFilledHiddenAndARunWithoutOutput(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"raw_output", "transcript"}))
 	expectNoKeeps(mock)
 	mock.ExpectRollback()
-	if changed, err := regateRow(db, regateCats, regateNames, 5, 7, true); err != nil || changed {
+	if changed, err := regateRow(db, regateCats, 5, 7, true); err != nil || changed {
 		t.Fatalf("no raw_output: got %v %v", changed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -264,8 +264,8 @@ func entryKeeps(db *sql.DB, v Video) (map[EntryKey]time.Time, error) {
 
 // EntryKeepsAll is the bounds of the entries (JSON of the row's entries) whose latest ai-item
 // verdict keeps them, whenever decided: the entries ai regate pins in the truth layer.
-func EntryKeepsAll(q querier, videoID int, entries []byte) (map[EntryKey]time.Time, error) {
-	return keepVerdicts(q, videoID, entries, time.Time{})
+func EntryKeepsAll(tx *sql.Tx, videoID int, entries []byte) (map[EntryKey]time.Time, error) {
+	return keepVerdicts(tx, videoID, entries, time.Time{})
 }
 
 // querier is *sql.DB or *sql.Tx.

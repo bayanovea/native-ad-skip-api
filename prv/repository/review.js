@@ -1,5 +1,5 @@
 const { QueryTypes } = require('sequelize');
-const { VERDICTS, splitSheet, validateVerdictBounds } = require('../../lib/review-sheet');
+const { VERDICTS, ITEM_EDGE_SLACK, ITEM_EDGE_MAX, splitSheet, validateVerdictBounds } = require('../../lib/review-sheet');
 const { REVIEWER_MAX } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
@@ -17,6 +17,9 @@ const LOCK_IDLE_HOURS = 12;
 // `important` the default, `optional` a pass to do when there is time.
 const PRIORITIES = ['urgent', 'important', 'optional'];
 const PRIORITY_RANK = `array_position(ARRAY['urgent','important','optional']::text[], b.priority)`;
+// flagged_by text of the below-threshold importer before 2026-10-27, which made sheet items; frozen: it marks the
+// items adoptItem may convert.
+const OLD_BELOW_THRESHOLD_MARK = 'below the publish threshold';
 // item_id is a Postgres INTEGER; anything larger fails in the DB (500), not as input.
 const MAX_ITEM_ID = 2147483647;
 
@@ -558,17 +561,17 @@ module.exports = function createReviewRepository(models, sequelize) {
         },
 
         /**
-         * True when any sheet has an item on `native_id`'s stretch (bounds ± 0.05 s) proposed as `proposed`, or a
-         * sheet item (the old below-threshold importer's cue bounds) that holds it (entryInsideSheetItem).
+         * True when any sheet has an item on `native_id`'s stretch (bounds ± ITEM_EDGE_SLACK) proposed as `proposed`,
+         * or a sheet item (the old below-threshold importer's cue bounds) that holds it (entryInsideSheetItem).
          */
         async hasItemAt({ native_id, start, end, proposed }, { transaction } = {}) {
             const rows = await sequelize.query(
                 `SELECT 1 FROM prv_review_items
                   WHERE native_id = :native_id AND proposed = :proposed
-                    AND (ABS(start - :start) < 0.05 AND ABS("end" - :end) < 0.05
-                         OR kind = 'sheet' AND :start - start > -0.05 AND :start - start < 1.05 AND "end" - :end > -0.05 AND "end" - :end < 1.05)
+                    AND (ABS(start - :start) < :slack AND ABS("end" - :end) < :slack
+                         OR kind = 'sheet' AND start - :start < :slack AND :start - start < :max AND :end - "end" < :slack AND "end" - :end < :max)
                   LIMIT 1`,
-                { replacements: { native_id, start, end, proposed }, type: QueryTypes.SELECT, transaction });
+                { replacements: { native_id, start, end, proposed, slack: ITEM_EDGE_SLACK, max: ITEM_EDGE_MAX }, type: QueryTypes.SELECT, transaction });
             return rows.length > 0;
         },
 
@@ -582,8 +585,8 @@ module.exports = function createReviewRepository(models, sequelize) {
             const rows = await sequelize.query(
                 `UPDATE prv_review_items SET kind = 'ai', video_id = :video_id, start = :start, "end" = :end,
                         flagged_by = COALESCE(flagged_by, '[]'::jsonb) || to_jsonb('adopted: item bounds ' || start || '-' || "end")
-                  WHERE id = :itemId AND kind = 'sheet' AND flagged_by::text LIKE '%below the publish threshold%' RETURNING id`,
-                { replacements: { itemId, video_id, start, end }, type: QueryTypes.SELECT, transaction });
+                  WHERE id = :itemId AND kind = 'sheet' AND flagged_by::text LIKE :mark RETURNING id`,
+                { replacements: { itemId, video_id, start, end, mark: `%${OLD_BELOW_THRESHOLD_MARK}%` }, type: QueryTypes.SELECT, transaction });
             return rows.length > 0;
         },
 

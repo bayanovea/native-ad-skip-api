@@ -11,6 +11,10 @@ import (
 	"odedohbest/video-calculate/ai/detector"
 )
 
+func re(cat, start, end int, conf, source, reason string, rating int) Entry {
+	return Entry{cat, start, end, conf, source, reason, rating}
+}
+
 func pred(cat, conf string, start, end float64) detector.Prediction {
 	return detector.Prediction{Segment: detector.Segment{Category: cat, Confidence: conf}, Start: start, End: end}
 }
@@ -28,27 +32,27 @@ func TestEntriesSplitsServedAndHidden(t *testing.T) {
 		pred("sponsor", "low", 400, 402),           // both: confidence first (the truth layer before the serving filter)
 	}, cats, 5)
 	wantServed := []Entry{
-		{2, 11, 40, "high", "ai", "", 0},
-		{2, 50, 60, "medium", "ai", "", 0},
-		{3, 100, 130, "high", "ai", "", 0},
-		{2, 300, 305, "high", "ai", "", 0},
+		re(2, 11, 40, "high", "ai", "", 0),
+		re(2, 50, 60, "medium", "ai", "", 0),
+		re(3, 100, 130, "high", "ai", "", 0),
+		re(2, 300, 305, "high", "ai", "", 0),
 	}
 	wantHidden := []Entry{
-		{2, 70, 90, "low", "ai", "confidence", 0},
-		{3, 140, 170, "medium", "ai", "confidence", 0},
-		{2, 201, 205, "high", "ai", "short", 0},
-		{2, 400, 402, "low", "ai", "confidence", 0},
+		re(2, 70, 90, "low", "ai", "confidence", 0),
+		re(3, 140, 170, "medium", "ai", "confidence", 0),
+		re(2, 201, 205, "high", "ai", "short", 0),
+		re(2, 400, 402, "low", "ai", "confidence", 0),
 	}
 	if !reflect.DeepEqual(served, wantServed) || !reflect.DeepEqual(hidden, wantHidden) {
 		t.Fatalf("got %+v / %+v\nwant %+v / %+v", served, hidden, wantServed, wantHidden)
 	}
 
 	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 200.5, 205.4), pred("sponsor", "high", 300, 305)}, cats, 3)
-	if !reflect.DeepEqual(served, []Entry{{2, 201, 205, "high", "ai", "", 0}, {2, 300, 305, "high", "ai", "", 0}}) || len(hidden) != 0 {
+	if !reflect.DeepEqual(served, []Entry{re(2, 201, 205, "high", "ai", "", 0), re(2, 300, 305, "high", "ai", "", 0)}) || len(hidden) != 0 {
 		t.Fatalf("threshold 3: got %+v / %+v", served, hidden)
 	}
 	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 300, 305)}, cats, 6)
-	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{{2, 300, 305, "high", "ai", "short", 0}}) {
+	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{re(2, 300, 305, "high", "ai", "short", 0)}) {
 		t.Fatalf("threshold 6: got %+v / %+v", served, hidden)
 	}
 
@@ -120,8 +124,8 @@ func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publish(tx, 7, "-1_456000001", 3, []Entry{{2, 11, 40, "high", "ai", "", 0}, {2, 50, 60, "medium", "ai", "", 0}},
-		[]Entry{{2, 70, 90, "low", "ai", "confidence", 0}}); err != nil {
+	if err := publish(tx, 7, "-1_456000001", 3, []Entry{re(2, 11, 40, "high", "ai", "", 0), re(2, 50, 60, "medium", "ai", "", 0)},
+		[]Entry{re(2, 70, 90, "low", "ai", "confidence", 0)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

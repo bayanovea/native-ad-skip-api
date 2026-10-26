@@ -43,10 +43,9 @@ async function main() {
         const ai = createAiRepository(models, sequelize);
         const items = await review.itemsInSheet(sheet);
         if (items.length === 0) throw new Error(`no items in sheet ${sheet}`);
-        const { QueryTypes } = sequelize;
         const categories = new Map((await models.MarkupCategory.findAll()).map((c) => [c.id, c.category]));
 
-        const counts = { matched: 0, applied: 0, unmatched: 0, ai: 0, other: 0, failed: 0 };
+        const counts = { converted: 0, applied: 0, unmatched: 0, ai: 0, other: 0, failed: 0 };
         for (const { id, batch, item_code, native_id, kind } of items) {
             if (kind !== 'sheet') {
                 counts.ai++;
@@ -58,7 +57,7 @@ async function main() {
                     const item = await review.getItemById(id, { transaction });
                     const rows = await sequelize.query(
                         'SELECT video_id, data, hidden FROM prv_ai_video_calculateds WHERE native_id = :native_id FOR UPDATE',
-                        { replacements: { native_id }, type: QueryTypes.SELECT, transaction });
+                        { replacements: { native_id }, type: sequelize.QueryTypes.SELECT, transaction });
                     const found = rows.flatMap((r) => [...r.data, ...r.hidden].map((e) => ({ video_id: r.video_id, e })))
                         .filter(({ e }) => categories.get(e.category_id) === item.proposed && entryInsideSheetItem(e, item));
                     const own = `${item.start}-${item.end}`;
@@ -80,7 +79,7 @@ async function main() {
                         changed = await ai.applyVerdict(adopted, item.verdict.verdict, { from: e, to: adopted.effective_bounds, transaction });
                         what = `${item.verdict.verdict} ${changed ? 'applied' : 'unchanged'}`;
                     }
-                    outcome = changed ? 'applied' : 'matched';
+                    outcome = changed ? 'applied' : 'converted';
                     line = `${item_code}\t${native_id}\t${own} -> video ${video_id} ${e.start}-${e.end} (${e.reason || 'served'})\t${what}`;
                     if (dryRun) throw ROLLBACK;
                 });
@@ -90,11 +89,10 @@ async function main() {
                     line = `${item_code}\t${native_id}\tfailed: ${err.message}`;
                 }
             }
-            if (outcome === 'applied') counts.matched++;
             counts[outcome]++;
             console.log(line);
         }
-        console.log(`${dryRun ? 'dry run: ' : ''}${items.length} items: ${counts.matched} matched, ${counts.applied} applied, `
+        console.log(`${dryRun ? 'dry run: ' : ''}${items.length} items: ${counts.converted + counts.applied} matched, ${counts.applied} applied, `
             + `${counts.unmatched} unmatched, ${counts.ai} already ai items, ${counts.other} not below-threshold items, ${counts.failed} failed`);
         if (counts.failed) process.exitCode = 1;
     } finally {

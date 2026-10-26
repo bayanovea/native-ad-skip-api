@@ -28,19 +28,15 @@ func regate(db *sql.DB, minSeconds int, backfill bool) error {
 	if err != nil {
 		return err
 	}
-	names := map[int]string{}
-	for name, id := range cats {
-		names[id] = name
-	}
 	ids, err := aiRowIDs(db)
 	if err != nil {
 		return err
 	}
 	changed, failed := 0, 0
 	for _, id := range ids {
-		ok, err := regateRow(db, cats, names, minSeconds, id, backfill)
+		ok, err := regateRow(db, cats, minSeconds, id, backfill)
 		if err != nil {
-			log.Printf("ai regate: %d failed: %v", id, err)
+			log.Printf("ai regate: video %d failed: %v", id, err)
 			failed++
 			continue
 		}
@@ -74,7 +70,7 @@ func aiRowIDs(db *sql.DB) ([]int, error) {
 
 // regateRow regates one row in its own transaction, under the vote handlers' lock
 // order (video_calculateds, then the AI row); it writes only when an entry moved.
-func regateRow(db *sql.DB, cats map[string]int, names map[int]string, minSeconds, videoID int, backfill bool) (bool, error) {
+func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfill bool) (bool, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return false, err
@@ -109,7 +105,7 @@ func regateRow(db *sql.DB, cats map[string]int, names map[int]string, minSeconds
 	if err != nil {
 		return false, fmt.Errorf("keep verdicts: %w", err)
 	}
-	served, hid, in, moved := place(data, hidden, pinned, names, minSeconds)
+	served, hid, in, moved := place(data, hidden, pinned, cats, minSeconds)
 	if !moved && added == 0 {
 		return false, nil
 	}
@@ -133,7 +129,7 @@ func regateRow(db *sql.DB, cats map[string]int, names map[int]string, minSeconds
 		return false, err
 	}
 	out := len(data) + in - len(served)
-	log.Printf("ai regate: %d %d served, %d hidden (+%d −%d), %d backfilled", videoID, len(served), len(hid), in, out, added)
+	log.Printf("ai regate: video %d: %d served, %d hidden (+%d -%d), %d backfilled", videoID, len(served), len(hid), in, out, added)
 	return true, nil
 }
 
@@ -143,7 +139,11 @@ func regateRow(db *sql.DB, cats map[string]int, names map[int]string, minSeconds
 // is any change (a hidden entry whose reason changed too). An entry leaving data drops
 // its rating: hidden ratings are not maintained. Served entries never overlap (applyVerdict
 // refuses that), so a hidden one overlapping a served one stays where it is.
-func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, names map[int]string, minSeconds int) (served, hid []Entry, in int, moved bool) {
+func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, categories map[string]int, minSeconds int) (served, hid []Entry, in int, moved bool) {
+	names := map[int]string{}
+	for name, id := range categories {
+		names[id] = name
+	}
 	served, hid = []Entry{}, []Entry{}
 	for i, e := range append(append([]Entry{}, data...), hidden...) {
 		wasServed := i < len(data)

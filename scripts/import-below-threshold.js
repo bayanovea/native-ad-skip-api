@@ -18,7 +18,7 @@
 
 const { splitSheet } = require('../lib/review-sheet');
 const { scriptSequelize } = require('../lib/script-db');
-const { MIN_SEGMENT_SECONDS } = require('../lib/ai-rules');
+const { MIN_SEGMENT_SECONDS, HIDDEN_REASONS } = require('../lib/ai-rules');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
 const { PRIORITIES } = createReviewRepository;
@@ -78,7 +78,7 @@ async function main() {
             { type: sequelize.QueryTypes.SELECT }
         );
         const categories = new Map((await models.MarkupCategory.findAll()).map((c) => [c.id, c.category]));
-        const reasons = opts.minSeconds < MIN_SEGMENT_SECONDS ? ['confidence', 'short'] : ['confidence'];
+        const reasons = opts.minSeconds < MIN_SEGMENT_SECONDS ? [HIDDEN_REASONS.CONFIDENCE, HIDDEN_REASONS.SHORT] : [HIDDEN_REASONS.CONFIDENCE];
         const candidates = [];
         for (const row of rows) {
             for (const e of row.hidden) {

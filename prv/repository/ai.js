@@ -1,7 +1,7 @@
 const { QueryTypes } = require('sequelize');
 const { voteRating } = require('../../lib/segment-rating');
 const { ReviewInputError, KEEP_VERDICTS } = require('./review');
-const { MIN_SEGMENT_SECONDS } = require('../../lib/ai-rules');
+const { MIN_SEGMENT_SECONDS, HIDDEN_REASONS } = require('../../lib/ai-rules');
 
 // A prv video id (`<owner>_<id>`, owner negative for a community); anything else is never queued for `ai detect`
 // (ai/pipeline/queue.go nativeIDRegex is the same pattern).
@@ -9,6 +9,8 @@ const PRV_NATIVE_ID = /^-?\d+_\d+$/;
 // A keep verdict never restores a row withdrawn by `admin` (the operator's switch).
 const RESTORABLE_BY = new Set(['judge', 'review']);
 const byStart = (a, b) => a.start - b.start;
+// An entry without what its place derives: `rating` (served only) and `reason` (hidden only).
+const stripDerived = ({ rating, reason, ...rest }) => rest;
 
 module.exports = function createAiRepository(models, sequelize) {
     // Every entry of the row has a keep verdict as its latest one, decided after the row was withdrawn.
@@ -71,13 +73,12 @@ module.exports = function createAiRepository(models, sequelize) {
          * Apply a review verdict on a kind='ai' item to its AI row, under the row's lock in the caller's
          * `transaction`. `from` is the item's effective bounds before this verdict (the entry it refers to, in `data`
          * or `hidden`), `to` the verdict's bounds (default `from`): not_ad / unclear move the entry at `from` to
-         * `hidden` with reason `review`, at `to` (the page passes `from`; the adopt script the bounds an earlier keep
-         * set), and the row is withdrawn by `review` when that empties `data`; sponsor /
-         * self_promotion keep it, or put it back, with that category at `to` (`source: 'review'` once moved), in
-         * `data` with the rating of the votes on the new category and bounds, or in `hidden` with reason `short` when
-         * under MIN_SEGMENT_SECONDS. Bounds overlapping another served entry are refused (ReviewInputError, nothing
-         * written). A row withdrawn by judge or review is served again once every served entry has a keep verdict.
-         * Idempotent; returns true when the row changed.
+         * `hidden` with reason `review`, at `to`, and the row is withdrawn by `review` when that empties `data`;
+         * sponsor / self_promotion keep it, or put it back, with that category at `to` (`source: 'review'` once
+         * moved), in `data` with the rating of the votes on the new category and bounds, or in `hidden` with reason
+         * `short` when under MIN_SEGMENT_SECONDS. Bounds overlapping another served entry are refused
+         * (ReviewInputError, nothing written). A row withdrawn by judge or review is served again once every served
+         * entry has a keep verdict. Idempotent; returns true when the row changed.
          */
         async applyVerdict(item, verdict, { from = item, to = from, transaction }) {
             if (item.kind !== 'ai' || item.video_id == null) return false;
@@ -89,35 +90,35 @@ module.exports = function createAiRepository(models, sequelize) {
             const inHidden = inData === -1 ? row.hidden.findIndex(atFrom) : -1;
             const old = inData !== -1 ? row.data[inData] : row.hidden[inHidden];
             const others = { data: row.data.filter((_, i) => i !== inData), hidden: row.hidden.filter((_, i) => i !== inHidden) };
-            let next = null;
+            let toData = null, toHidden = null;
             if (KEEP_VERDICTS.has(verdict)) {
                 const category = await models.MarkupCategory.findOne({ where: { category: verdict }, transaction });
                 // An entry put back at bounds a reviewer set is theirs, not the detector's.
                 const base = old || { start: from.start, end: from.end, source: from.start === item.start && from.end === item.end ? 'ai' : 'review' };
                 const moved = to.start !== base.start || to.end !== base.end;
                 const same = !moved && base.category_id === category.id;
-                const { rating: _, reason: __, ...rest } = base;
-                const entry = { ...rest, category_id: category.id, start: to.start, end: to.end, ...(moved && { source: 'review' }) };
+                const alreadyShort = same && old.reason === HIDDEN_REASONS.SHORT;
+                const alreadyServed = same && inData !== -1;
+                const entry = { ...stripDerived(base), category_id: category.id, start: to.start, end: to.end, ...(moved && { source: 'review' }) };
                 // Items find their entry by bounds: a keep onto a hidden entry's exact bounds takes its place.
                 others.hidden = others.hidden.filter(e => e.start !== to.start || e.end !== to.end);
                 if (to.end - to.start < MIN_SEGMENT_SECONDS) {
-                    if (!(same && old.reason === 'short')) next = { hidden: { ...entry, reason: 'short' } };
-                } else if (!(same && inData !== -1)) {
+                    if (!alreadyShort) toHidden = { ...entry, reason: HIDDEN_REASONS.SHORT };
+                } else if (!alreadyServed) {
                     if (others.data.some(e => e.start < to.end && to.start < e.end)) {
                         throw new ReviewInputError(`bounds ${to.start}-${to.end} overlap another AI segment of the video`, 'bounds_overlap');
                     }
                     const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: to.start, end: to.end }, { transaction });
-                    next = { data: { ...entry, ...(rating ? { rating } : {}) } };
+                    toData = { ...entry, ...(rating ? { rating } : {}) };
                 }
-            } else if (old && old.reason !== 'review') {
-                const { rating: _, reason: __, ...rest } = old;
+            } else if (old && old.reason !== HIDDEN_REASONS.REVIEW) {
                 const moved = to.start !== old.start || to.end !== old.end;
-                next = { hidden: { ...rest, start: to.start, end: to.end, ...(moved && { source: 'review' }), reason: 'review' } };
+                toHidden = { ...stripDerived(old), start: to.start, end: to.end, ...(moved && { source: 'review' }), reason: HIDDEN_REASONS.REVIEW };
             }
-            let changed = next !== null;
-            const data = next ? (next.data ? [...others.data, next.data].sort(byStart) : others.data) : row.data;
+            let changed = toData !== null || toHidden !== null;
+            const data = !changed ? row.data : toData ? [...others.data, toData].sort(byStart) : others.data;
             if (changed) {
-                const hidden = next.hidden ? [...others.hidden, next.hidden].sort(byStart) : others.hidden;
+                const hidden = toHidden ? [...others.hidden, toHidden].sort(byStart) : others.hidden;
                 await row.update({ data, hidden, updated_at: sequelize.fn('NOW') }, { transaction });
             }
 

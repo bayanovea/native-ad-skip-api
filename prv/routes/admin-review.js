@@ -1082,11 +1082,11 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
                 if (!same) {
                     // Read under the batch lock: every verdict on the item, and scripts/adopt-review-items.js
                     // turning it into an ai item, is written under it.
-                    const current = await reviewRepository.getItemById(before.id, { transaction });
+                    const lockedItem = await reviewRepository.getItemById(before.id, { transaction });
                     const from = await reviewRepository.effectiveBounds(before.id, { transaction });
                     await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', bounds, transaction });
-                    if (current.kind === 'ai') {
-                        aiApplied = await aiRepository.applyVerdict(current, body.verdict, { from, to: bounds || from, transaction });
+                    if (lockedItem.kind === 'ai') {
+                        aiApplied = await aiRepository.applyVerdict(lockedItem, body.verdict, { from, to: bounds || from, transaction });
                     }
                 }
                 if (body.track_mismatch !== undefined) {

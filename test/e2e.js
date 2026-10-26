@@ -1337,14 +1337,14 @@ test('ai regate: a threshold change moves entries both ways with the votes’ ra
 
     r = runAi(['regate'], { AI_MIN_SEGMENT_SECONDS: '3' });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 2 served, 1 hidden \\(\\+1 −0\\), 0 backfilled`));
+    assert.match(r.stderr, new RegExp(`ai regate: video ${videoId}: 2 served, 1 hidden \\(\\+1 -0\\), 0 backfilled`));
     let ai = await aiCalculated('-1_456000201');
     assert.deepEqual(ai.data, [{ ...sponsor, rating: 2 }, { ...short, rating: 1 }], 'the 3-s sponsor is served with the vote already on its bounds');
     assert.deepEqual(ai.hidden, [promo], 'self-promotion at medium stays below the confidence rule');
 
     r = runAi(['regate'], { AI_MIN_SEGMENT_SECONDS: '41' });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 0 served, 3 hidden \\(\\+0 −2\\)`));
+    assert.match(r.stderr, new RegExp(`ai regate: video ${videoId}: 0 served, 3 hidden \\(\\+0 -2\\)`));
     ai = await aiCalculated('-1_456000201');
     assert.deepEqual(ai.data, []);
     assert.deepEqual(ai.hidden, [{ ...sponsor, reason: 'short' }, promo, { ...short, reason: 'short' }], 'hidden entries carry no rating');
@@ -1359,7 +1359,7 @@ test('ai regate: a threshold change moves entries both ways with the votes’ ra
     await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = '[]' WHERE native_id = '-1_456000201'`);
     r = runAi(['regate', '--backfill']);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, new RegExp(`ai regate: ${videoId} 1 served, 2 hidden \\(\\+0 −0\\), 2 backfilled`));
+    assert.match(r.stderr, new RegExp(`ai regate: video ${videoId}: 1 served, 2 hidden \\(\\+0 -0\\), 2 backfilled`));
     assert.match(r.stderr, /ai regate: \d+ rows, 1 changed, 0 failed/, 'the other rows have a hidden list: not rebuilt');
     ai = await aiCalculated('-1_456000201');
     assert.deepEqual([ai.data, ai.hidden], [before.data, before.hidden]);
@@ -2204,7 +2204,7 @@ test('ai review hidden: short keep bounds hide the entry (short), longer ones se
     const decided = await aiCalculated(vid);
     const r = runAi(['regate']);
     assert.equal(r.status, 0, r.stderr);
-    assert.doesNotMatch(r.stderr, new RegExp(`ai regate: ${videoId} \\d+ served`));
+    assert.doesNotMatch(r.stderr, new RegExp(`ai regate: video ${videoId}: \\d+ served`));
     const regated = await aiCalculated(vid);
     assert.deepEqual([regated.data, regated.hidden], [decided.data, decided.hidden]);
 
