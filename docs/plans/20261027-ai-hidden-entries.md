@@ -154,10 +154,11 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 - Create: `scripts/adopt-review-items.js <sheet> [--dry-run]`
 - Modify: `prv/repository/review.js` (`insertItems` accepts `kind` / `video_id`, as the judge's INSERT does), `test/e2e.js` (`import-below-threshold:` test), CLAUDE.md (Ops bullet)
 
-- [ ] importer: candidates = `hidden` entries (`reason = 'confidence'`, plus `short` when `--min-seconds` < threshold) of rows with a run; `cues` from the run transcript between the entry's bounds; ai items with `video_id`; `--empty-only` = rows with empty `data`
-- [ ] adopt script: for each `kind = 'sheet'` item of the sheet whose `(native_id, bounds ± 0.05, proposed)` matches a `data` or `hidden` entry of the native_id's AI row: set `kind = 'ai'`, `video_id`, then `applyVerdict` with its latest verdict (`from` = effective bounds); one transaction per item under the batch lock; prints matched / applied / unmatched; `--dry-run`
-- [ ] e2e: the importer creates ai items for the fixture rows' hidden entries; a keep verdict on one serves it; the adopt script on a sheet item created in the test converts and applies
-- [ ] run `make test-unit`, `make test-e2e` — green before task 6
+- [x] importer: candidates = `hidden` entries (`reason = 'confidence'`, plus `short` when `--min-seconds` < threshold) of rows with a run; `cues` from the run transcript between the entry's bounds; ai items with `video_id`; `--empty-only` = rows with empty `data`
+- [x] adopt script: for each `kind = 'sheet'` item of the sheet whose `(native_id, bounds, proposed)` matches a `data` or `hidden` entry of the native_id's AI row: set `kind = 'ai'`, `video_id`, then `applyVerdict` with its latest verdict; one transaction per item under the batch lock; prints matched / applied / unmatched; `--dry-run`
+  - ➕ match = the entry inside the item's bounds by < 1 s at each end, not ± 0.05: the old B-items kept cue times to 0.1 s, entries are rounded inward to whole seconds; the item takes the entry's bounds (`adoptItem`) so `effectiveBounds`, `allKept` and the judge find the entry; `applyVerdict` gets `from` = the entry, `to` = the item's effective bounds (a verdict's bounds, else the entry's)
+- [x] e2e: the importer creates ai items for the fixture rows' hidden entries; a keep verdict on one serves it; the adopt script on a sheet item created in the test converts and applies
+- [x] run `make test-unit`, `make test-e2e` — green before task 6
 
 ### Task 6: dashboard, admin page, metrics
 

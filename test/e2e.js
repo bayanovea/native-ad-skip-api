@@ -1109,13 +1109,18 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.match(await fetchMetrics(), /^calculator_last_success_timestamp_seconds\{provider="ai_detect"\} \d/m);
 });
 
-test('import-below-threshold: the dropped segments become sheet items once, never AI items', async () => {
-    const run = (...args) => spawnSync('node', [`${APP_DIR}/scripts/import-below-threshold.js`, ...args],
-        { env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000 });
-    // -1_456000201: self_promotion at medium (300–320) and a 3-s sponsor (480–483) were dropped; -1_456000206 published empty.
+const runScript = (script, ...args) => spawnSync('node', [`${APP_DIR}/scripts/${script}`, ...args],
+    { env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000 });
+
+test('import-below-threshold: the hidden entries become ai items on their AI row once; a keep verdict serves one', async () => {
+    const run = (...args) => runScript('import-below-threshold.js', ...args);
+    const before = await aiCalculated('-1_456000201');
+    const { video_id: videoId } = before;
+    const { video_id: emptyId } = await aiCalculated('-1_456000206');
+    // -1_456000201: self_promotion at medium (300–320) hidden by confidence, a 3-s sponsor (480–483) as short; -1_456000206 serves nothing.
     let r = run('--dry-run');
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^2 segments below the threshold and at least 5 s, 2 not yet in review \(2 videos\)\nB1\t-1_456000201\t300\t320\tself_promotion\t.*\nB2\t-1_456000206\t20\t30\tsponsor\t/, 'the 3-s sponsor is under the floor');
+    assert.match(r.stdout, /^2 segments below the threshold and at least 5 s, 2 not yet in review \(2 videos\)\nB1\t-1_456000201\t300\t320\tself_promotion\t.*\nB2\t-1_456000206\t20\t30\tsponsor\t/, 'the short sponsor only below the threshold');
     r = run('--dry-run', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 3 not yet in review \(2 videos\)\n/);
@@ -1126,7 +1131,7 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     assert.match(r.stdout, /imported 1 items into below-test \(1\)/);
     let items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test' ORDER BY position`);
     assert.deepEqual(items.map((i) => [i.sheet, i.batch, i.item_code, i.native_id, i.proposed, i.kind, i.video_id]),
-        [['below-test', 'below-test', 'B1', '-1_456000206', 'sponsor', 'sheet', null]]);
+        [['below-test', 'below-test', 'B1', '-1_456000206', 'sponsor', 'ai', emptyId]]);
     assert.deepEqual((await dbQuery(`SELECT reviews_needed, priority, locked_by FROM prv_review_batches WHERE batch = 'below-test'`))[0],
         { reviews_needed: 1, priority: 'optional', locked_by: null });
 
@@ -1138,17 +1143,90 @@ test('import-below-threshold: the dropped segments become sheet items once, neve
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 2 not yet in review \(1 videos\)\nimported 2 items into below-test-2-p1 \(1\), below-test-2-p2 \(1\)/);
     items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'below-test-2' ORDER BY position`);
-    assert.deepEqual(items.map((i) => [i.batch, i.item_code, i.native_id, i.start, i.end, i.proposed, i.link, i.cues]), [
-        ['below-test-2-p1', 'B1', '-1_456000201', 300, 320, 'self_promotion', 'https://example.invalid/video-1_456000201?t=4m58s', 'подписывайтесь на мой телеграм канал\nтам ролики выходят раньше'],
-        ['below-test-2-p2', 'B2', '-1_456000201', 480, 483, 'sponsor', 'https://example.invalid/video-1_456000201?t=7m58s', 'промокод ещё раз в описании'],
+    assert.deepEqual(items.map((i) => [i.batch, i.item_code, i.native_id, i.start, i.end, i.proposed, i.kind, i.video_id, i.link, i.cues]), [
+        ['below-test-2-p1', 'B1', '-1_456000201', 300, 320, 'self_promotion', 'ai', videoId, 'https://example.invalid/video-1_456000201?t=4m58s', 'подписывайтесь на мой телеграм канал\nтам ролики выходят раньше'],
+        ['below-test-2-p2', 'B2', '-1_456000201', 480, 483, 'sponsor', 'ai', videoId, 'https://example.invalid/video-1_456000201?t=7m58s', 'промокод ещё раз в описании'],
     ]);
-    assert.match(items[0].flagged_by[0], /^detect run \d+: self_promotion medium, 20 s, below the publish threshold$/);
+    assert.match(items[0].flagged_by[0], /^detect run \d+: self_promotion medium, 20 s, hidden: confidence$/);
+    assert.match(items[1].flagged_by[0], /^detect run \d+: sponsor high, 3 s, hidden: short$/);
 
     r = run('--sheet', 'below-test-3', '--min-seconds', '0');
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout, '3 segments below the threshold and at least 0 s, 0 not yet in review (0 videos)\n');
+
+    await takeReview('below-test-2-p1');
+    const res = await decideReview({ item_id: items[0].id, verdict: 'self_promotion', reviewer: REVIEWER });
+    assert.deepEqual([res.status, res.body.ai_applied], [201, true], JSON.stringify(res.body));
+    const ai = await aiCalculated('-1_456000201');
+    assert.deepEqual(ai.data.map(({ category_id, start, end, confidence, source }) => [category_id, start, end, confidence, source]),
+        [[cats.prv.sponsor, 30, 70, 'high', 'ai'], [cats.prv.self_promotion, 300, 320, 'medium', 'ai']], 'the keep verdict serves the entry');
+    assert.deepEqual(ai.hidden.map((e) => [e.start, e.reason]), [[480, 'short']]);
+
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = $2, hidden = $3 WHERE video_id = $1`,
+        [videoId, JSON.stringify(before.data), JSON.stringify(before.hidden)]);
     await dbQuery(`DELETE FROM prv_review_items WHERE sheet LIKE 'below-test%'`);
     await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'below-test%'`);
+});
+
+test('adopt-review-items: sheet items on AI entries become ai items at the entries\' bounds and their latest verdicts apply; --dry-run writes nothing', async () => {
+    const before = await aiCalculated('-1_456000201');
+    const { video_id: videoId } = before;
+    const { video_id: emptyId } = await aiCalculated('-1_456000206');
+    const sheet = 'adopt-test';
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1)', [sheet]);
+    // The old importer's bounds: cue times to 0.1 s around the entries' whole seconds.
+    const seed = [['B1', '-1_456000201', 299.6, 320.3, 'self_promotion'], ['B2', '-1_456000201', 480, 483, 'sponsor'],
+        ['B3', '-1_456000201', 100, 110, 'sponsor'], ['B4', '-1_456000206', 19.8, 30, 'sponsor'], ['B5', '-1_456000201', 30, 70, 'self_promotion']];
+    const ids = {};
+    for (const [i, [code, nativeId, start, end, proposed]] of seed.entries()) {
+        [{ id: ids[code] }] = await dbQuery(`INSERT INTO prv_review_items (sheet, batch, item_code, position, native_id, start, "end", proposed, link)
+            VALUES ($1, $1, $2, $3, $4, $5, $6, $7, 'https://example.invalid/x') RETURNING id`, [sheet, code, i + 1, nativeId, start, end, proposed]);
+    }
+    const verdict = (code, v, minutesAgo, bounds = [null, null]) => dbQuery(
+        `INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source, start, "end", bounds_source, decided_at)
+         VALUES ($1, $2, 'bayanovea', 'import', $3, $4, $5, NOW() - $6 * INTERVAL '1 minute')`,
+        [ids[code], v, ...bounds, bounds[0] == null ? null : 'typed', minutesAgo]);
+    await verdict('B1', 'self_promotion', 3, [302, 318]);
+    await verdict('B1', 'self_promotion', 2); // the latest keep, the bounds of the earlier one stand
+    await verdict('B2', 'sponsor', 3);
+    await verdict('B2', 'not_ad', 2);
+    await verdict('B3', 'sponsor', 2);
+
+    let r = runScript('adopt-review-items.js', sheet, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^B1\t-1_456000201\tvideo \d+ 300-320 \(confidence\)\tself_promotion applied\n/);
+    assert.match(r.stdout, /\nB3\t-1_456000201\t100-110\tunmatched\n/);
+    assert.match(r.stdout, /\nB5\t-1_456000201\t30-70\tunmatched\n/, 'another category is not a match');
+    assert.match(r.stdout, /dry run: 5 items: 3 matched, 2 applied, 2 unmatched, 0 already ai items, 0 failed\n$/);
+    assert.deepEqual((await dbQuery(`SELECT DISTINCT kind FROM prv_review_items WHERE sheet = $1`, [sheet])).map((x) => x.kind), ['sheet']);
+    assert.deepEqual((await aiCalculated('-1_456000201')).data, before.data);
+
+    r = runScript('adopt-review-items.js', sheet);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /\nB2\t-1_456000201\tvideo \d+ 480-483 \(short\)\tnot_ad applied\n/);
+    assert.match(r.stdout, /\nB4\t-1_456000206\tvideo \d+ 20-30 \(confidence\)\tno verdict\n/);
+    assert.match(r.stdout, /\n5 items: 3 matched, 2 applied, 2 unmatched, 0 already ai items, 0 failed\n$/);
+    const items = await dbQuery(`SELECT item_code, kind, video_id, start, "end" FROM prv_review_items WHERE sheet = $1 ORDER BY position`, [sheet]);
+    assert.deepEqual(items.map((i) => [i.item_code, i.kind, i.video_id, i.start, i.end]), [
+        ['B1', 'ai', videoId, 300, 320], ['B2', 'ai', videoId, 480, 483], ['B3', 'sheet', null, 100, 110],
+        ['B4', 'ai', emptyId, 20, 30], ['B5', 'sheet', null, 30, 70]]);
+    const ai = await aiCalculated('-1_456000201');
+    assert.deepEqual(ai.data.map(({ category_id, start, end, source }) => [category_id, start, end, source]),
+        [[cats.prv.sponsor, 30, 70, 'ai'], [cats.prv.self_promotion, 302, 318, 'review']], 'served at the bounds of the latest verdict with bounds');
+    assert.deepEqual(ai.hidden.map((e) => [e.start, e.end, e.reason]), [[480, 483, 'review']]);
+    const page = await getReview(sheet, { item: 'B1', format: 'json' });
+    assert.deepEqual(page.body.item.effective_bounds, { start: 302, end: 318, reviewer: 'bayanovea', source: 'typed' });
+
+    r = runScript('adopt-review-items.js', sheet);
+    assert.match(r.stdout, /5 items: 0 matched, 0 applied, 2 unmatched, 3 already ai items, 0 failed\n$/, 'idempotent');
+
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = $2, hidden = $3 WHERE video_id = $1`,
+        [videoId, JSON.stringify(before.data), JSON.stringify(before.hidden)]);
+    await dbQuery('DELETE FROM prv_review_items WHERE sheet = $1', [sheet]);
+    await dbQuery('DELETE FROM prv_review_batches WHERE batch = $1', [sheet]);
+    r = runScript('adopt-review-items.js', sheet);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /no items in sheet adopt-test/);
 });
 
 test('ai regate: a threshold change moves entries both ways with the votes’ rating; --backfill fills an emptied hidden from the run', async () => {
@@ -1986,7 +2064,7 @@ test('ai review hidden: short keep bounds hide the entry (short), longer ones se
     const below = [[self, 300, 320, 'medium', 'self_promotion'], [sp, 400, 410, 'low', 'sponsor']];
     await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = $2 WHERE video_id = $1`, [videoId, JSON.stringify(below.map(
         ([category_id, start, end, confidence]) => ({ category_id, start, end, confidence, source: 'ai', reason: 'confidence' })))]);
-    // Items on the hidden entries, as scripts/import-below-threshold.js will create them.
+    // Items on the hidden entries, as scripts/import-below-threshold.js creates them.
     const items = [];
     for (const [i, [, start, end, , proposed]] of below.entries()) {
         items.push((await dbQuery(`INSERT INTO prv_review_items (sheet, batch, item_code, position, native_id, start, "end", proposed, link, kind, video_id)

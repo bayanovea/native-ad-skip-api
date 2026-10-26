@@ -499,7 +499,9 @@ module.exports = function createReviewRepository(models, sequelize) {
         /**
          * Insert items of `sheet` into its part `batch`, keeping any item code
          * the sheet already has (ON CONFLICT DO NOTHING). Returns the codes split
-         * into `{ inserted, present }`. Used by scripts/import-review-sheet.js.
+         * into `{ inserted, present }`. An item may carry `kind` / `video_id` (an ai
+         * item on an AI row's entry, scripts/import-below-threshold.js); default a sheet item.
+         * Used by scripts/import-review-sheet.js.
          */
         async insertItems(sheet, batch, items, { transaction } = {}) {
             const inserted = [];
@@ -510,8 +512,8 @@ module.exports = function createReviewRepository(models, sequelize) {
                     // the column default existed has none (NOT NULL fails
                     // before ON CONFLICT is considered).
                     `INSERT INTO prv_review_items
-                        (sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, created_at)
-                     VALUES (:sheet, :batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, CURRENT_TIMESTAMP)
+                        (sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, kind, video_id, created_at)
+                     VALUES (:sheet, :batch, :item_code, :position, :native_id, :start, :end, :proposed, :cues, :link, :flagged_by, :kind, :video_id, CURRENT_TIMESTAMP)
                      ON CONFLICT ((COALESCE(sheet, batch)), item_code) DO NOTHING
                      RETURNING id`,
                     {
@@ -527,6 +529,8 @@ module.exports = function createReviewRepository(models, sequelize) {
                             cues: it.cues,
                             link: it.link,
                             flagged_by: JSON.stringify(it.flagged_by),
+                            kind: it.kind || 'sheet',
+                            video_id: it.video_id ?? null,
                         },
                         type: QueryTypes.SELECT,
                         transaction,
@@ -539,18 +543,40 @@ module.exports = function createReviewRepository(models, sequelize) {
 
         /**
          * Every item of `sheet`, in whichever part, by position, as `{ id, batch,
-         * item_code, native_id, start, end, proposed, has_verdict }` — raw rows for
+         * item_code, native_id, start, end, proposed, kind, has_verdict }` — raw rows for
          * the importer's identity check, no blind rule (flagged_by is not selected).
          */
         itemsInSheet(sheet, { transaction } = {}) {
             return sequelize.query(
-                `SELECT i.id, i.batch, i.item_code, i.native_id, i.start, i."end", i.proposed,
+                `SELECT i.id, i.batch, i.item_code, i.native_id, i.start, i."end", i.proposed, i.kind,
                         ${IS_DECIDED} AS has_verdict
                    FROM prv_review_items i
                   WHERE COALESCE(i.sheet, i.batch) = :sheet
                   ORDER BY i.position, i.id`,
                 { replacements: { sheet }, type: QueryTypes.SELECT, transaction }
             );
+        },
+
+        /** True when any sheet has an item on `native_id`'s stretch (bounds ± 0.05 s) proposed as `proposed`. */
+        async hasItemAt({ native_id, start, end, proposed }, { transaction } = {}) {
+            const rows = await sequelize.query(
+                `SELECT 1 FROM prv_review_items
+                  WHERE native_id = :native_id AND proposed = :proposed AND ABS(start - :start) < 0.05 AND ABS("end" - :end) < 0.05 LIMIT 1`,
+                { replacements: { native_id, start, end, proposed }, type: QueryTypes.SELECT, transaction });
+            return rows.length > 0;
+        },
+
+        /**
+         * Turn sheet item `itemId` into an ai item on the entry of AI row `video_id` at `start`–`end` (its own
+         * bounds become the entry's, so verdicts find it as the page's do). Returns false when it is not a sheet item.
+         * Used by scripts/adopt-review-items.js.
+         */
+        async adoptItem(itemId, { video_id, start, end }, { transaction } = {}) {
+            const rows = await sequelize.query(
+                `UPDATE prv_review_items SET kind = 'ai', video_id = :video_id, start = :start, "end" = :end
+                  WHERE id = :itemId AND kind = 'sheet' RETURNING id`,
+                { replacements: { itemId, video_id, start, end }, type: QueryTypes.SELECT, transaction });
+            return rows.length > 0;
         },
 
         /**
