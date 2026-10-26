@@ -2,7 +2,7 @@
 
 ## Overview
 
-Today `ai detect` keeps only the segments that pass the publish rules (`accepted()` confidence thresholds, ≥ 5 s after inward rounding) in `prv_ai_video_calculateds.data`; the rest exists only inside `prv_ai_runs.raw_output`. A verdict with bounds shorter than 5 s is refused on the review page, and the below-threshold sheets (`B<n>` items) are `kind = 'sheet'`, so an assessor's "this is an ad" on a dropped segment changes nothing for viewers.
+Before this change `ai detect` kept only the segments that pass the publish rules (`accepted()` confidence thresholds, ≥ 5 s after inward rounding) in `prv_ai_video_calculateds.data`; the rest existed only inside `prv_ai_runs.raw_output`. A verdict with bounds shorter than 5 s was refused on the review page, and the below-threshold sheets (`B<n>` items) were `kind = 'sheet'`, so an assessor's "this is an ad" on a dropped segment changed nothing for viewers.
 
 Owner's decisions (2026-10-27):
 
@@ -58,24 +58,24 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 
 `data` never carries `reason`. `servesAi`, the vote handlers, `--recompute-ratings`, the judge, restore (`allKept`) and every "served" dashboard panel keep reading `data` unchanged. Ratings: an entry entering `data` gets its rating from the votes on its bounds (`WithVoteRatings` in Go, `voteRating` in Node); ratings on `hidden` entries are not maintained (no segment is served there).
 
-**Pinning.** An entry with a keep verdict is pinned in the truth layer: `ai regate` never moves it to `confidence`, and a `review` entry never comes back by rules. The length rule is not pinned: it moves any entry. Pinned = the entry's bounds appear in the judge's `entryKeeps` set (latest verdict of an ai item at its effective bounds is a keep), without the `decided_at > judged_at` condition; the Go side gets `entryKeepsAll()` next to it.
+**Pinning.** An entry with a keep verdict is pinned in the truth layer: `ai regate` never moves it to `confidence`, and a `review` entry never comes back by rules. The length rule is not pinned: it moves any entry. Pinned = the entry's bounds appear in the judge's `entryKeeps` set (latest verdict of an ai item at its effective bounds is a keep), without the `decided_at > judged_at` condition: `judge.EntryKeepsAll()` in `ai/judge/signals.go`, sharing the keep query with `entryKeeps`, so regate and the judge cannot disagree on what a keep is.
 
 **Verdicts** (`applyVerdict`, now over `data ∪ hidden`, the item's entry found by `from` bounds in either array):
 - `not_ad` / `unclear`: the entry moves to `hidden` with `reason: 'review'` (was: deleted). The row is withdrawn by `review` when `data` becomes empty, as today.
 - keep (`sponsor` / `self_promotion`) at `to` bounds: the entry takes the verdict's category and bounds (`source: 'review'` when moved) and goes to `data` when `to.end − to.start ≥ AI_MIN_SEGMENT_SECONDS`, else to `hidden` with `reason: 'short'`. Overlap check against `data` only (hidden entries never reach a player). A keep verdict never withdraws a row; a row whose only entry went `short` serves nothing (like stage 9) but is not withdrawn. Restore of a `judge` / `review` row stays: every `data` entry kept.
 - `ai_applied` stays true when either array changed.
 
-**Short bounds on the page**: `validateVerdictBounds` keeps returning `short` so the page can warn, but the server and `recordVerdict` accept it; `short` moves from the error list to a warning under the inputs ("кусок короче N с: сохраним, но зрителю не покажем, пока порог не изменится"), with the threshold rendered into `STATE`. Gold export (`export-review-verdicts.sh`) is unaffected: short bounds are ordinary `gold_missing` bounds.
+**Short bounds on the page**: `validateVerdictBounds(bounds, minSeconds = 5)` keeps returning `short` so the page can warn, but the server and `recordVerdict` accept it; `short` moves from the error list to a warning (`warn_bounds_short`, live under the inputs and in the save flash), with the threshold in `STATE.min_segment_seconds` and the item JSON's `min_segment_seconds`. The rule is one line in `bounds_hint` and the onboarding's bounds section; the "How to decide" rules card is about where the boundary is and stays as it was. Gold export (`export-review-verdicts.sh`) is unaffected: short bounds are ordinary `gold_missing` bounds.
 
 **`ai regate`** (new subcommand, run by hand after a threshold change, like `--recompute-ratings`; also what the backfill ends with): for every AI row in any state, in its own transaction, under the row's `FOR UPDATE` and the `video_calculateds` lock (the vote handlers' order): recompute each entry's place with the current `accepted()` and threshold, pinned entries exempt from the confidence rule, `review` entries never moved; entries entering `data` get their vote rating; `data` re-sorted by `start`; a row is written only when something moved; log `ai regate: <video_id> <n> served, <m> hidden (+a −b)` per changed row and a summary line; no heartbeat. Withdrawn rows are regated too (their `data` is served again on restore).
 
 **Backfill** (`ai regate --backfill`, once, before the first regate on prod): for rows whose `hidden` is empty and whose run has an object `raw_output` and a transcript, rebuild every segment the way `finish()` does (`requestFormat.Apply(cues)`, `detector.Resolve`, inward rounding) and put those not in `data` (by category, bounds) into `hidden` with the reason the current rules give (`confidence` first, else `short`). Entries removed by a `not_ad` verdict before this change are in neither array; backfill re-adds them from `raw_output` only if they fail the rules, which cannot happen for an entry that was once published, so none is resurrected. Idempotent: a second run finds no empty `hidden` to fill.
 
-**Below-threshold review** becomes an AI-row review: `scripts/import-below-threshold.js` reads `hidden` entries with `reason = 'confidence'` (and `short` only with `--min-seconds` below the threshold) and creates `kind = 'ai'` items with `video_id`, so their verdicts go through `applyVerdict`; dedupe by `(native_id, bounds, category)` stays. The 80 decided `kind = 'sheet'` items of `ai-below-threshold-2026-10-24` are adopted by a one-off script that turns a sheet item matching an entry of the native_id's AI row into an ai item and re-applies its latest verdict; the owner runs it (62 confirmed `self_promotion medium` would start serving; see Post-Completion).
+**Below-threshold review** becomes an AI-row review: `scripts/import-below-threshold.js` reads `hidden` entries with `reason = 'confidence'` (and `short` only with `--min-seconds` below the threshold) and creates `kind = 'ai'` items with `video_id` at the entry's bounds, so their verdicts go through `applyVerdict`; dedupe by `(native_id, bounds, category)` stays (`reviewRepository.hasItemAt`). The 80 decided `kind = 'sheet'` items of `ai-below-threshold-2026-10-24` are adopted by `scripts/adopt-review-items.js`: a sheet item matches the one entry of its category in the native_id's AI row (`data` or `hidden`) that sits inside the item's bounds by < 1 s at each end (the old B-items kept cue times to 0.1 s, entries are rounded inward to whole seconds, so ± 0.05 would match nothing); the item takes the entry's bounds (`reviewRepository.adoptItem`: `kind`, `video_id`, `start` / `end`), so `effectiveBounds`, `allKept` and the judge find the entry, then its latest verdict goes through `applyVerdict` with `from` = the entry, `to` = the item's effective bounds. The owner runs it (62 confirmed `self_promotion medium` would start serving; see Post-Completion).
 
 **Judge**: unchanged in logic; it sees `data` only. New items on hidden entries sit outside `data`, so `entryKeeps` / `allKept` ignore them until a keep verdict moves the entry in. `ai_review_open` now also counts open below-threshold ai items.
 
-**Dashboard**: the "misses" panels read `jsonb_array_length(hidden)` instead of recomputing from `raw_output`; a new stat pair next to "segments ready": hidden segments by reason; the admin page's AI block lists hidden entries greyed with their reason.
+**Dashboard**: the "misses" table and the old "first answer" panel read `data` / `hidden` instead of recomputing from `raw_output` (the latter renamed "Результат разметки сейчас": it shows the current split, not the model's first answer); a new stat "Скрытых сегментов: почему" (by reason, rows not withdrawn) next to "segments ready"; funnel stage 9 reads "ответ без отдаваемых сегментов". No `ai_hidden_segments` Prometheus gauge: the Postgres stat shows the current state and nothing needs its history yet. The admin page's AI block lists hidden entries greyed with their reason in a second table.
 
 ## Technical Details
 
@@ -113,7 +113,7 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 
 **Files:**
 - Create: `ai/pipeline/regate.go`, `ai/pipeline/regate_test.go`
-- Modify: `prv/commands/ai/main.go` (usage), `ai/judge/signals.go` (`entryKeepsAll()` shared; or move the keep query to a small package both import)
+- Modify: `prv/commands/ai/main.go` (usage), `ai/judge/signals.go` (`EntryKeepsAll()`, keep query shared with `entryKeeps`)
 - Modify: `test/e2e.js`, CLAUDE.md (Commands, Ops)
 
 - [x] `Regate(cfg, backfill bool)`: list AI rows; per row one transaction: `video_calculateds` lock (`lockVideoCalculated`), AI row `FOR UPDATE`, read `data`, `hidden`, pinned set
@@ -138,7 +138,7 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 ### Task 4: review page: short bounds as a warning, threshold in `STATE`
 
 **Files:**
-- Modify: `prv/routes/admin-review.js` (`readBounds()`, the save flow, `STATE.minSegmentSeconds`, hint under the inputs), `prv/locales/review/ru.json`, `prv/locales/review/en.json` (`error_bounds_short` → `warn_bounds_short` with `{seconds}`; `bounds_hint` mentions the rule), `test/i18n.test.js` if keys are listed there
+- Modify: `prv/routes/admin-review.js` (`readBounds()`, the save flow, `STATE.min_segment_seconds`, hint under the inputs), `prv/locales/review/ru.json`, `prv/locales/review/en.json` (`error_bounds_short` → `warn_bounds_short` with `{seconds}`; `bounds_hint` mentions the rule), `test/i18n.test.js` if keys are listed there
 - Modify: `test/e2e.js` (`format=json` exposes `min_segment_seconds`)
 
 - [x] `readBounds()` returns `{bounds, warning}` for `short`; the warning shows live under the inputs and in the save flash; the save goes through
@@ -156,15 +156,15 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 
 - [x] importer: candidates = `hidden` entries (`reason = 'confidence'`, plus `short` when `--min-seconds` < threshold) of rows with a run; `cues` from the run transcript between the entry's bounds; ai items with `video_id`; `--empty-only` = rows with empty `data`
 - [x] adopt script: for each `kind = 'sheet'` item of the sheet whose `(native_id, bounds, proposed)` matches a `data` or `hidden` entry of the native_id's AI row: set `kind = 'ai'`, `video_id`, then `applyVerdict` with its latest verdict; one transaction per item under the batch lock; prints matched / applied / unmatched; `--dry-run`
-  - ➕ match = the entry inside the item's bounds by < 1 s at each end, not ± 0.05: the old B-items kept cue times to 0.1 s, entries are rounded inward to whole seconds; the item takes the entry's bounds (`adoptItem`) so `effectiveBounds`, `allKept` and the judge find the entry; `applyVerdict` gets `from` = the entry, `to` = the item's effective bounds (a verdict's bounds, else the entry's)
+  - match within < 1 s at each end, the item takes the entry's bounds: see Solution Overview → Below-threshold review
 - [x] e2e: the importer creates ai items for the fixture rows' hidden entries; a keep verdict on one serves it; the adopt script on a sheet item created in the test converts and applies
 - [x] run `make test-unit`, `make test-e2e` — green before task 6
 
 ### Task 6: dashboard, admin page, metrics
 
 **Files:**
-- Modify: `grafana/dashboards/ai-pipeline.json` (panels ~2645, ~4092 read `hidden`; new stat "скрытых сегментов" by reason next to "segments ready"; funnel row 9 wording "ответ без отдаваемых сегментов"), `prv/routes/admin.js` (`aiBlock`: hidden entries greyed with reason), `prometheus-wrapper.js` (optional `ai_hidden_segments{reason}` gauge; skip if the Postgres panel is enough)
-- Modify: `test/e2e.js` (admin page shows the hidden table), `test/prometheus-wrapper.test.js` if a gauge is added
+- Modify: `grafana/dashboards/ai-pipeline.json` (panels ~2645, ~4092 read `hidden`; new stat "скрытых сегментов" by reason next to "segments ready"; funnel row 9 wording "ответ без отдаваемых сегментов"), `prv/routes/admin.js` (`aiBlock`: hidden entries greyed with reason)
+- Modify: `test/e2e.js` (admin page shows the hidden table)
 
 - [x] dashboard SQL run against a seeded copy of the schema (as every panel was): all 45 Postgres targets on a throwaway Postgres 16 after `scripts/sync-db.js` + seeded rows; panel 41 renamed "Результат разметки сейчас" (it reads the current `data` / `hidden`, not the first answer); no `ai_hidden_segments` gauge (the Postgres stat is enough)
 - [x] admin page: hidden table under the served one, withdraw link unchanged
@@ -173,17 +173,17 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 ### Task 7: Verify acceptance criteria
 
 - [x] every detector segment of a new detection lands in `data` or `hidden` with a reason; backfill fills old rows; regate moves both ways under the threshold env — `TestEntriesSplitsServedAndHidden`, `TestRegateRow*`, `TestPlace*`; e2e `ai detect: queue → …` (hidden of both fixture rows), `ai regate: a threshold change …`
-- [x] a verdict is the last word: keep on hidden serves (unless short), drop hides for good, regate respects both — e2e `ai review hidden: …` (➕ added an `ai regate` run there: the kept medium self-promotion stays served, the not_ad high sponsor stays hidden, through the real `EntryKeepsAll` SQL), `import-below-threshold:`, `adopt-review-items:`; `TestPlacePinnedEntries…`, `TestPlaceNeverMovesAReviewEntry`
+- [x] a verdict is the last word: keep on hidden serves (unless short), drop hides for good, regate respects both — e2e `ai review hidden: …` (with an `ai regate` run: the kept medium self-promotion stays served, the not_ad high sponsor stays hidden, through the real `EntryKeepsAll` SQL), `import-below-threshold:`, `adopt-review-items:`; `TestPlacePinnedEntries…`, `TestPlaceNeverMovesAReviewEntry`
 - [x] short bounds save with a warning; nothing short is ever served — e2e `review page: bounds from the keyboard: … short ones save with a warning`, `ai review hidden: …` (short keep → `hidden short`, not served, row not withdrawn); every write to `data` checks the threshold (`entries()`, `place()`, `applyVerdict`)
-- [x] `make test-unit`, `go test -mod=vendor ./calculator ./ai/...`, `go vet ./...`, `make test-e2e` — green (locally `./calculator` with `-run 'TestFindMedian|TestCalculateIntervals|TestApplyRatings'`: the `.env` points `TestIntegration` at `host.docker.internal`)
+- [x] `make test-unit`, `go test -mod=vendor ./calculator ./ai/...`, `go vet ./...`, `make test-e2e` — green
 
 ### Task 8: [Final] Documentation
 
-- [ ] CLAUDE.md: AI-first segments (publish, verdicts, regate, hidden reasons), Commands (`ai regate`), Ops (backfill, adopt, threshold change recipe), Models (`AiVideoCalculated.hidden`), Environment Variables (`AI_MIN_SEGMENT_SECONDS`), Dashboard
-- [ ] `docs/ai-first-overview/{ru,en}.html`: two layers, what a verdict does, short bounds; "updated" date; republish both artifacts
-- [ ] `docs/backlog/ai-below-threshold-verdicts.md`: close or rewrite (the verdicts now act; the threshold question moves to "regate with `self_promotion: medium` when the eval agrees")
-- [ ] cleanup pass before commit (residue / transient state / open questions)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] CLAUDE.md: AI-first segments (publish, verdicts, regate, hidden reasons), Commands (`ai regate`), Ops (backfill, adopt, threshold change recipe), Models (`AiVideoCalculated.hidden`), Environment Variables (`AI_MIN_SEGMENT_SECONDS`), Dashboard
+- [x] `docs/ai-first-overview/{ru,en}.html`: two layers, what a verdict does, short bounds; "updated" date; republish both artifacts (artifacts republished by the orchestrator after review)
+- [x] `docs/backlog/ai-below-threshold-verdicts.md`: rewritten (the verdicts now act; open: `self_promotion: medium` in `accepted()` + `ai regate` when the eval agrees)
+- [x] cleanup pass before commit (residue / transient state / open questions)
+- [x] (moved by the orchestrator after the review phases)
 
 ## Post-Completion
 
@@ -193,6 +193,11 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 3. later `scripts/import-below-threshold.js` runs produce ai items directly.
 4. a threshold change = set `AI_MIN_SEGMENT_SECONDS` (repository variable, deploy) and run `ai regate` once; the judge, votes and GET need nothing.
 
+**Artifacts**: republish the ru / en overview artifacts from `docs/ai-first-overview/` (see CLAUDE.md → AI-first segments).
+
 **Assessors**: one line in the shared chat: short bounds now save; the page says the viewer will not see them.
 
-**Open question**: whether `unclear` should pin like `not_ad` (today both hide with `review`). Decide when the first `unclear` on a served entry shows up in the judge loop.
+## Open questions
+
+- Whether `unclear` should pin like `not_ad` (today both hide with `review`). Decide when the first `unclear` on a served entry shows up in the judge loop.
+- Whether `self_promotion medium` should pass `accepted()`: `docs/backlog/ai-below-threshold-verdicts.md` (a rule change = `accepted()` + `ai regate`).
