@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy the detector packages and the prompt from the eval checkout into ai/.
 # The eval repo is where the detector and its prompts change; this repo takes a copy
-# (eval first, then sync). Run: scripts/sync-detector.sh ~/Web/ad-skip-segment-eval
+# (eval first, then sync). Run: scripts/sync-detector.sh ~/Web/native-ad-skip-eval
 set -euo pipefail
 
 EVAL="${1:?usage: scripts/sync-detector.sh <eval checkout>}"
@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PACKAGES="detector transcript vtt provider ytdlp"
 # Written in this repo, kept across syncs.
 PRODUCT_FILES="detector/fixture.go detector/fixture_test.go detector/apikey_test.go"
-EVAL_MODULE="github.com/bayanovea/ad-skip-segment-eval/internal/"
+EVAL_MODULE="github.com/bayanovea/native-ad-skip-eval/internal/"
 MODULE="odedohbest/video-calculate/ai/"
 
 [ -z "$(git -C "$EVAL" status --porcelain)" ] || { echo "eval checkout $EVAL has uncommitted changes, commit them first" >&2; exit 1; }

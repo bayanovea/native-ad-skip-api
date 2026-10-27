@@ -3,7 +3,7 @@
 ## Overview
 
 Today every skip comes from human markups aggregated by the Go calculator. The eval repo
-(`~/Web/ad-skip-segment-eval`) has a detector that passed the release gate on the held-out set
+(`~/Web/native-ad-skip-eval`) has a detector that passed the release gate on the held-out set
 (SCORE 0.34, 1.6 s/h of content wrongly cut, $0.025 per video with the Batches API; Sonnet 5.5,
 prompt v2.1; v2.2 is current on dev, not yet re-scored on held-out). This plan brings it into the
 product as the primary source of segments:
@@ -30,7 +30,7 @@ correctly, even at the cost of missed ads.
 
 ## Context (from discovery)
 
-- **Detector** (`ad-skip-segment-eval/internal/detector`): pure Go, imports only
+- **Detector** (`native-ad-skip-eval/internal/detector`): pure Go, imports only
   `internal/transcript` + `internal/vtt`; `Client` interface with `Anthropic` (Messages API),
   `AnthropicBatch` (`Submit` / `Wait`, half price, resumable by batch id) and `ClaudeCLI`;
   `Validate`, `Resolve` (cue indices → seconds), `Prompt` from `prompts/v2.2.md`; JSON schema
@@ -404,7 +404,7 @@ Key decisions:
 **Files:**
 - Create: `scripts/sync-detector.sh`, `ai/SOURCE`, `ai/detector/`, `ai/transcript/`, `ai/vtt/`, `ai/provider/`, `ai/ytdlp/`, `ai/prompts/v2.2.md`
 - Modify: `go.mod`, `go.sum`, `vendor/`, `Dockerfile`, `.dockerignore` (if any)
-- Modify: eval repo (`~/Web/ad-skip-segment-eval`): the copied packages must not import `netguard`/`store` (they do not today; add a test there that keeps it so)
+- Modify: eval repo (`~/Web/native-ad-skip-eval`): the copied packages must not import `netguard`/`store` (they do not today; add a test there that keeps it so)
 
 - [x] `scripts/sync-detector.sh <eval checkout>`: copies the five packages and the prompt, rewrites the import path to `odedohbest/video-calculate/ai/…`, drops `apiKeyPath` (env only) and `claudecli.go` (not for the product), writes the eval commit sha to `ai/SOURCE`; refuses on a dirty eval checkout (also drops the eval's `anthropic_test.go`, which tests only the key file; product-owned files `detector/fixture.go`, `fixture_test.go`, `apikey_test.go` survive a sync; ends with `go build ./ai/...` and a warning when the eval's SDK version differs; eval side: `internal/policy/product_imports_test.go`, eval `9393890`)
 - [x] `go.mod`: `go 1.27`, `anthropic-sdk-go` at the eval's version; `go mod vendor` (v1.80.0)

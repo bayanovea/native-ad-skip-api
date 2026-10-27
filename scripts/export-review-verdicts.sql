@@ -1,5 +1,5 @@
 -- Assessor verdicts of one review sheet (all its parts) or one batch as an `adskip review -file` TSV
--- (ad-skip-segment-eval, internal/score/review.go).
+-- (native-ad-skip-eval, internal/score/review.go).
 -- Columns: provider, native_id, category, start, end, verdict, item, note.
 -- :batch names a sheet or a batch (sheet IS NULL on rows of an older image: their sheet is their batch).
 -- One row per decided item (latest verdict wins), ordered by position; open items are skipped.

@@ -179,7 +179,7 @@ selection is stored (the text inside the bounds follows from the transcript).
 ### Task 1: Word timings in the eval's `vtt` package, then sync
 
 **Files:**
-- Modify (eval repo `~/Web/ad-skip-segment-eval`): `internal/vtt/vtt.go`, `internal/vtt/vtt_test.go`
+- Modify (eval repo `~/Web/native-ad-skip-eval`): `internal/vtt/vtt.go`, `internal/vtt/vtt_test.go`
 - Modify (here, via `scripts/sync-detector.sh`): `ai/vtt/*`, `ai/SOURCE`
 - Modify: `test/fixtures/ai/<one native_id>.ru.vtt` (word tags on one fixture)
 
@@ -187,7 +187,7 @@ selection is stored (the text inside the bounds follows from the transcript).
 - [x] eval: `Collapse` keeps the words of the kept tail (drop as many leading words as the prefix had); exact repeats still dropped
 - [x] eval: confirm nothing marshals `vtt.Cue` into the detector prompt (grep `json.Marshal` in `internal/detector`, `internal/transcript`); if something does, exclude `Words` there
 - [x] eval: tests with a rolling-caption sample (word times, tail words after collapse, a cue without tags → no words); `go test ./internal/vtt/...`; commit in the eval
-- [x] here: `scripts/sync-detector.sh ~/Web/ad-skip-segment-eval`, `go build ./ai/...`, `go test -mod=vendor ./ai/...`; one e2e fixture `.ru.vtt` gets word tags
+- [x] here: `scripts/sync-detector.sh ~/Web/native-ad-skip-eval`, `go build ./ai/...`, `go test -mod=vendor ./ai/...`; one e2e fixture `.ru.vtt` gets word tags
 - [x] e2e: after `ai detect`, `prv_ai_runs.transcript->'cues'->0->'words'` is present for that fixture and absent for one without tags; `make test-e2e` passes
 
 ### Task 2: Verdict bounds in the schema, the model and `recordVerdict`

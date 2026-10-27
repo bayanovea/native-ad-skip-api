@@ -1,8 +1,8 @@
 #!/bin/sh
 # Export gold v1 from the local restored dump into the private data root.
-# Secrets (salt, assessor ids) live in ~/.config/ad-skip-segment-eval, never in the repo.
+# Secrets (salt, assessor ids) live in ~/.config/native-ad-skip-eval, never in the repo.
 set -eu
-CFG="$HOME/.config/ad-skip-segment-eval"
+CFG="$HOME/.config/native-ad-skip-eval"
 OUT="${ADSKIP_DATA:-$HOME/Web/data}/gold-v1.jsonl"
 SALT=$(cat "$CFG/salt")
 ASSESSORS=$(sed "s/.*/'&'/" "$CFG/assessors" | paste -sd, -)

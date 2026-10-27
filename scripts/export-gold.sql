@@ -1,4 +1,4 @@
--- Gold v1 export for ad-skip-segment-eval (anonymised, raw per-contributor intervals).
+-- Gold v1 export for native-ad-skip-eval (anonymised, raw per-contributor intervals).
 -- One line per live interval. No merging, no prv_user_id, no raw user ids.
 --
 -- Usage (see scripts/export-gold.sh):

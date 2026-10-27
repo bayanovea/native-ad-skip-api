@@ -7,7 +7,7 @@
 New admin page `/admin/review` where an assessor gives one verdict per AI-flagged segment (sponsor / self_promotion / not_ad / unclear + comment). It replaces the hand-edited markdown review sheets in `~/Web/data/review/`.
 
 - **Problem solved**: verdicts are typed into `.md` files by hand (typos like `not an add`, no user signals, no history, no way to hand the work to other assessors). Grafana's "Асессоры" dashboard is read-only and cannot record a verdict.
-- **Hybrid labelling**: ground truth will combine three sources: AI segments (detector runs in `ad-skip-segment-eval`), user signals (markups, votes, undos), and assessor verdicts. This page shows the first two and records the third.
+- **Hybrid labelling**: ground truth will combine three sources: AI segments (detector runs in `native-ad-skip-eval`), user signals (markups, votes, undos), and assessor verdicts. This page shows the first two and records the third.
 - **Two modes, one page**: now, run locally against the restored prod dump while the owner reviews eval sheets. Later, the same page runs on prod for real assessors.
 - **Integration**: sibling of `/admin/moderation` (`prv/routes/admin-moderation.js`). Same auth, same server-rendered HTML + AJAX style, same append-only decision log idea. prv only.
 
@@ -17,7 +17,7 @@ New admin page `/admin/review` where an assessor gives one verdict per AI-flagge
 - **Wiring**: routes are mounted in `prv/routes/index.js:24-25`; models live in `prv/db/index.js`; Prometheus path normalisation in `server.js:26-29`.
 - **Schema bootstrap**: no migrations; new tables come from `sequelize.sync()`.
 - **Signals available**: `markups` + `markup_time_intervals` (soft-deleted via `deleted_at`), `prv_calculated_segments` (with `rating`) + `votes`, `prv_events_interval_undo`, `prv_events_interval_click` (keyed by `video_native_id`). One `native_id` can map to several `videos` rows (duration split), so signal queries must join through all of them.
-- **Input format** (written by `adskip sheet` in `ad-skip-segment-eval/cmd/adskip/sheet.go`):
+- **Input format** (written by `adskip sheet` in `native-ad-skip-eval/cmd/adskip/sheet.go`):
   - `<sheet>.md`: one block per item: `### C<n>. <native_id> · <mm:ss> – <mm:ss> (<n> s)`, `Proposed as: <cat>[ / <cat>]`, `Link: <url>`, `> <cues>`, `Verdict: <text>`, optional comment lines after it.
   - `<sheet>.key.tsv`: `item, native_id, start, end, categories, runs_flagging` (exact seconds + which runs flagged it; private, blind).
 - **Output format** consumed by `adskip review -file`: TSV `provider, native_id, category, start, end, verdict, item, note`, verdict vocabulary `gold_missing | gold_wrong | definition_unclear | model_wrong | gold_valid` (`internal/score/review.go`). Example: `~/Web/data/review/2026-10-12-blind-v21.tsv`.
@@ -50,7 +50,7 @@ New admin page `/admin/review` where an assessor gives one verdict per AI-flagge
 ## Solution Overview
 
 ```
-ad-skip-segment-eval                     native-ad-skip-api (Postgres)                     ad-skip-segment-eval
+native-ad-skip-eval                     native-ad-skip-api (Postgres)                     native-ad-skip-eval
 adskip sheet → <sheet>.md + key.tsv ──► import-review-sheet.js ──► prv_review_items
                                                                     prv_review_verdicts ◄── /admin/review (assessor)
                                         export-review-verdicts.sh ──► <sheet>.verdicts.tsv ──► adskip review
@@ -303,7 +303,7 @@ Hotkeys (ignored while typing in the comment box, except Ctrl/Cmd+Enter): `1`–
 - Review 5 open items of `2026-10-14-clean` in the page next to the prv player; check times, link offset and signals by eye. Done on prod: owner confirmed the page works.
 - Stop marking in the md once the page works; run the importer once more right before switching so the last md marks are kept. Done: imported straight into prod with all 6 md verdicts, md marking stopped.
 
-**Eval repo (`ad-skip-segment-eval`)**
+**Eval repo (`native-ad-skip-eval`)**
 - Load the export: `adskip review -file <data>/review/2026-10-14-clean.verdicts.tsv -run <run> -date <date>`. The blind sheet comes from several runs, while `-run` takes one; decide there how to record the source run (the key file has the list).
 - Category-conflict sheets (`K<n>`) need their own mapping (verdicts about the human label, so `gold_wrong` / `gold_valid` come into play).
 
