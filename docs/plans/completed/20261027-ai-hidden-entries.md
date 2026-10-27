@@ -180,10 +180,10 @@ Precision-first stays: a hidden segment reaches viewers only through a rule chan
 ### Task 8: [Final] Documentation
 
 - [x] CLAUDE.md: AI-first segments (publish, verdicts, regate, hidden reasons), Commands (`ai regate`), Ops (backfill, adopt, threshold change recipe), Models (`AiVideoCalculated.hidden`), Environment Variables (`AI_MIN_SEGMENT_SECONDS`), Dashboard
-- [x] `docs/ai-first-overview/{ru,en}.html`: two layers, what a verdict does, short bounds; "updated" date; republish both artifacts (artifacts republished by the orchestrator after review)
+- [x] `docs/ai-first-overview/{ru,en}.html`: two layers, what a verdict does, short bounds; "updated" date; republish both artifacts after the deploy (Post-Completion)
 - [x] `docs/backlog/ai-below-threshold-verdicts.md`: rewritten (the verdicts now act; open: `self_promotion: medium` in `accepted()` + `ai regate` when the eval agrees)
 - [x] cleanup pass before commit (residue / transient state / open questions)
-- [ ] move the plan to `docs/plans/completed/` (the orchestrator, after the review phases)
+- [x] move the plan to `docs/plans/completed/`
 
 ## Post-Completion
 
