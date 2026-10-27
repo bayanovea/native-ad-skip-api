@@ -17,5 +17,9 @@ Options: keep words only for runs whose AI row has review items, or move them to
 so dumps and backups can skip them (they can always be refetched from prv while the video is up); compact
 the words' JSON (`{t, text}` per word); retention for runs whose row has no item after N days.
 
-Unknown that settles it: prod disk headroom (not checked) and the size budget of the S3 nightly job
-(`offhost-pg-backup-s3.md`). If the disk has years of room and S3 cost is negligible, this is a `no`.
+Prod disk (2026-10-28): 48 GB, 13 GB used, 35 GB free; the DB is 183 MB, `prv_ai_runs` 160 MB of it (TOAST
+compresses to ~0.28 MB/run, ~40 MB/day at 150 runs, ~80 at the 300 budget), so the disk lasts 1–2 years:
+not the constraint. Most of the 13 GB is Docker (9.5 GB images, one per deploy, 4.6 GB build cache).
+
+Unknown that settles it: the size budget of the S3 nightly job (`offhost-pg-backup-s3.md`), and the 1-year
+horizon at full budget. If S3 cost is negligible, this is a `no`.
