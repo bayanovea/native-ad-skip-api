@@ -12,7 +12,7 @@
 // of proposed categories; --seed makes the pick reproducible.
 
 const fs = require('node:fs');
-const { parseSheet } = require('../lib/review-sheet');
+const { parseSheet, rng, shuffle } = require('../lib/review-sheet');
 
 function usage(msg) {
     if (msg) console.error(msg);
@@ -34,27 +34,6 @@ function parseArgs(argv) {
     }
     if (!opts.codes && !(opts.sample > 0)) usage('give item codes or --sample N');
     return opts;
-}
-
-// Small deterministic PRNG (mulberry32), enough to make a pick reproducible.
-function rng(seed) {
-    let a = seed >>> 0;
-    return () => {
-        a = (a + 0x6D2B79F5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-}
-
-function shuffle(list, random) {
-    const a = [...list];
-    for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(random() * (i + 1));
-        [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
 }
 
 // One item per video, then N of them with the proposed-category mix of the

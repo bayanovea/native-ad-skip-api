@@ -1183,6 +1183,50 @@ test('import-below-threshold: the hidden entries become ai items on their AI row
     assert.match(r.stdout, /^2 segments below the threshold and at least 5 s, 1 not yet in review \(1 videos\)\nB1\t-1_456000201\t300\t320\t/);
 });
 
+test('import-below-threshold --served: a seeded blind sample of served entries, one per video, as urgent ai items; a re-run skips what is in review', async (t) => {
+    const run = (...args) => runScript('import-below-threshold.js', ...args);
+    const a = await aiCalculated('-1_456000201');
+    const b = await aiCalculated('-1_456000206');
+    const setData = (row, data) => dbQuery(`UPDATE prv_ai_video_calculateds SET data = $2 WHERE video_id = $1`, [row.video_id, JSON.stringify(data)]);
+    t.after(async () => {
+        await setData(a, a.data);
+        await setData(b, b.data);
+        await dbQuery(`DELETE FROM prv_review_items WHERE sheet LIKE 'served-%'`);
+        await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'served-%'`);
+    });
+    const entry = (category_id, start, end, source = 'ai') => ({ category_id, start, end, confidence: 'high', source });
+    await setData(a, [...a.data, entry(cats.prv.sponsor, 400, 420, 'review')]);
+    await setData(b, [entry(cats.prv.sponsor, 20, 30), entry(cats.prv.self_promotion, 40, 50)]);
+
+    assert.equal(run('--served', '2', '--empty-only').status, 2);
+    assert.equal(run('--seed', '3').status, 2, '--seed only with --served');
+
+    let r = run('--served', '5', '--seed', '7', '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(run('--served', '5', '--seed', '7', '--dry-run').stdout, r.stdout, 'the seed makes the pick reproducible');
+    const lines = r.stdout.trim().split('\n');
+    assert.equal(lines[0], '2 AI rows serving segments, 2 entries picked, one per video (seed 7)');
+    const picks = lines.slice(1).map((l) => l.split('\t'));
+    assert.deepEqual(picks.map((p) => p[0]), ['S1', 'S2']);
+    assert.deepEqual(picks.map((p) => p[1]).sort(), ['-1_456000201', '-1_456000206'], 'one entry per video');
+    assert.deepEqual(picks.find((p) => p[1] === '-1_456000201').slice(2, 5), ['30', '70', 'sponsor'], 'an entry a verdict moved is never sent again');
+    assert.match(picks[0][5], /^detect run \d+: \w+ high, \d+ s, served$/);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE sheet LIKE 'served-%'`))[0].n, 0, 'dry run writes nothing');
+
+    r = run('--served', '2', '--seed', '7', '--sheet', 'served-test');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /imported 2 items into served-test \(2\)/);
+    const items = await dbQuery(`SELECT * FROM prv_review_items WHERE sheet = 'served-test' ORDER BY position`);
+    assert.deepEqual(items.map((i) => [i.item_code, i.native_id, i.kind, i.video_id]),
+        picks.map(([code, nativeId]) => [code, nativeId, 'ai', nativeId === '-1_456000201' ? a.video_id : b.video_id]));
+    assert.deepEqual((await dbQuery(`SELECT reviews_needed, priority FROM prv_review_batches WHERE batch = 'served-test'`))[0],
+        { reviews_needed: 1, priority: 'urgent' });
+
+    r = run('--served', '5', '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^2 AI rows serving segments, 1 entries picked, one per video \(seed 1\)\nS1\t-1_456000206\t/, 'only the entry not yet in review');
+});
+
 const OLD_BELOW = (cat) => JSON.stringify([`detect run 1: ${cat} low, 10 s, below the publish threshold`]);
 
 async function seedSheetItems(sheet, seed) {
