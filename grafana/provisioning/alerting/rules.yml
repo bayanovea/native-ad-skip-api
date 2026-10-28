@@ -255,3 +255,135 @@ groups:
                 - evaluator:
                     type: gt
                     params: [15]
+      # No series means node-exporter is not scraped: that alerts too.
+      - uid: host-disk-low
+        title: HostDiskLow
+        condition: B
+        for: 10m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: 'host disk {{ $labels.mountpoint }}: under 15% free (Postgres, docker logs and images are not capped)'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: >-
+                min by (mountpoint) (node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
+                / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"})
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.15]
+      - uid: host-memory-low
+        title: HostMemoryLow
+        condition: B
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'host memory: under 10% available for 10 min'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.1]
+      # The probe goes through public DNS, nginx and TLS, which ApiDown (app:3022
+      # directly) bypasses. Unfiltered with a < 1 threshold as ApiDown: no series
+      # means blackbox-exporter is not scraped, which must alert.
+      - uid: probe-failed
+        title: ProbeFailed
+        condition: B
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.instance }} fails the HTTPS probe: nginx down, certificate expired or invalid, DNS, or the app behind it'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: min by (instance) (probe_success{job="blackbox"})
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+      # 1209600 s = 14 days. certbot renews at 30 days left, so this fires only
+      # after two weeks of failed renewals; missing data is ProbeFailed's case.
+      - uid: tls-cert-expiry
+        title: TlsCertExpiry
+        condition: B
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.instance }}: TLS certificate expires in under 14 days, certbot renewal is failing (certbot renew --dry-run on the host)'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: min by (instance) (probe_ssl_earliest_cert_expiry{job="blackbox"}) - time()
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1209600]

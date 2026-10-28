@@ -192,8 +192,9 @@ jobs:
         # Запуск с использованием Docker Compose v2. No 'down': the old stack keeps
         # serving until the pulled image is up, and stays up if the pull failed. --no-build
         # because the service also has 'build:' (for local runs): without it, a missing
-        # image would be built on the host. --force-recreate restarts prometheus/grafana
-        # too, so they pick up the re-extracted bind-mounted configs.
-        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana < /dev/null
+        # image would be built on the host. --force-recreate restarts the monitoring services
+        # too, so they pick up the re-extracted bind-mounted configs; up pulls the exporters' images
+        # when missing.
+        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana node-exporter blackbox-exporter < /dev/null
         EOF
         } | ssh skipper-admin@"$HOST_IP" 'bash -s'

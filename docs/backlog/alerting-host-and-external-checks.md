@@ -1,27 +1,20 @@
 ---
 worth: yes
-where: grafana/provisioning/alerting/rules.yml:1
+where: grafana/provisioning/alerting/policies.yml:3
 added: 2026-10-18
 ---
-# alert on the host and on the monitoring itself (needs an external check)
+# alert on the monitoring itself (needs an external check)
 
-Since 2026-10-19 `grafana/provisioning/alerting/rules.yml` covers the app and the calculator: `ApiDown`,
-`Http5xx`, `HttpLatencyP95`, `CalculatorStale`, `CalculatorFailedVideos`, `StaleMarkups`,
-`LookupNotFoundShare` (CLAUDE.md → Alerting). node_exporter / blackbox_exporter were deliberately not added
-in that batch (no new compose service). What is still blind:
+Since 2026-10-28 the stack also watches the host and the public path: node-exporter and blackbox-exporter in
+`docker-compose.yml`, rules `HostDiskLow`, `HostMemoryLow`, `ProbeFailed`, `TlsCertExpiry` (CLAUDE.md → Alerting).
+What is still blind:
 
-- **Host disk and memory.** Prometheus is capped at 2 GB, Postgres and `docker logs` are not. Needs
-  node_exporter in the compose stack (then `node_filesystem_avail_bytes`, `node_memory_MemAvailable_bytes`)
-  or Timeweb's own VM monitoring with its alerting.
-- **TLS expiry.** certbot renews by itself, but a failed renewal only shows when the cert expires. Needs
-  blackbox_exporter (`probe_ssl_earliest_cert_expiry`) or an external uptime service that checks the cert.
-- **Prometheus / Grafana themselves down.** Nothing in the stack can report that the stack is down; the
-  `ApiDown` rule does not fire when Grafana is the thing that died. Needs an external check (an uptime
-  service hitting `GET /` of the API and Grafana's `/api/health`, or a Grafana Cloud free-tier heartbeat).
+- **Prometheus / Grafana themselves down, or the whole host.** Nothing in the stack can report that the stack is
+  down: no rule fires when Grafana or Prometheus is the thing that died, or when the VM is gone. Needs an external
+  check on the owner's account with an uptime service: `GET https://${API_HOST}/` (200) and Grafana
+  `http://${HOST_IP}:3024/api/health`, alerting to Telegram or mail. The blackbox probe runs from the prod host to its
+  own public IP, so it also never shows what an outside client sees (routing, the Timeweb firewall).
 - **`policies.yml` tuning.** One route (group by alertname, `group_wait 30s`, `group_interval 5m`,
   `repeat_interval 4h`). Revisit once several rules have fired for real: an outage fires `ApiDown`,
-  `HttpLatencyP95`, `CalculatorStale` and `StaleMarkups` within a few minutes and each is its own
+  `HttpLatencyP95`, `CalculatorStale`, `StaleMarkups` and now `ProbeFailed` within a few minutes and each is its own
   Telegram message.
-
-Decide first whether to add exporters (new compose services, more scrape targets) or to lean on Timeweb
-monitoring plus one external uptime check; the external check is needed in both cases.

@@ -56,6 +56,27 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--storage.tsdb.retention.size=2GB'
 
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+    logging: *default-logging
+    pid: host
+    networks:
+      - main-network
+    volumes:
+      - /:/host:ro,rslave
+    command:
+      - '--path.rootfs=/host'
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.29.1
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - main-network
+    volumes:
+      - ./config/blackbox.yml:/etc/blackbox_exporter/config.yml
+
   grafana:
     image: grafana/grafana:12.3.1
     restart: unless-stopped
