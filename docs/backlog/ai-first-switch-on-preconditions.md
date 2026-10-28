@@ -19,7 +19,8 @@ is a half-blind launch:
    (`~/Web/data/audit/drift.jsonl`) puts a > 2 s track shift on about 1 video in 5, the timeline gate refused 5 of 572,
    and 36 of 44 assessor-flagged videos carry `track_mismatch`. Tool: `import-below-threshold.js --served 50 --seed 1`
    (2026-10-28: one served entry per video, ai items `S<n>`, urgent, 1 reviewer; verdicts fix the rows before the flip).
-   Left: run it on prod, the assessors' pass, then read precision and timing off the export.
+   **WAIT — assessors**: imported on prod 2026-10-28 (50 of 287 serving rows) as `ai-served-2026-10-28-p1` / `-p2`
+   (25 each). Then read precision and timing off `export-review-verdicts.sh ai-served-2026-10-28`.
 3. **`AI_FIRST=on` and `AI_JUDGE_ENABLED=on` in one deploy** (repository Variables). With the judge off nothing withdraws
    a row on negative signals except the admin link on `/admin/video`. `AI_JUDGE_AUTO_WITHDRAW` stays at its default (on).
 

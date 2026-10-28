@@ -116,10 +116,10 @@ async function hiddenItems(sequelize, review, categories, opts) {
 
 async function servedItems(sequelize, review, categories, opts) {
     const rows = await sequelize.query(
-        `SELECT c.native_id, c.video_id, c.data, r.id AS run_id, r.transcript -> 'cues' AS cues
-           FROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id
-          WHERE c.withdrawn_at IS NULL AND jsonb_array_length(c.data) > 0
-          ORDER BY c.video_id`,
+        `SELECT native_id, video_id, data, run_id
+           FROM prv_ai_video_calculateds
+          WHERE withdrawn_at IS NULL AND jsonb_array_length(data) > 0
+          ORDER BY video_id`,
         { type: sequelize.QueryTypes.SELECT }
     );
     const random = rng(opts.seed);
@@ -132,8 +132,7 @@ async function servedItems(sequelize, review, categories, opts) {
         for (const e of row.data) {
             if (e.source === 'review') continue;
             const c = {
-                native_id: row.native_id, video_id: row.video_id, kind: 'ai', start: e.start, end: e.end, proposed: categories.get(e.category_id),
-                cues: cuesOver(row.cues, e),
+                native_id: row.native_id, video_id: row.video_id, run_id: row.run_id, kind: 'ai', start: e.start, end: e.end, proposed: categories.get(e.category_id),
                 link: linkAt(row.native_id, e.start - 2),
                 flagged_by: [`detect run ${row.run_id}: ${categories.get(e.category_id)} ${e.confidence}, ${e.end - e.start} s, served`],
             };
@@ -144,7 +143,12 @@ async function servedItems(sequelize, review, categories, opts) {
         videos.add(row.native_id);
     }
     console.log(`${rows.length} AI rows serving segments, ${picked.length} entries picked, one per video (seed ${opts.seed})`);
-    return picked.map((c, i) => ({ ...c, position: i + 1, item_code: `S${i + 1}` }));
+    // Transcripts are ~0.7 MB a run, so only the picked runs' are read.
+    const cues = new Map(picked.length === 0 ? [] : (await sequelize.query(
+        `SELECT id, transcript -> 'cues' AS cues FROM prv_ai_runs WHERE id IN (:ids)`,
+        { replacements: { ids: picked.map((c) => c.run_id) }, type: sequelize.QueryTypes.SELECT }
+    )).map((r) => [r.id, r.cues]));
+    return picked.map(({ run_id, ...c }, i) => ({ ...c, cues: cuesOver(cues.get(run_id), c), position: i + 1, item_code: `S${i + 1}` }));
 }
 
 async function main() {

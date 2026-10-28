@@ -1224,6 +1224,7 @@ test('import-below-threshold --served: a seeded blind sample of served entries, 
         picks.map(([code, nativeId]) => [code, nativeId, 'ai', nativeId === '-1_456000201' ? a.video_id : b.video_id]));
     assert.deepEqual((await dbQuery(`SELECT reviews_needed, priority FROM prv_review_batches WHERE batch = 'served-test'`))[0],
         { reviews_needed: 1, priority: 'urgent' });
+    assert.ok(items.find((i) => i.native_id === '-1_456000201').cues, 'the picked run\'s cues');
 
     r = run('--served', '5', '--dry-run');
     assert.equal(r.status, 0, r.stderr);
