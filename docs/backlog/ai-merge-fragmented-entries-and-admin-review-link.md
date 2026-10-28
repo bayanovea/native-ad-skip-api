@@ -36,7 +36,8 @@ live there), and `S39`'s effective bounds would point at no entry.
    confirm button, `admin-token-in-url.md` applies). Then the owner takes the batch as `bayanovea` on `/admin/review`
    and sets the bounds there, and the merge is a normal verdict with a trail.
 
-Both together ≈ half a day with e2e. Deferred by the owner past the first day of AI-first (watch the signals first);
+Both together ≈ half a day with e2e. Unblocks `ai-owner-verdict-merge-video-100000005.md` (the owner's verdict on that
+video, done by hand after this lands). Deferred by the owner past the first day of AI-first (watch the signals first);
 until then the video serves three pieces, which is correct, only fragmented.
 
 Side note from the same look: on `-212544792_456239490` the segments read ~1 s wider than the cut on each side,
