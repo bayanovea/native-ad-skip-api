@@ -8,11 +8,13 @@ added: 2026-10-28
 **Priority: high** (owner, 2026-10-28). The switch itself is safe (kill switch, no data touched), but flipped today it
 is a half-blind launch:
 
-1. **WAIT — extension release with `duration` in `POST /vote`** (`~/Web/native-ad-skip-v2`). `v` and `views_text` on the GET are
-   out (`feat/views-param`, released 2026-10-28). The vote payload (`shared/api/types.ts` `SegmentVoteDto`) still carries
+1. **CONFIRM — extension release with `duration` in `POST /vote`** (`~/Web/native-ad-skip-v2`). `v` and `views_text` on the GET are
+   out (`feat/views-param`, released 2026-10-28). Before v2.2.3 the vote payload (`shared/api/types.ts` `SegmentVoteDto`) carried
    no `duration`, so on an AI-first video `prv/routes/votes.js:43` looks the segment up in `video_calculateds`: 404 on
    every vote on an AI segment (189 of the 203 ready videos have no human row at all), and the judge never sees
-   `votes_down`, its main signal. Branch `feat/vote-duration` (2026-10-28) adds it, handed to the frontend developer; the API already accepts it.
+   `votes_down`, its main signal. Released in extension v2.2.3 (2026-10-28, `feat/vote-duration` merged); the API already accepts it.
+   **Confirm** on prod after a few days of votes (~4/day): no 400 on `POST /vote` (`isInt` on `duration`, sent unrounded
+   from the player). Nothing stores a vote's `duration`, so the status split is the only server-side trace.
 2. **Blind sheet of ~50 served segments** (`data` entries of published rows). The 628 served segments have no verdict:
    only the hidden below-threshold ones were reviewed (`ai-below-threshold-verdicts.md`), and the held-out gate ran on
    10–60 min videos while the prod queue has streams. Timing is the open question: the drift audit
