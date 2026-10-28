@@ -165,6 +165,7 @@ jobs:
             AI_MIN_SEGMENT_SECONDS "$AI_MIN_SEGMENT_SECONDS" \
             HOST_IP "$HOST_IP" \
             IMAGE_NAME "$IMAGE_NAME" \
+            IMAGE "$IMAGE" \
             IMAGE_TAG "$IMAGE_TAG" \
             GHCR_USER "$GHCR_USER" \
             GHCR_TOKEN "$GHCR_TOKEN"
@@ -196,5 +197,24 @@ jobs:
         # too, so they pick up the re-extracted bind-mounted configs; up pulls the exporters' images
         # when missing.
         docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana node-exporter blackbox-exporter < /dev/null
+
+        # Old app images: keep the KEEP_IMAGES newest and the running one; a failed rm never fails the deploy.
+        # The by-hand rollback (CLAUDE.md → Rollback) needs the image in the local cache; older shas go
+        # through the workflow rollback, which pulls.
+        KEEP_IMAGES=5
+        kept=; removed=; failed=; n=0
+        for row in $(docker image ls "$IMAGE" --format '{{.CreatedAt}}|{{.Tag}}|{{.ID}}' < /dev/null | sort -r | cut -d'|' -f2,3); do
+          tag=${row%|*}
+          if [ "$tag" = "<none>" ]; then
+            ref=${row#*|}
+          elif [ "$tag" = "$IMAGE_TAG" ] || [ "$n" -lt "$KEEP_IMAGES" ]; then
+            n=$((n + 1)); kept="$kept $tag"; continue
+          else
+            ref=$IMAGE:$tag
+          fi
+          if docker image rm "$ref" > /dev/null 2>&1 < /dev/null; then removed="$removed ${ref#"$IMAGE":}"; else failed="$failed ${ref#"$IMAGE":}"; fi
+        done
+        echo "Image cleanup: kept${kept:- none}"
+        echo "Image cleanup: removed${removed:- none}${failed:+; not removed (in use?):$failed}"
         EOF
         } | ssh skipper-admin@"$HOST_IP" 'bash -s'
