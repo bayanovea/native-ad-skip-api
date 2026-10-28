@@ -15,7 +15,11 @@ Check when more runs have accumulated (owner, not urgent): per run, input tokens
 `prv_ai_runs` joined to `prv_ai_videos`; cost split by duration bucket (< 30 min / 30–60 / 60–120 / > 120). If a
 few long streams carry the cost: a duration cap or a per-video token budget in `ai detect` (skip or truncate
 streams > N h, log the reason) and the daily budget stays as is. If the price is uniform: the cue format in prod
-differs from the eval (compare a prod request's token count with the eval's for the same video), and
-`AI_DAILY_BUDGET_VIDEOS` 300 → the $15 alert is reached at a full day.
+differs from the eval (compare a prod request's token count with the eval's for the same video).
 
-Why it matters: the budget and the alert were sized at $0.025–0.033; the week-2 go/no-go wants the price explained.
+2026-10-28 (e4ab81c): prod `AI_DAILY_BUDGET_VIDEOS` 300 → 200 (~$10/day at ~$0.052) and the `AiCostDaily`
+summary re-sized to 1.5× that day. That caps the spend at the observed price; it explains nothing, and if a few
+streams carry the cost, the cap wastes most of the 200 slots on them.
+
+Why it matters: the budget and the alert were first sized at $0.025–0.033 and are now sized to an unexplained
+price; the week-2 go/no-go wants the price explained.
