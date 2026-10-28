@@ -17,9 +17,12 @@ The public dashboard token is not in the repo: `AI_DASHBOARD_TOKEN` or `~/Web/da
 
 Read the output top-down and report in the usual Verdict / Why blocks. What "ok" means:
 
-- **Switches** match the intended stage. Week 1 (since 2026-10-24): `detect_on 1`, `judge_on 0`, `ai_first 0`.
-  Judge on → expect `judgements` to fill and `review_open` to move. `ai_first 1` → `lookups_per_h` gets an
-  `ai` series and `ai_share_24h` a value.
+- **Switches** match the intended stage. Week 1 (2026-10-24 → the flip): `detect_on 1`, `judge_on 0`, `ai_first 0`.
+  Week 2 (after the owner's flip of `AI_FIRST` + `AI_JUDGE_ENABLED`, one deploy): all three 1. Day-after check:
+  `since_tick_s.ai_judge` present and < 7200, `lookups_per_h` has an `ai` series and `ai_share_24h` a value,
+  `judgements` starts filling after the first rows turn 24 h old (a video is judged only on new evidence: votes
+  against, undo, conflicting markups, re-cuts; `ok` by rules is the normal first outcome), `review_open` grows with
+  `ai-judge-<date>` batches, `withdrawn` > 0 is expected and fine (a judge withdraw, restored by keep verdicts).
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
 - **Cost**: `usd_24h` < 15 (AiCostDaily); `runs_24h` ≤ 200 (prod `AI_DAILY_BUDGET_VIDEOS` since 2026-10-28,
