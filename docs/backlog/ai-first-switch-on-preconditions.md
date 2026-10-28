@@ -24,9 +24,9 @@ is a half-blind launch:
 3. **`AI_FIRST=on` and `AI_JUDGE_ENABLED=on` in one deploy** (repository Variables). With the judge off nothing withdraws
    a row on negative signals except the admin link on `/admin/video`. `AI_JUDGE_AUTO_WITHDRAW` stays at its default (on).
 
-Before the flip, the hidden-entries Post-Completion on prod (`ai regate --backfill`, then
-`adopt-review-items.js ai-below-threshold-2026-10-24`; `docs/plans/completed/20261027-ai-hidden-entries.md`), so the judge
-and the votes start on complete rows.
+Done on prod (checked 2026-10-28): the hidden-entries Post-Completion, `ai regate --backfill` and `adopt-review-items.js
+ai-below-threshold-2026-10-24`. All 80 items of that sheet are ai items, and adopt matches only entries in `hidden`, which
+the rows published before 2026-10-27 get from the backfill alone (99 of 477 have them now).
 
 Alternative the owner can still take: a soft launch now on the old clients that do send `v`, accepting the 404 on votes
 until the release.
