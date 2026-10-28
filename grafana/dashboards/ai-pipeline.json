@@ -57,10 +57,10 @@
         "type": "constant",
         "name": "daily_budget",
         "label": "AI_DAILY_BUDGET_VIDEOS",
-        "query": "300",
+        "query": "200",
         "current": {
-          "text": "300",
-          "value": "300"
+          "text": "200",
+          "value": "200"
         },
         "hide": 2,
         "description": "Копия AI_DAILY_BUDGET_VIDEOS из env прода (Grafana env не читает): менять здесь вместе с env."
@@ -579,7 +579,7 @@
           "refId": "A"
         }
       ],
-      "description": "Алерт AiCostDaily срабатывает от $15 (бюджет 300 видео × $0.025 вдвое)."
+      "description": "Алерт AiCostDaily срабатывает от $15 (около 1,5 полного дня: бюджет 200 видео × ~$0.052)."
     },
     {
       "id": 8,
