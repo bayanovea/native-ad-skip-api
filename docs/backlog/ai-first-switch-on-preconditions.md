@@ -28,5 +28,5 @@ Done on prod (checked 2026-10-28): the hidden-entries Post-Completion, `ai regat
 ai-below-threshold-2026-10-24`. All 80 items of that sheet are ai items, and adopt matches only entries in `hidden`, which
 the rows published before 2026-10-27 get from the backfill alone (99 of 477 have them now).
 
-Alternative the owner can still take: a soft launch now on the old clients that do send `v`, accepting the 404 on votes
-until the release.
+Soft launch before the release (old clients that send `v`, votes on AI segments 404 until then): declined by the owner
+on 2026-10-28; the flip waits for items 1 and 2.
