@@ -22,8 +22,13 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai` series and `ai_share_24h` a value.
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
-- **Cost**: `usd_24h` < 15 (AiCostDaily); `runs_24h` ≤ 300 (AI_DAILY_BUDGET_VIDEOS). Real price is ~$0.05/video
-  (2026-10-25: 0.0518; plan assumed 0.025–0.033), so a full 300-video day ≈ $15 = the alert threshold.
+- **Cost**: `usd_24h` < 15 (AiCostDaily); `runs_24h` ≤ 200 (prod `AI_DAILY_BUDGET_VIDEOS` since 2026-10-28,
+  code default 300). Real price is ~$0.05/video (2026-10-25: 0.0518; plan assumed 0.025–0.033), so a full
+  200-video day ≈ $10. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
+  `fetching` rows included, until the rolling window drops under it.
+- **Capacity**: `queue_now` (eligible `seen` + due retries) growing from run to run while `budget_pct` sits
+  at 100 means the eligible inflow exceeds the budget: raise `AI_DAILY_BUDGET_VIDEOS` or the thresholds.
+  A queue that drains between checks is fine. `funnel` = the dashboard's stage bar gauge.
 - **Drop-off**: `dropped_pct` stays low single digits. `retry_table` is mostly `no ru subtitle track` (expected).
   `failed` rows: `only available to followers` / `not available in your country` / `Access restricted` = closed
   videos, fine. yt-dlp `'NoneType' object has no attribute 'split'` / `expected string or bytes-like object` =
@@ -32,10 +37,10 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
 - **Quality signals** (only meaningful once users see AI segments, i.e. `ai_first 1`): `votes` `< 0`,
   `against_table`, `withdrawn`, `verdicts not_ad`. `misses` = videos the model called clean but users marked.
 
-Known limitation: 7 panels of the public dashboard fail with `pq: syntax error at or near "$"` (funnel,
-"Ждут порога", "В очереди сейчас", "Суточный бюджет", …): public dashboards do not expand the hidden constant
-variables `$min_views` / `$fallback_requests` / `$daily_budget`. The script skips them (listed under
-"panel errors"); they work on the logged-in dashboard. Fix = constants in `grafana/dashboards/ai-pipeline.json`.
+The gate and budget thresholds are inlined in the panels' SQL (`500000 /* AI_MIN_VIEWS */`, …): public
+dashboards do not expand dashboard variables, so before 2026-10-28 the funnel, "Ждут порога", "В очереди
+сейчас" and the budget gauge failed with `pq: syntax error at or near "$"`. A failing panel shows under
+"panel errors".
 
 Baseline and history: the jsonl log (one line per run, UTC `at`). Compare runs with
 `python3 -c "import json;[print(d['at'],d['through_model'],d['ready_videos'],d['usd_total']) for d in map(json.loads,open('$HOME/Web/data/ai-dashboard/snapshots.jsonl'))]"`.
