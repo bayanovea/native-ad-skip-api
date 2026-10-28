@@ -1537,6 +1537,23 @@ test('ai detect: a tick whose every fetch fails, the control video’s too, is t
     await dbQuery(`UPDATE prv_ai_videos SET status = 'failed' WHERE native_id IN ('-1_456000212', '-1_456000213')`);
 });
 
+test('ai detect: a rejected batch submit (e.g. the API usage limit) is the tick’s: queued in an hour, no attempt spent', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000216', 600000, 1)`);
+    const r = runAi(['detect']);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: -1_456000216 queued after batch submit: fixture: You have reached your specified API usage limits \(no attempt spent\)/);
+    const v = await aiVideo('-1_456000216');
+    assert.deepEqual([v.status, v.attempts, v.batch_id], ['queued', 0, null]);
+    assert.match(v.last_error, /^batch submit: fixture: You have reached your specified API usage limits$/);
+    const wait = v.next_attempt_at.getTime() - Date.now();
+    assert.ok(wait > 55 * 60e3 && wait <= 60 * 60e3, `next attempt in ${wait} ms`);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs WHERE native_id = '-1_456000216'`))[0].n, 0);
+    const hb = await heartbeat('ai_detect');
+    assert.equal(hb.failed_videos, 1);
+    assert.equal(hb.last_success_at.getTime(), hb.last_run_at.getTime(), 'CalculatorFailedVideos, not CalculatorStale');
+    await dbQuery(`UPDATE prv_ai_videos SET status = 'failed' WHERE native_id = '-1_456000216'`);
+});
+
 test('ai detect: a run with no model result after 24 h fails, also while the switch is off', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, status, batch_id, updated_at) VALUES
         ('-1_456000210', 'detecting', 'msgbatch_lost', NOW() - INTERVAL '25 hours'), ('-1_456000211', 'detecting', NULL, NOW() - INTERVAL '23 hours')`);

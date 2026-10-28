@@ -43,4 +43,10 @@ func TestFixtureClient(t *testing.T) {
 	if _, err := f.Submit(ctx, []Request{{}}); err == nil {
 		t.Fatal("request without a key: want an error")
 	}
+	if err := os.WriteFile(filepath.Join(dir, "-1_456000002.submit-error"), []byte("usage limits\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Submit(ctx, []Request{{Key: "-1_456000001"}, {Key: "-1_456000002"}}); err == nil || err.Error() != "fixture: usage limits" {
+		t.Fatalf("submit-error fixture: got %v", err)
+	}
 }

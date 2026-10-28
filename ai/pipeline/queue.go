@@ -178,6 +178,13 @@ func markAttempt(db *sql.DB, q queued, noTrack bool, lastErr string) (string, er
 	return status, err
 }
 
+// requeue puts a video back in the queue after wait without spending an attempt.
+func requeue(db execer, nativeID, lastErr string, wait time.Duration) error {
+	_, err := db.Exec(`UPDATE prv_ai_videos SET status = $2, next_attempt_at = $3, last_error = $4, batch_id = NULL, updated_at = NOW()
+		WHERE native_id = $1`, nativeID, statusQueued, time.Now().Add(wait), nullString(lastErr))
+	return err
+}
+
 func setStatus(db execer, nativeID, status, lastErr string) error {
 	_, err := db.Exec(`UPDATE prv_ai_videos SET status = $2, last_error = $3, updated_at = NOW() WHERE native_id = $1`,
 		nativeID, status, nullString(lastErr))

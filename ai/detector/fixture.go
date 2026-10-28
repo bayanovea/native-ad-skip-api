@@ -39,12 +39,16 @@ func (f *FixtureClient) Detect(_ context.Context, req Request) (Result, error) {
 	return res, err
 }
 
-// Submit is the batch call: the batch id lists the keys.
+// Submit is the batch call: the batch id lists the keys. A <Key>.submit-error file
+// for any request rejects the whole batch with its text, as the API rejects a submit.
 func (f *FixtureClient) Submit(_ context.Context, reqs []Request) (string, error) {
 	keys := make([]string, len(reqs))
 	for i, r := range reqs {
 		if r.Key == "" {
 			return "", fmt.Errorf("fixture: request %d has no key", i)
+		}
+		if b, err := os.ReadFile(filepath.Join(f.dir, r.Key+".submit-error")); err == nil {
+			return "", fmt.Errorf("fixture: %s", strings.TrimSpace(string(b)))
 		}
 		keys[i] = r.Key
 	}

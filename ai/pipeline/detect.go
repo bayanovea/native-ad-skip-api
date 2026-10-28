@@ -510,15 +510,16 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 	}
 	batchID, err := r.batch.Submit(ctx, reqs)
 	if err != nil {
-		// Nothing was sent: the run rows go, and the try counts as a failed fetch, so a rejected request backs off.
+		// Nothing was sent, so a rejection (quota, billing, an API outage) is the account's, not
+		// the videos': the run rows go and the videos are queued again in an hour, no attempt spent.
 		for i, p := range started {
 			msg := "batch submit: " + strings.ReplaceAll(err.Error(), "\n", ": ")
 			_, derr := r.db.Exec(`DELETE FROM prv_ai_runs WHERE id = $1`, runIDs[i])
-			status, merr := markAttempt(r.db, p.q, false, msg)
-			if err := errors.Join(derr, merr); err != nil {
+			qerr := requeue(r.db, p.q.nativeID, msg, time.Hour)
+			if err := errors.Join(derr, qerr); err != nil {
 				log.Printf("ai detect: %s: %v", p.q.nativeID, err)
 			}
-			log.Printf("ai detect: %s %s after %s", p.q.nativeID, status, msg)
+			log.Printf("ai detect: %s queued after %s (no attempt spent)", p.q.nativeID, msg)
 		}
 		return failed + len(started)
 	}

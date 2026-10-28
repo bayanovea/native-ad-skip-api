@@ -210,13 +210,13 @@ func TestSubmitWritesTheRunRowsBeforeTheBatch(t *testing.T) {
 	}
 }
 
-func TestSubmitErrorDropsTheRunsAndCountsAnAttempt(t *testing.T) {
+func TestSubmitErrorDropsTheRunsAndSpendsNoAttempt(t *testing.T) {
 	r, mock, f := batchRun(t)
-	f.submitErr = errors.New("400 invalid request")
+	f.submitErr = errors.New("400 usage limits")
 	expectStartRun(mock, "-1_456000001", 11)
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM prv_ai_runs WHERE id = $1")).WithArgs(11).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
-		WithArgs("-1_456000001", "queued", 2, sqlmock.AnyArg(), "batch submit: 400 invalid request").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, next_attempt_at = $3, last_error = $4, batch_id = NULL")).
+		WithArgs("-1_456000001", "queued", sqlmock.AnyArg(), "batch submit: 400 usage limits").WillReturnResult(sqlmock.NewResult(0, 1))
 	if failed := r.submit(context.Background(), []pending{readyVideo("-1_456000001")}); failed != 1 {
 		t.Fatalf("failed %d", failed)
 	}
