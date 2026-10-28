@@ -226,7 +226,7 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         const videoMarkups = await markupRepository.findAll({ where: { video_id: String(videoId) } });
         const markupIds = videoMarkups.map(m => m.id);
 
-        const markupIntervals = await markupTimeIntervalRepository.findAll({ where: { markup_id: markupIds } });
+        const markupIntervals = await markupTimeIntervalRepository.findAll({ where: { markup_id: markupIds } }, true);
         const markupIntervalIds = markupIntervals.map(i => i.id);
 
         await sequelize.transaction(async (transaction) => {

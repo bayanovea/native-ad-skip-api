@@ -11,7 +11,7 @@ module.exports = function createMarkupTimeIntervalRepository(models) {
         },
 
         _updateOptionsByDeleted(options, includeDeleted) {
-            if (includeDeleted === false) options.deleted_at = null;
+            if (includeDeleted === false) options.where = { ...options.where, deleted_at: null };
         },
     };
 };

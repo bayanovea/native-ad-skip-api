@@ -4405,6 +4405,27 @@ test('PUT /markups: rt and yt reject new_end <= start with 400', async () => {
     assert.deepEqual((await markupRowsByUser('yt', 'put-markup-yt')).intervals.map(r => [r.start, r.end]), [[100, 130]]);
 });
 
+test('PUT /markups: a soft-deleted interval → 404, the live one stays editable; the hard delete removes both', async () => {
+    const userId = 'put-markup-soft-deleted';
+    const vid = '__e2e__put_markup_soft_deleted';
+    const base = { video_id: vid, user_id: userId, category_id: cats.prv.intro };
+    await postMarkup('', { ...base, v: '1', data: { intervals: [{ start: 100, end: 130 }, { start: 200, end: 230 }] } });
+    const [{ id: markupId }] = (await markupRowsByUser('', userId)).markups;
+    await dbQuery(`UPDATE markup_time_intervals SET deleted_at = NOW() WHERE markup_id = $1 AND start = 200`, [markupId]);
+
+    const gone = await putMarkup('', { ...base, start: 200, end: 230, new_end: 240 });
+    assert.equal(gone.status, 404, `expected 404, got ${gone.status} ${JSON.stringify(gone.body)}`);
+    const live = await putMarkup('', { ...base, start: 100, end: 130, new_end: 140 });
+    assert.equal(live.status, 200, `expected 200, got ${live.status} ${JSON.stringify(live.body)}`);
+    const rows = await dbQuery(`SELECT start, "end", deleted_at IS NOT NULL AS deleted FROM markup_time_intervals WHERE markup_id = $1 ORDER BY start`, [markupId]);
+    assert.deepEqual(rows.map(r => [r.start, r.end, r.deleted]), [[100, 140, false], [200, 230, true]]);
+
+    const del = await request('DELETE', `/videos/${vid}/markups`, null, { Authorization: `Bearer ${VOTE_AUTH}` });
+    assert.equal(del.status, 201, `expected 201, got ${del.status} ${JSON.stringify(del.body)}`);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM markup_time_intervals WHERE markup_id = $1`, [markupId]))[0].n, 0);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM markups WHERE id = $1`, [markupId]))[0].n, 0);
+});
+
 // ── /admin/user/:internal_id (video-less user view) tests ─────────────────────
 // Route param is INTERNAL users.id (PK), not prv_user_id — prv_user_id is not
 // unique across User rows (unique index is composite (generated_user_id,
