@@ -27,6 +27,8 @@ is a half-blind launch:
    cut" rather than measured. Detail and eval TSV in `~/Web/data/review/ai-served-2026-10-28.{detail,verdicts}.tsv`.
 3. **`AI_FIRST=on` and `AI_JUDGE_ENABLED=on` in one deploy** (repository Variables). With the judge off nothing withdraws
    a row on negative signals except the admin link on `/admin/video`. `AI_JUDGE_AUTO_WITHDRAW` stays at its default (on).
+   After the deploy: `video_calculated_lookup_total{source="ai"}` grows on the ai-pipeline dashboard (skill
+   ai-dashboard-check), and after the next :30 the `ai_judge` heartbeat exists with `failed_videos` 0; then delete this item.
 
 Done on prod (checked 2026-10-28): the hidden-entries Post-Completion, `ai regate --backfill` and `adopt-review-items.js
 ai-below-threshold-2026-10-24`. All 80 items of that sheet are ai items, and adopt matches only entries in `hidden`, which
