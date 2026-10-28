@@ -34,10 +34,14 @@ const nativeIDRegex = `^-?[0-9]+_[0-9]+$`
 
 var nativeIDPattern = regexp.MustCompile(nativeIDRegex)
 
+// communityIDRegex is the ids the tick takes on its own: a community's video (negative owner), never a
+// user's personal upload; the manual run still takes any prv id.
+const communityIDRegex = `^-[0-9]+_[0-9]+$`
+
 // A crashed run leaves its row in `fetching`; after an hour the queue and a manual run take it again.
 const staleFetching = `status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'`
 
-const queueRule = `native_id ~ '` + nativeIDRegex + `' AND (
+const queueRule = `native_id ~ '` + communityIDRegex + `' AND (
 	(status = 'seen' AND (views_max >= $1 OR requests >= $2))
 	OR (status = 'queued' AND next_attempt_at <= NOW())
 	OR (` + staleFetching + `))`

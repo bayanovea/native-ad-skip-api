@@ -1098,11 +1098,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH v AS (\n  SELECT a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
+          "rawSql": "WITH v AS (\n  SELECT a.native_id, a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN native_id !~ '^-' AND status IN ('seen', 'queued', 'fetching') THEN 0\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (0, '0. Видео пользователя (id без «-»): AI не запускаем'),\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
           "refId": "A"
         }
       ],
-      "description": "Каждое видео из prv_ai_videos ровно в одной стадии; сверху вниз = порядок обработки. Пороги стадии 1 берутся из переменных дашборда (AI_MIN_VIEWS / AI_MIN_REQUESTS вверху: видео берут, когда views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS, условия независимы), Grafana не читает env прода. Стадии 11–12 «готовы к отдаче»: клиенты получают их только при AI_FIRST = on."
+      "description": "Каждое видео из prv_ai_videos ровно в одной стадии; сверху вниз = порядок обработки. Пороги стадии 1 берутся из переменных дашборда (AI_MIN_VIEWS / AI_MIN_REQUESTS вверху: видео берут, когда views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS, условия независимы), Grafana не читает env прода. Стадия 0: видео пользователя (id без «-») в seen / queued / fetching, тик их не берёт (только ручной запуск). Стадии 11–12 «готовы к отдаче»: клиенты получают их только при AI_FIRST = on."
     },
     {
       "id": 16,
@@ -1245,11 +1245,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)",
           "refId": "A"
         }
       ],
-      "description": "seen, но views_max < AI_MIN_VIEWS (или неизвестен) и requests < AI_MIN_REQUESTS: ни одно из двух независимых условий не выполнено."
+      "description": "seen, но views_max < AI_MIN_VIEWS (или неизвестен) и requests < AI_MIN_REQUESTS: ни одно из двух независимых условий не выполнено. Только видео сообществ (id с «-»)."
     },
     {
       "id": 19,
@@ -1308,11 +1308,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE status = 'seen' AND views_max IS NOT NULL AND views_max < ${min_views} AND requests < ${min_requests}",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE native_id LIKE '-%' AND status = 'seen' AND views_max IS NOT NULL AND views_max < ${min_views} AND requests < ${min_requests}",
           "refId": "A"
         }
       ],
-      "description": "Просмотры известны из views_text расширения, но ниже AI_MIN_VIEWS, а запросов меньше AI_MIN_REQUESTS (подмножество стадии 1). Без views_text — не считаются."
+      "description": "Просмотры известны из views_text расширения, но ниже AI_MIN_VIEWS, а запросов меньше AI_MIN_REQUESTS (подмножество стадии 1). Без views_text — не считаются. Только видео сообществ (id с «-»)."
     },
     {
       "id": 20,
@@ -1437,11 +1437,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT LEAST(a.requests, ${min_requests})::text AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)\nGROUP BY LEAST(a.requests, ${min_requests}) ORDER BY LEAST(a.requests, ${min_requests})",
+          "rawSql": "SELECT LEAST(a.requests, ${min_requests})::text AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)\nGROUP BY LEAST(a.requests, ${min_requests}) ORDER BY LEAST(a.requests, ${min_requests})",
           "refId": "A"
         }
       ],
-      "description": "Распределение requests среди видео стадии 1: сколько им осталось до AI_MIN_REQUESTS. Группы «N+» больше нет: при requests ≥ AI_MIN_REQUESTS видео берут независимо от просмотров."
+      "description": "Распределение requests среди видео стадии 1: сколько им осталось до AI_MIN_REQUESTS. Группы «N+» больше нет: при requests ≥ AI_MIN_REQUESTS видео берут независимо от просмотров. Только видео сообществ (id с «-»)."
     },
     {
       "id": 22,
@@ -1582,11 +1582,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE (a.status = 'seen' AND COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)) OR (a.status = 'queued' AND a.next_attempt_at <= NOW())",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND ((a.status = 'seen' AND COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)) OR (a.status = 'queued' AND a.next_attempt_at <= NOW()))",
           "refId": "A"
         }
       ],
-      "description": "Порог пройден (views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS) или наступил срок повтора: следующий тик их заберёт (пока хватает суточного бюджета)."
+      "description": "Порог пройден (views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS) или наступил срок повтора: следующий тик их заберёт (пока хватает суточного бюджета). Только видео сообществ (id с «-»)."
     },
     {
       "id": 25,
@@ -1774,11 +1774,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE status = 'queued' AND next_attempt_at > NOW()",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE native_id LIKE '-%' AND status = 'queued' AND next_attempt_at > NOW()",
           "refId": "A"
         }
       ],
-      "description": "Дорожки ещё не было (повтор через 6 ч / 24 ч / 72 ч, потом no_track) или yt-dlp упал (6 ч / 24 ч, потом failed)."
+      "description": "Дорожки ещё не было (повтор через 6 ч / 24 ч / 72 ч, потом no_track) или yt-dlp упал (6 ч / 24 ч, потом failed). Только видео сообществ (id с «-»)."
     },
     {
       "id": 28,
@@ -1915,6 +1915,7 @@
       "id": 30,
       "type": "table",
       "title": "Ждут повторной попытки: когда и почему",
+      "description": "Только видео сообществ (id с «-»).",
       "datasource": {
         "type": "postgres",
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
@@ -2019,7 +2020,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT native_id, attempts AS \"попыток\", next_attempt_at AS \"следующая\", last_error AS \"причина\"\nFROM prv_ai_videos WHERE status = 'queued' AND next_attempt_at > NOW() ORDER BY next_attempt_at LIMIT 50",
+          "rawSql": "SELECT native_id, attempts AS \"попыток\", next_attempt_at AS \"следующая\", last_error AS \"причина\"\nFROM prv_ai_videos WHERE native_id LIKE '-%' AND status = 'queued' AND next_attempt_at > NOW() ORDER BY next_attempt_at LIMIT 50",
           "refId": "A"
         }
       ]

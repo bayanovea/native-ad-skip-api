@@ -37,7 +37,7 @@
   <div class="flow">
     <div class="node"><b>Count popularity</b><span>the extension sends the page's view counter; every request also counts as "one of our users watched it"</span></div>
     <div class="arrow">→</div>
-    <div class="node ai"><b>Fetch prv subtitles</b><span>only videos with many views <i>or</i> many requests from our users (two thresholds set by the owner), a limited number per day</span></div>
+    <div class="node ai"><b>Fetch prv subtitles</b><span>only community and channel videos (never a user's personal upload), with many views <i>or</i> many requests from our users (two thresholds set by the owner), a limited number per day</span></div>
     <div class="arrow">→</div>
     <div class="node warn"><b>Track check</b><span>do the subtitles match the video length? if not, stop</span></div>
     <div class="arrow">→</div>

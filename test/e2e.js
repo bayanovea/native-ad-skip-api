@@ -1035,9 +1035,9 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES
         ('-1_456000201', 600000, 1), ('-1_456000202', 600000, 20), ('-1_456000203', 5, 20), ('-1_456000204', 5, 1),
-        ('-1_456000205', NULL, 19), ('-1_456000206', NULL, 20), ('-1_456000208', 600000, 1)`);
+        ('-1_456000205', NULL, 19), ('-1_456000206', NULL, 20), ('-1_456000208', 600000, 1), ('1_456000210', 600000, 20)`);
     // Against the default thresholds (500000 views, 20 requests): 201 by views, 202 by both, 203 by requests with known low
-    // views, 206 by requests with none known; 204 and 205 below both.
+    // views, 206 by requests with none known; 204 and 205 below both; 1_456000210 is a user's upload (no leading '-').
     // -1_456000208: players reported only a 900-s cut, so yt-dlp's 600.4 s is another cut.
     await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES
         ('-1_456000201', 601, NOW(), NOW()), ('-1_456000201', 900, NOW(), NOW()), ('-1_456000208', 900, NOW(), NOW())`);
@@ -1102,6 +1102,9 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.deepEqual([v.status, v.views_max, v.queued_by], ['published', null, 'requests'], 'enough requests; yt-dlp’s view_count is never read');
     const queuedBy = await dbQuery(`SELECT native_id, queued_by FROM prv_ai_videos WHERE native_id IN ('-1_456000201', '-1_456000202', '-1_456000203') ORDER BY 1`);
     assert.deepEqual(queuedBy.map(r => r.queued_by), ['views', 'both', 'requests'], 'which criterion let each video in');
+    v = await aiVideo('1_456000210');
+    assert.deepEqual([v.status, v.queued_by], ['seen', null], 'a user upload is never taken by the tick, past both thresholds');
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs WHERE native_id = '1_456000210'`))[0].n, 0);
     const empty = await aiCalculated('-1_456000206');
     assert.deepEqual(empty.data, [], 'nothing passed the thresholds: published empty');
     assert.deepEqual(empty.hidden, [{ category_id: cats.prv.sponsor, start: 20, end: 30, confidence: 'low', source: 'ai', reason: 'confidence' }]);
@@ -1449,6 +1452,14 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.match(busy.stderr, /-1_456000204 is already being fetched or detected/);
     await dbQuery(`UPDATE prv_ai_videos SET status = 'published' WHERE native_id = '-1_456000204'`);
     assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs WHERE native_id = '-1_456000204'`))[0].n, 1);
+
+    // A user upload is never taken by the tick, but the manual run takes it (no fixture: yt-dlp reports it unavailable).
+    const user = runAi(['detect', '1_456000210']);
+    assert.equal(user.status, 1, user.stdout + user.stderr);
+    assert.doesNotMatch(user.stderr, /is not a prv video id/);
+    const u = await aiVideo('1_456000210');
+    assert.deepEqual([u.status, u.attempts, u.queued_by], ['queued', 1, 'manual']);
+    assert.match(u.last_error, /This video is unavailable/);
 
     // No model answer (the fixture is missing): failed, the run row kept, exit 1 with the reason.
     const failed = runAi(['detect', '-1_456000209']);

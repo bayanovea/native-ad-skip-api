@@ -22,7 +22,7 @@ func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(198))
 	mock.ExpectBegin()
 	// views from the extension or enough GETs, each on its own, or a retry that is due
-	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-?[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR requests >= $2))")+
+	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR requests >= $2))")+
 		`(?s).*status = 'queued' AND next_attempt_at <= NOW\(\).*ORDER BY first_seen_at.*LIMIT \$3 FOR UPDATE SKIP LOCKED`).
 		WithArgs(10000, 3, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}).
