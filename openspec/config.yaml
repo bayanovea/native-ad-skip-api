@@ -1,0 +1,18 @@
+schema: spec-driven
+
+# Constraints an agent cannot infer from the code. Project facts live in CLAUDE.md.
+context: |
+  Owner's rule: only segments we are sure the viewer sees correctly, even at the cost of missed ads.
+  Every AI_* switch defaults off in code and docker-compose.yml; turning one on is only ever the owner's env change.
+  A push to main deploys to prod; never push without the owner's explicit go.
+  Behaviour changes come with tests (Go: calculator / ai packages; Node: make test-unit, make test-e2e).
+  Deferred work goes to docs/backlog/ (one file per item); plans in docs/plans/ record the applied diff.
+  Code: simple, compact, matching the surrounding style; no comments that restate the mechanism.
+  Write all artifacts in English.
+
+rules:
+  proposal:
+    - State what is out of scope
+    - Name the backlog item it comes from, when there is one
+  tasks:
+    - Each task names the files it touches and the test that proves it
