@@ -227,6 +227,7 @@ module.exports = function(sequelize) {
         last_error: { type: DataTypes.TEXT, allowNull: true },
         judged_at: { type: DataTypes.DATE, allowNull: true },
         judge_counters: { type: DataTypes.JSONB, allowNull: true },
+        queued_by: { type: DataTypes.TEXT, allowNull: true }, // views | requests | both | manual, set once by the detector's first claim
         updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_videos', timestamps: false });
 

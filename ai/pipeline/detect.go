@@ -34,7 +34,7 @@ import (
 type Config struct {
 	DetectEnabled     bool          // AI_DETECT_ENABLED=on
 	MinViews          int           // AI_MIN_VIEWS
-	FallbackRequests  int           // AI_FALLBACK_REQUESTS: GET count that queues a video whose views are unknown
+	MinRequests       int           // AI_MIN_REQUESTS: GET count that queues a video on its own, views known or not
 	DailyBudget       int           // AI_DAILY_BUDGET_VIDEOS: model calls per 24 h
 	BatchMax          int           // AI_BATCH_MAX: videos per tick
 	MinSegmentSeconds int           // AI_MIN_SEGMENT_SECONDS: shorter entries are hidden, not served (lib/ai-rules.js reads it too)
@@ -62,8 +62,8 @@ func ConfigFromEnv() (Config, error) {
 		def  int
 		dst  *int
 	}{
-		{"AI_MIN_VIEWS", 10000, &c.MinViews},
-		{"AI_FALLBACK_REQUESTS", 10, &c.FallbackRequests},
+		{"AI_MIN_VIEWS", 500000, &c.MinViews},
+		{"AI_MIN_REQUESTS", 20, &c.MinRequests},
 		{"AI_DAILY_BUDGET_VIDEOS", 300, &c.DailyBudget},
 		{"AI_BATCH_MAX", 5, &c.BatchMax},
 		{"AI_MIN_SEGMENT_SECONDS", 5, &c.MinSegmentSeconds},
@@ -186,7 +186,7 @@ func Detect(cfg Config, nativeID string) error {
 		if err != nil {
 			return err
 		}
-		if r.detect(ctx, []queued{q}, false) > 0 {
+		if r.detect(ctx, []queued{q}) > 0 {
 			return fmt.Errorf("%s failed", nativeID)
 		}
 		return manualOutcome(r.db, nativeID)
@@ -261,7 +261,7 @@ func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
 	if cerr != nil {
 		err = fmt.Errorf("claim: %w", cerr)
 	}
-	failed = r.detect(ctx, claimed, true)
+	failed = r.detect(ctx, claimed)
 	if r.batch != nil {
 		n, perr := r.poll(ctx)
 		failed += n
@@ -276,12 +276,12 @@ func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
 }
 
 // detect fetches the claimed videos and submits the ones that passed the gate.
-func (r *detectRun) detect(ctx context.Context, claimed []queued, checkViews bool) (failed int) {
+func (r *detectRun) detect(ctx context.Context, claimed []queued) (failed int) {
 	var ready []pending
 	r.fetchErrs = nil
 	for _, q := range claimed {
 		time.Sleep(jitter(r.fetchPause))
-		p, err := r.fetch(ctx, q, checkViews)
+		p, err := r.fetch(ctx, q)
 		if err != nil {
 			log.Printf("ai detect: %s %v", q.nativeID, err)
 			failed++
@@ -355,30 +355,13 @@ func manualOutcome(db *sql.DB, nativeID string) error {
 }
 
 // fetch downloads the video's subtitles and applies the gate. It returns nil
-// without an error when the video left the tick for a known reason (views, no
-// track, timeline), having recorded that on the row.
-func (r *detectRun) fetch(ctx context.Context, q queued, checkViews bool) (*pending, error) {
+// without an error when the video left the tick for a known reason (no track,
+// timeline), having recorded that on the row.
+func (r *detectRun) fetch(ctx context.Context, q queued) (*pending, error) {
 	url := r.prv.VideoURL(q.nativeID)
-	info, raw, err := r.ytdlp.Info(ctx, url)
+	info, _, err := r.ytdlp.Info(ctx, url)
 	if err != nil {
 		return nil, r.fetchError(q, err)
-	}
-	// prv's yt-dlp info never carries view_count (null on every video, 2026-10-24): the
-	// row was queued by our own requests (AI_FALLBACK_REQUESTS), and that gate stands alone.
-	if views, known := viewCount(raw); checkViews && !q.viewsMax.Valid && known {
-		status := statusFetching
-		if views < int64(r.cfg.MinViews) {
-			status = statusSeen
-		}
-		// views_max set, so the queue rule re-examines the row only once the extension reports more views.
-		if _, err := r.db.Exec(`UPDATE prv_ai_videos SET views_max = GREATEST(views_max, $2), status = $3, updated_at = NOW()
-			WHERE native_id = $1`, q.nativeID, views, status); err != nil {
-			return nil, err
-		}
-		if status == statusSeen {
-			log.Printf("ai detect: %s seen: %d views below AI_MIN_VIEWS", q.nativeID, views)
-			return nil, nil
-		}
 	}
 
 	track, trackType, auto, ok := r.prv.PickTrack(info, lang)

@@ -33,25 +33,25 @@
         "type": "constant",
         "name": "min_views",
         "label": "AI_MIN_VIEWS",
-        "query": "10000",
+        "query": "500000",
         "current": {
-          "text": "10000",
-          "value": "10000"
+          "text": "500000",
+          "value": "500000"
         },
         "hide": 2,
         "description": "Копия AI_MIN_VIEWS из env прода (Grafana env не читает): менять здесь вместе с env."
       },
       {
         "type": "constant",
-        "name": "fallback_requests",
-        "label": "AI_FALLBACK_REQUESTS",
-        "query": "10",
+        "name": "min_requests",
+        "label": "AI_MIN_REQUESTS",
+        "query": "20",
         "current": {
-          "text": "10",
-          "value": "10"
+          "text": "20",
+          "value": "20"
         },
         "hide": 2,
-        "description": "Копия AI_FALLBACK_REQUESTS из env прода (Grafana env не читает): менять здесь вместе с env."
+        "description": "Копия AI_MIN_REQUESTS из env прода (Grafana env не читает): менять здесь вместе с env."
       },
       {
         "type": "constant",
@@ -1098,11 +1098,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH v AS (\n  SELECT a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
+          "rawSql": "WITH v AS (\n  SELECT a.status, a.next_attempt_at, COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (1, '1. Просмотров / запросов недостаточно'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
           "refId": "A"
         }
       ],
-      "description": "Каждое видео из prv_ai_videos ровно в одной стадии; сверху вниз = порядок обработки. Пороги стадии 1 берутся из переменных дашборда (AI_MIN_VIEWS / AI_FALLBACK_REQUESTS вверху), Grafana не читает env прода. Стадии 11–12 «готовы к отдаче»: клиенты получают их только при AI_FIRST = on."
+      "description": "Каждое видео из prv_ai_videos ровно в одной стадии; сверху вниз = порядок обработки. Пороги стадии 1 берутся из переменных дашборда (AI_MIN_VIEWS / AI_MIN_REQUESTS вверху: видео берут, когда views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS, условия независимы), Grafana не читает env прода. Стадии 11–12 «готовы к отдаче»: клиенты получают их только при AI_FIRST = on."
     },
     {
       "id": 16,
@@ -1245,11 +1245,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false)",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)",
           "refId": "A"
         }
       ],
-      "description": "seen, но ни views_max ≥ AI_MIN_VIEWS, ни requests ≥ AI_FALLBACK_REQUESTS без известных просмотров."
+      "description": "seen, но views_max < AI_MIN_VIEWS (или неизвестен) и requests < AI_MIN_REQUESTS: ни одно из двух независимых условий не выполнено."
     },
     {
       "id": 19,
@@ -1308,11 +1308,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE status = 'seen' AND views_max IS NOT NULL AND views_max < ${min_views}",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE status = 'seen' AND views_max IS NOT NULL AND views_max < ${min_views} AND requests < ${min_requests}",
           "refId": "A"
         }
       ],
-      "description": "Число просмотров из views_text расширения (или view_count от yt-dlp) ниже порога. Пока релиз расширения с views_text не вышел, а prv view_count не отдаёт, тут ожидаемо 0."
+      "description": "Просмотры известны из views_text расширения, но ниже AI_MIN_VIEWS, а запросов меньше AI_MIN_REQUESTS (подмножество стадии 1). Без views_text — не считаются."
     },
     {
       "id": 20,
@@ -1437,11 +1437,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT LEAST(a.requests, ${fallback_requests})::text || CASE WHEN a.requests >= ${fallback_requests} THEN '+' ELSE '' END AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false)\nGROUP BY LEAST(a.requests, ${fallback_requests}), a.requests >= ${fallback_requests} ORDER BY 1",
+          "rawSql": "SELECT LEAST(a.requests, ${min_requests})::text AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.status = 'seen' AND NOT COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)\nGROUP BY LEAST(a.requests, ${min_requests}) ORDER BY LEAST(a.requests, ${min_requests})",
           "refId": "A"
         }
       ],
-      "description": "Распределение requests среди видео стадии 1: сколько им осталось до AI_FALLBACK_REQUESTS. Группа «N+» — запросов хватает, но известные просмотры ниже AI_MIN_VIEWS."
+      "description": "Распределение requests среди видео стадии 1: сколько им осталось до AI_MIN_REQUESTS. Группы «N+» больше нет: при requests ≥ AI_MIN_REQUESTS видео берут независимо от просмотров."
     },
     {
       "id": 22,
@@ -1582,11 +1582,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE (a.status = 'seen' AND COALESCE(a.views_max >= ${min_views} OR (a.views_max IS NULL AND a.requests >= ${fallback_requests}), false)) OR (a.status = 'queued' AND a.next_attempt_at <= NOW())",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE (a.status = 'seen' AND COALESCE(a.views_max >= ${min_views} OR a.requests >= ${min_requests}, false)) OR (a.status = 'queued' AND a.next_attempt_at <= NOW())",
           "refId": "A"
         }
       ],
-      "description": "Порог пройден или наступил срок повтора: следующий тик их заберёт (пока хватает суточного бюджета)."
+      "description": "Порог пройден (views_max ≥ AI_MIN_VIEWS или requests ≥ AI_MIN_REQUESTS) или наступил срок повтора: следующий тик их заберёт (пока хватает суточного бюджета)."
     },
     {
       "id": 25,
@@ -2095,6 +2095,146 @@
       "description": "Один запуск = один вызов модели по одному видео."
     },
     {
+      "id": 63,
+      "type": "bargauge",
+      "title": "Почему взяли в детектор",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "namePlacement": "top",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT CASE COALESCE(a.queued_by, 'unknown') WHEN 'views' THEN 'просмотры' WHEN 'requests' THEN 'запросы' WHEN 'both' THEN 'просмотры и запросы' WHEN 'manual' THEN 'вручную' ELSE 'неизвестно (до 2026-10-28)' END AS \"почему\", COUNT(*) AS \"видео\" FROM prv_ai_videos a WHERE a.status <> 'seen' GROUP BY 1 ORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "prv_ai_videos.queued_by: какое условие пустило видео в детектор — просмотры (views_max ≥ AI_MIN_VIEWS), запросы (requests ≥ AI_MIN_REQUESTS), оба сразу или ручной запуск ai detect <native_id>. Пишется один раз при первом заборе по порогам того тика и не меняется при повторах. NULL («неизвестно») — видео забрали до появления колонки (2026-10-28)."
+    },
+    {
+      "id": 64,
+      "type": "timeseries",
+      "title": "Запусков модели по дням: почему взяли",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(r.created_at, '1d', 0), COALESCE(a.queued_by, 'unknown') AS metric, COUNT(*) AS \"запусков\" FROM prv_ai_runs r JOIN prv_ai_videos a USING (native_id) WHERE $__timeFilter(r.created_at) GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "Запуски модели (prv_ai_runs) по дням, столбики по условию, которое пустило видео в детектор (queued_by: views / requests / both / manual; unknown — забрано до 2026-10-28)."
+    },
+    {
       "type": "row",
       "collapsed": false,
       "panels": [],
@@ -2103,7 +2243,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 63
       },
       "id": 32
     },
@@ -2117,7 +2257,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 64,
         "w": 8,
         "h": 5
       },
@@ -2180,7 +2320,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 56,
+        "y": 64,
         "w": 4,
         "h": 5
       },
@@ -2244,7 +2384,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -2310,7 +2450,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -2434,7 +2574,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 80
       },
       "id": 37
     },
@@ -2448,7 +2588,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 81,
         "w": 6,
         "h": 5
       },
@@ -2528,7 +2668,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 73,
+        "y": 81,
         "w": 3,
         "h": 5
       },
@@ -2592,7 +2732,7 @@
       },
       "gridPos": {
         "x": 9,
-        "y": 73,
+        "y": 81,
         "w": 3,
         "h": 5
       },
@@ -2655,7 +2795,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 73,
+        "y": 81,
         "w": 12,
         "h": 10
       },
@@ -2721,7 +2861,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 91,
         "w": 6,
         "h": 10
       },
@@ -2787,7 +2927,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 83,
+        "y": 91,
         "w": 6,
         "h": 10
       },
@@ -2879,7 +3019,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 83,
+        "y": 91,
         "w": 12,
         "h": 7
       },
@@ -2953,7 +3093,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 93,
+        "y": 101,
         "w": 12,
         "h": 7
       },
@@ -3025,7 +3165,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 108
       },
       "id": 46
     },
@@ -3039,7 +3179,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 101,
+        "y": 109,
         "w": 6,
         "h": 8
       },
@@ -3105,7 +3245,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 101,
+        "y": 109,
         "w": 6,
         "h": 8
       },
@@ -3171,7 +3311,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 101,
+        "y": 109,
         "w": 6,
         "h": 8
       },
@@ -3237,7 +3377,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 101,
+        "y": 109,
         "w": 6,
         "h": 8
       },
@@ -3303,7 +3443,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 109,
+        "y": 117,
         "w": 8,
         "h": 8
       },
@@ -3373,7 +3513,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 109,
+        "y": 117,
         "w": 4,
         "h": 8
       },
@@ -3440,7 +3580,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 109,
+        "y": 117,
         "w": 12,
         "h": 8
       },
@@ -3513,7 +3653,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 117,
+        "y": 125,
         "w": 24,
         "h": 10
       },
@@ -3684,7 +3824,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 127
+        "y": 135
       },
       "id": 55
     },
@@ -3698,7 +3838,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 128,
+        "y": 136,
         "w": 12,
         "h": 8
       },
@@ -3773,7 +3913,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 128,
+        "y": 136,
         "w": 4,
         "h": 8
       },
@@ -3838,7 +3978,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 128,
+        "y": 136,
         "w": 4,
         "h": 8
       },
@@ -3901,7 +4041,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 128,
+        "y": 136,
         "w": 4,
         "h": 8
       },
@@ -3964,7 +4104,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 136,
+        "y": 144,
         "w": 6,
         "h": 8
       },
@@ -4031,7 +4171,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 136,
+        "y": 144,
         "w": 18,
         "h": 8
       },

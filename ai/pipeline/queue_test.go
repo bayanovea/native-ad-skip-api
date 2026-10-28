@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-var testCfg = Config{MinViews: 10000, FallbackRequests: 3, DailyBudget: 200, BatchMax: 100}
+var testCfg = Config{MinViews: 10000, MinRequests: 3, DailyBudget: 200, BatchMax: 100}
 
 func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -21,15 +21,15 @@ func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'")).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(198))
 	mock.ExpectBegin()
-	// views from the extension, or unknown views and enough GETs (the fallback), or a retry that is due
-	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-?[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))")+
+	// views from the extension or enough GETs, each on its own, or a retry that is due
+	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-?[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR requests >= $2))")+
 		`(?s).*status = 'queued' AND next_attempt_at <= NOW\(\).*ORDER BY first_seen_at.*LIMIT \$3 FOR UPDATE SKIP LOCKED`).
 		WithArgs(10000, 3, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}).
 			AddRow("-1_456000001", 25000, 0).
 			AddRow("-1_456000002", nil, 1))
-	mock.ExpectExec(regexp.QuoteMeta("SET status = 'fetching'")).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(regexp.QuoteMeta("SET status = 'fetching'")+`(?s).*queued_by = COALESCE\(queued_by, CASE WHEN status <> 'seen' THEN NULL`).
+		WithArgs(sqlmock.AnyArg(), 10000, 3).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
 
@@ -81,19 +81,6 @@ func TestClaimQueuedBatchMax(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestViewCount(t *testing.T) {
-	for raw, want := range map[string]int64{
-		`{"id":"x","view_count":12345}`: 12345,
-		`{"id":"x","view_count":null}`:  0,
-		`{"id":"x"}`:                    0,
-		`not json`:                      0,
-	} {
-		if got, ok := viewCount([]byte(raw)); got != want || ok != (want > 0) {
-			t.Errorf("viewCount(%s) = %d %v, want %d", raw, got, ok, want)
-		}
 	}
 }
 
@@ -193,7 +180,7 @@ func TestClaimOne(t *testing.T) {
 	}
 
 	expect("failed", false, false)
-	mock.ExpectQuery(`SET status = 'fetching'(?s).*AND status = \$2`).
+	mock.ExpectQuery(`SET status = 'fetching', updated_at = NOW\(\), queued_by = COALESCE\(queued_by, 'manual'\)(?s).*AND status = \$2`).
 		WithArgs("-1_456000001", "failed").WillReturnRows(sqlmock.NewRows([]string{"views_max", "attempts"}).AddRow(nil, 3))
 	q, err := claimOne(db, "-1_456000001")
 	if err != nil || q.attempts != 3 || q.viewsMax.Valid {

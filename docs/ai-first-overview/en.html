@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-10-27 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-10-28 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -35,9 +35,9 @@
 
   <h3>What the AI does in the background</h3>
   <div class="flow">
-    <div class="node"><b>Count popularity</b><span>every extension request marks the video as "being watched"</span></div>
+    <div class="node"><b>Count popularity</b><span>the extension sends the page's view counter; every request also counts as "one of our users watched it"</span></div>
     <div class="arrow">→</div>
-    <div class="node ai"><b>Fetch prv subtitles</b><span>popular videos only, a limited number per day</span></div>
+    <div class="node ai"><b>Fetch prv subtitles</b><span>only videos with many views <i>or</i> many requests from our users (two thresholds set by the owner), a limited number per day</span></div>
     <div class="arrow">→</div>
     <div class="node warn"><b>Track check</b><span>do the subtitles match the video length? if not, stop</span></div>
     <div class="arrow">→</div>
@@ -79,7 +79,7 @@
     <div class="card"><h3>For the frontend</h3>
       <ul>
         <li>The API and the response format do not change.</li>
-        <li>Send <code>views_text</code> with the segments request: the view counter as the page shows it (“39.4K views”); the backend reads the number out of it. The AI then picks truly popular videos instead of counting requests.</li>
+        <li>Send <code>views_text</code> with the segments request: the view counter as the page shows it (“39.4K views”); the backend reads the number out of it. A video goes to the detector when that counter is high enough (threshold set by the owner) or when enough of our users requested it (a second threshold); both thresholds are how the owner controls the spend.</li>
       </ul>
     </div>
     <div class="card"><h3>For the assessor</h3>

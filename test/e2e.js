@@ -1014,7 +1014,7 @@ async function aiCalculated(nativeId) {
 
 test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic without a key is a startup error', async () => {
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
-    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 50000, 1)`);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 600000, 1)`);
     // A command switched off after it ran must not leave a last success that ages into CalculatorStale.
     await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
         VALUES ('ai_detect', NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day', 0)`);
@@ -1034,8 +1034,10 @@ test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic 
 test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /metrics', async () => {
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES
-        ('-1_456000201', 50000, 1), ('-1_456000202', 50000, 1), ('-1_456000203', 50000, 1), ('-1_456000204', 5, 1),
-        ('-1_456000205', NULL, 10), ('-1_456000206', NULL, 11), ('-1_456000208', 50000, 1)`); // 205 / 206: at and past the AI_FALLBACK_REQUESTS default
+        ('-1_456000201', 600000, 1), ('-1_456000202', 600000, 20), ('-1_456000203', 5, 20), ('-1_456000204', 5, 1),
+        ('-1_456000205', NULL, 19), ('-1_456000206', NULL, 20), ('-1_456000208', 600000, 1)`);
+    // Against the default thresholds (500000 views, 20 requests): 201 by views, 202 by both, 203 by requests with known low
+    // views, 206 by requests with none known; 204 and 205 below both.
     // -1_456000208: players reported only a 900-s cut, so yt-dlp's 600.4 s is another cut.
     await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES
         ('-1_456000201', 601, NOW(), NOW()), ('-1_456000201', 900, NOW(), NOW()), ('-1_456000208', 900, NOW(), NOW())`);
@@ -1079,7 +1081,7 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.match(out, /ai detect: -1_456000201 published: 1 served, 2 hidden of 3 segments/);
 
     v = await aiVideo('-1_456000202');
-    assert.deepEqual([v.status, v.attempts], ['queued', 1], 'no ru track: retried later');
+    assert.deepEqual([v.status, v.attempts, v.queued_by], ['queued', 1, 'both'], 'no ru track: retried later');
     const wait = v.next_attempt_at.getTime() - Date.now();
     assert.ok(wait > 5.9 * 3600e3 && wait <= 6 * 3600e3, `next attempt in ${wait} ms`);
 
@@ -1093,11 +1095,13 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.equal(await aiCalculated('-1_456000208'), null);
     assert.equal(await countVideos('', '-1_456000208'), 1, 'no row for a cut no player reported');
 
-    assert.equal((await aiVideo('-1_456000204')).status, 'seen', 'below AI_MIN_VIEWS: not taken');
+    assert.equal((await aiVideo('-1_456000204')).status, 'seen', 'below both thresholds: not taken');
     v = await aiVideo('-1_456000205');
-    assert.deepEqual([v.status, v.views_max], ['seen', 120], 'fallback: yt-dlp’s view_count is below the minimum');
+    assert.deepEqual([v.status, v.views_max, v.queued_by], ['seen', null, null], '19 requests, no views: not taken');
     v = await aiVideo('-1_456000206');
-    assert.deepEqual([v.status, v.views_max], ['published', 20000], 'fallback: enough views');
+    assert.deepEqual([v.status, v.views_max, v.queued_by], ['published', null, 'requests'], 'enough requests; yt-dlp’s view_count is never read');
+    const queuedBy = await dbQuery(`SELECT native_id, queued_by FROM prv_ai_videos WHERE native_id IN ('-1_456000201', '-1_456000202', '-1_456000203') ORDER BY 1`);
+    assert.deepEqual(queuedBy.map(r => r.queued_by), ['views', 'both', 'requests'], 'which criterion let each video in');
     const empty = await aiCalculated('-1_456000206');
     assert.deepEqual(empty.data, [], 'nothing passed the thresholds: published empty');
     assert.deepEqual(empty.hidden, [{ category_id: cats.prv.sponsor, start: 20, end: 30, confidence: 'low', source: 'ai', reason: 'confidence' }]);
@@ -1378,7 +1382,7 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.doesNotMatch(r.stdout + r.stderr, /batch .* submitted/, 'no batch: nothing waits for a cron tick');
     const v = await aiVideo('-1_456000204');
-    assert.deepEqual([v.status, v.batch_id], ['published', null]);
+    assert.deepEqual([v.status, v.batch_id, v.queued_by], ['published', null, 'manual']);
     const ai = await aiCalculated('-1_456000204');
     assert.deepEqual(ai.data, [{ category_id: cats.prv.self_promotion, start: 20, end: 45, confidence: 'high', source: 'ai' }]);
     const [run] = await dbQuery(`SELECT cost_usd, transcript FROM prv_ai_runs WHERE native_id = '-1_456000204'`);
@@ -1424,7 +1428,7 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
 });
 
 test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed tick); a yt-dlp that cannot start is the tick’s', async () => {
-    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000207', 50000, 1)`);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000207', 600000, 1)`);
     let r = runAi(['detect']);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stderr, /ai detect: -1_456000207 queued after fetch attempt 1: .*This video is unavailable/);
@@ -1448,7 +1452,7 @@ test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed 
 });
 
 test('ai detect: a tick whose every fetch fails while a published video still fetches is the videos’: attempts spent, no failed tick', async () => {
-    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000214', 50000, 1), ('-1_456000215', 50000, 1)`);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000214', 600000, 1), ('-1_456000215', 600000, 1)`);
     const r = runAi(['detect']);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stderr, /ai detect: every fetch of the tick failed, control video \S+ did not/);
@@ -1462,7 +1466,7 @@ test('ai detect: a tick whose every fetch fails while a published video still fe
 });
 
 test('ai detect: a tick whose every fetch fails, the control video’s too, is the host’s (prv refusing it): failed videos, no attempt spent', async () => {
-    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000212', 50000, 1), ('-1_456000213', 50000, 1)`);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000212', 600000, 1), ('-1_456000213', 600000, 1)`);
     const r = runAi(['detect'], { YTDLP_STUB_REFUSE: '1' });
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stderr, /ai detect: control video \S+ failed too/);
@@ -2347,12 +2351,12 @@ test('ai full path: views request → detect → served → vote → undo → ju
     const human = [[sp, 100, 120, undefined]];
     const served = async () => entryTuples((await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600 })).body);
 
-    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600, views_text: '50 тыс просмотров' });
+    let res = await getCalculatedOn(AI_PORT, vid, { v: '1', duration: 600, views_text: '600 тыс просмотров' });
     assert.deepEqual(entryTuples(res.body), human, 'not detected yet: the human path');
-    assert.deepEqual([(await waitAiVideo(vid, 1)).status, (await aiVideo(vid)).views_max], ['seen', 50000]);
+    assert.deepEqual([(await waitAiVideo(vid, 1)).status, (await aiVideo(vid)).views_max], ['seen', 600000]);
 
-    // A huge fallback keeps rows that earlier tests requested without views out of this tick.
-    let r = runAi(['detect'], { AI_FALLBACK_REQUESTS: '1000000' });
+    // A huge requests threshold keeps rows that earlier tests requested without views out of this tick.
+    let r = runAi(['detect'], { AI_MIN_REQUESTS: '1000000' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout + r.stderr, /ai detect: -1_456000601 published: 1 served, 2 hidden of 3 segments/);
     const videoId = await prvVideoId(vid);
@@ -2602,7 +2606,7 @@ test('ai defaults: with no AI_* env the app serves and votes as before the plan,
         const vid = '-1_456000602';
         const { videoId, ai } = await aiFirstVideo(vid);
         // Work for both commands if they ran: a queued video above AI_MIN_VIEWS, and this row due for the judge.
-        await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000603', 50000, 1)`);
+        await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000603', 600000, 1)`);
         await dbQuery(`UPDATE prv_ai_video_calculateds SET published_at = NOW() - INTERVAL '25 hours' WHERE video_id = $1`, [videoId]);
         await postUndo(vid, 'defaults-undo', 30, 70);
         await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
@@ -2612,7 +2616,7 @@ test('ai defaults: with no AI_* env the app serves and votes as before the plan,
         const { requests } = await aiVideo(vid);
 
         const stored = (await dbQuery(`SELECT data FROM video_calculateds WHERE video_id = $1`, [videoId]))[0].data;
-        for (const query of [{ v: '1', duration: 600, views_text: '50 тыс просмотров' }, { v: '1', duration: 600 }, { duration: 600 }]) {
+        for (const query of [{ v: '1', duration: 600, views_text: '600 тыс просмотров' }, { v: '1', duration: 600 }, { duration: 600 }]) {
             const res = await getCalculatedOn(port, vid, query);
             assert.deepEqual([res.status, res.body], [200, stored], `the stored human data for ${JSON.stringify(query)}`);
             assert.deepEqual((await getCalculatedOn(E2E_PORT, vid, query)).body, stored, 'the same as the default test app');
@@ -2635,7 +2639,7 @@ test('ai defaults: with no AI_* env the app serves and votes as before the plan,
         }
 
         const row = await waitAiVideo(vid, requests + 5); // every GET with v above (the legacy ones write nothing)
-        assert.deepEqual([row.requests, row.views_max], [requests + 5, 50000], 'the read path’s upsert is the only AI write');
+        assert.deepEqual([row.requests, row.views_max], [requests + 5, 600000], 'the read path’s upsert is the only AI write');
         const after = await aiSnapshot();
         assert.deepEqual(after.heartbeats, [], 'switched-off commands clear their heartbeats');
         delete before.heartbeats;

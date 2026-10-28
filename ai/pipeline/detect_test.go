@@ -20,16 +20,16 @@ import (
 )
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
-	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_FALLBACK_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
+	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{MinViews: 10000, FallbackRequests: 10, DailyBudget: 300, BatchMax: 5, MinSegmentSeconds: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
+	want := Config{MinViews: 500000, MinRequests: 20, DailyBudget: 300, BatchMax: 5, MinSegmentSeconds: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
-	if c.DetectEnabled || c.MinViews != want.MinViews || c.FallbackRequests != want.FallbackRequests ||
+	if c.DetectEnabled || c.MinViews != want.MinViews || c.MinRequests != want.MinRequests ||
 		c.DailyBudget != want.DailyBudget || c.BatchMax != want.BatchMax || c.MinSegmentSeconds != want.MinSegmentSeconds || c.FetchPause != want.FetchPause || c.Model != want.Model || c.Client != want.Client ||
 		c.YtdlpBin != want.YtdlpBin {
 		t.Fatalf("got %+v", c)
@@ -37,7 +37,8 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 
 	t.Setenv("AI_DETECT_ENABLED", "on")
 	t.Setenv("AI_MIN_VIEWS", "500")
-	if c, err = ConfigFromEnv(); err != nil || !c.DetectEnabled || c.MinViews != 500 {
+	t.Setenv("AI_FALLBACK_REQUESTS", "5") // the pre-2026-10-28 name: ignored
+	if c, err = ConfigFromEnv(); err != nil || !c.DetectEnabled || c.MinViews != 500 || c.MinRequests != 20 {
 		t.Fatalf("got %+v, %v", c, err)
 	}
 	t.Setenv("AI_FETCH_PAUSE", "0")
@@ -257,23 +258,10 @@ func TestFetchTrackWithoutCues(t *testing.T) {
 			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
 				WithArgs("-1_456000001", c.status, 1, sqlmock.AnyArg(), c.lastErr).WillReturnResult(sqlmock.NewResult(0, 1))
 			q := queued{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}}
-			if failed := r.detect(context.Background(), []queued{q}, true); failed != 0 {
+			if failed := r.detect(context.Background(), []queued{q}); failed != 0 {
 				t.Fatalf("failed = %d, want 0: one failed fetch is the video's", failed)
 			}
 		})
-	}
-}
-
-func TestFetchWithoutViewCountPassesOnRequests(t *testing.T) {
-	r, mock, _ := batchRun(t)
-	r.ytdlp = stubYtdlp(t, "WEBVTT\n\n") // no cues: stops right after the views gate
-	r.prv, _ = provider.Lookup("prv")
-	// Only the no-track attempt: no views_max write, no `seen`.
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
-		WithArgs("-1_456000001", "queued", 1, sqlmock.AnyArg(), "no ru subtitle track").WillReturnResult(sqlmock.NewResult(0, 1))
-	p, err := r.fetch(context.Background(), queued{nativeID: "-1_456000001"}, true)
-	if p != nil || err != nil {
-		t.Fatalf("got %+v %v", p, err)
 	}
 }
 
@@ -286,7 +274,7 @@ func TestDetectEveryFetchFailedIsTheHosts(t *testing.T) {
 		{nativeID: "-1_456000002", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}},
 	}
 	// No UPDATE expected: no attempt spent, the rows stay `fetching`.
-	if failed := r.detect(context.Background(), claimed, true); failed != 2 {
+	if failed := r.detect(context.Background(), claimed); failed != 2 {
 		t.Fatalf("failed = %d, want 2", failed)
 	}
 }

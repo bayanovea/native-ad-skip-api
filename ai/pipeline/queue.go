@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -39,7 +38,7 @@ var nativeIDPattern = regexp.MustCompile(nativeIDRegex)
 const staleFetching = `status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'`
 
 const queueRule = `native_id ~ '` + nativeIDRegex + `' AND (
-	(status = 'seen' AND (views_max >= $1 OR (views_max IS NULL AND requests >= $2)))
+	(status = 'seen' AND (views_max >= $1 OR requests >= $2))
 	OR (status = 'queued' AND next_attempt_at <= NOW())
 	OR (` + staleFetching + `))`
 
@@ -63,7 +62,7 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT native_id, views_max, attempts FROM prv_ai_videos WHERE `+queueRule+`
 		ORDER BY first_seen_at, native_id LIMIT $3 FOR UPDATE SKIP LOCKED`,
-		cfg.MinViews, cfg.FallbackRequests, limit)
+		cfg.MinViews, cfg.MinRequests, limit)
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
 	}
@@ -85,7 +84,12 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW() WHERE native_id = ANY($1)`, pq.Array(ids)); err != nil {
+	// queued_by records which criterion let the video in, once: a retry keeps it, and a row
+	// claimed before the column existed (not `seen` any more) stays NULL.
+	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW(),
+		queued_by = COALESCE(queued_by, CASE WHEN status <> 'seen' THEN NULL
+			WHEN views_max >= $2 AND requests >= $3 THEN 'both' WHEN views_max >= $2 THEN 'views' ELSE 'requests' END)
+		WHERE native_id = ANY($1)`, pq.Array(ids), cfg.MinViews, cfg.MinRequests); err != nil {
 		return nil, err
 	}
 	return out, tx.Commit()
@@ -117,7 +121,7 @@ func claimOne(db *sql.DB, nativeID string) (queued, error) {
 		return q, fmt.Errorf("%s already has an AI row (status %s): a re-detect is not supported", nativeID, status)
 	}
 	// The staleness is checked again, so a cron claim in between is not taken twice.
-	err := db.QueryRow(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW()
+	err := db.QueryRow(`UPDATE prv_ai_videos SET status = 'fetching', updated_at = NOW(), queued_by = COALESCE(queued_by, 'manual')
 		WHERE native_id = $1 AND status = $2 AND (status <> 'fetching' OR `+staleFetching+`)
 		RETURNING views_max, attempts`, nativeID, status).
 		Scan(&q.viewsMax, &q.attempts)
@@ -125,17 +129,6 @@ func claimOne(db *sql.DB, nativeID string) (queued, error) {
 		return q, fmt.Errorf("%s changed status meanwhile, run again", nativeID)
 	}
 	return q, err
-}
-
-// viewCount reads view_count from yt-dlp's info JSON; ok is false when it is missing.
-func viewCount(raw []byte) (n int64, ok bool) {
-	var info struct {
-		ViewCount *int64 `json:"view_count"`
-	}
-	if json.Unmarshal(raw, &info) != nil || info.ViewCount == nil {
-		return 0, false
-	}
-	return *info.ViewCount, true
 }
 
 // retrySchedule is the wait after the 1st, 2nd and 3rd fetch attempt that found no
