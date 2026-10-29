@@ -100,7 +100,7 @@ async function aiBlock(models, video, token, reviewRepository) {
             else { btn.disabled = false; alert('Error: ' + res.status); }
         }
         async function sendAi(btn, start, end) {
-            if (!confirm('Send the segment ' + start + '-' + end + ' to review? It goes to today\'s urgent ai-admin batch.')) return;
+            if (!confirm('Send the segment ' + start + '-' + end + ' to review? It goes to the urgent ai-admin batch of today.')) return;
             btn.disabled = true;
             const res = await fetch('/admin/video/${video.id}/ai/review?verifyBearerToken=' + encodeURIComponent(${scriptString(token)})
                 + '&start=' + start + '&end=' + end);

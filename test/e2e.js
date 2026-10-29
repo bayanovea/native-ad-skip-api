@@ -1731,6 +1731,8 @@ test('ai-first: the admin withdraw link unpublishes the AI row and the human pat
     const withdraw = token => requestOn(AI_PORT, 'GET', `/admin/video/${videoId}/ai/withdraw?verifyBearerToken=${token}`);
 
     let html = await page();
+    // Inline scripts are template literals on the server: an escape that does not survive them breaks every button.
+    for (const [, js] of html.matchAll(/<script>([^]*?)<\/script>/g)) new vm.Script(js);
     assert.match(html, /<h2>AI<\/h2>/);
     assert.match(html, /Status: <strong>published<\/strong>/);
     assert.match(html, /Served: <strong id="ai-served">yes<\/strong>/);
