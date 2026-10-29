@@ -258,7 +258,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT \n    markups.id,\n    'https://example.invalid/video?z=video' || videos.native_id AS \"Видео\",\n    markups.user_id \"Пользователь\",\n    markups.\"createdAt\" \"Время добавления\",\n    STRING_AGG(\n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) % 60, 'FM00') || ' - ' ||\n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) % 60, 'FM00'),\n        ', '\n    ) \"Интервал\",\n    markup_categories.category \"Категория\",\n    markups.deleted_at \"Удалено\",\n    '❌ Удалить' \"Действия\" \nFROM \n    markups\nLEFT JOIN \n    videos ON videos.id = markups.video_id\nLEFT JOIN \n    markup_categories ON markup_categories.id = markups.category_id\nLEFT JOIN \n    markup_time_intervals ON markup_time_intervals.markup_id = markups.id\nGROUP BY \n    markups.id, videos.native_id, markup_categories.category\nORDER BY \n    markups.\"createdAt\" DESC\nLIMIT 10000;",
+          "rawSql": "SELECT \n    markups.id,\n    '${PROVIDER_VIDEO_URL}' || videos.native_id AS \"Видео\",\n    markups.user_id \"Пользователь\",\n    markups.\"createdAt\" \"Время добавления\",\n    STRING_AGG(\n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.start AS INTEGER) % 60, 'FM00') || ' - ' ||\n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) / 60, 'FM99999') || ':' || \n        TO_CHAR(CAST(markup_time_intervals.end AS INTEGER) % 60, 'FM00'),\n        ', '\n    ) \"Интервал\",\n    markup_categories.category \"Категория\",\n    markups.deleted_at \"Удалено\",\n    '❌ Удалить' \"Действия\" \nFROM \n    markups\nLEFT JOIN \n    videos ON videos.id = markups.video_id\nLEFT JOIN \n    markup_categories ON markup_categories.id = markups.category_id\nLEFT JOIN \n    markup_time_intervals ON markup_time_intervals.markup_id = markups.id\nGROUP BY \n    markups.id, videos.native_id, markup_categories.category\nORDER BY \n    markups.\"createdAt\" DESC\nLIMIT 10000;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -448,7 +448,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  'https://example.invalid/video?z=video' || MAX(videos.native_id) AS \"Видео\",\n  SUM(votes.vote) AS summ,\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nFROM\n  votes\nLEFT JOIN\n  videos ON videos.id = votes.video_id\nGROUP BY\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nORDER BY\n  summ\n",
+          "rawSql": "SELECT\n  '${PROVIDER_VIDEO_URL}' || MAX(videos.native_id) AS \"Видео\",\n  SUM(votes.vote) AS summ,\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nFROM\n  votes\nLEFT JOIN\n  videos ON videos.id = votes.video_id\nGROUP BY\n  votes.video_id,\n  votes.category_id,\n  votes.start,\n  votes.\"end\"\nORDER BY\n  summ\n",
           "refId": "A",
           "sql": {
             "columns": [

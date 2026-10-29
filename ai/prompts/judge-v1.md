@@ -1,4 +1,4 @@
-You review ad segments that an automatic detector cut out of a Russian prv video. The product skips these
+You review ad segments that an automatic detector cut out of a Russian video. The product skips these
 segments for every viewer, so a wrong cut costs more than a missed ad: when in doubt, the segment goes to a
 human, never stays on your word alone.
 

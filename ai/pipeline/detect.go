@@ -23,6 +23,7 @@ import (
 	"github.com/lib/pq"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/ai/platform"
 	"odedohbest/video-calculate/ai/provider"
 	"odedohbest/video-calculate/ai/transcript"
 	"odedohbest/video-calculate/ai/vtt"
@@ -128,7 +129,7 @@ type detectRun struct {
 	priceFactor float64
 	categories  map[string]int
 	ytdlp       *ytdlp.Runner
-	prv          provider.Provider
+	prv         provider.Provider
 	fetchPause  time.Duration // 0 for the manual run
 	fetchErrs   []fetchErr    // this detect call's yt-dlp errors, recorded once the call knows whether all failed
 }
@@ -219,7 +220,7 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	if !manual {
 		r.fetchPause = cfg.FetchPause
 	}
-	if r.prv, err = provider.Lookup("prv"); err != nil {
+	if r.prv, err = platform.FromEnv(); err != nil {
 		return nil, err
 	}
 	switch {
@@ -290,14 +291,14 @@ func (r *detectRun) detect(ctx context.Context, claimed []queued) (failed int) {
 		}
 	}
 	if n := len(r.fetchErrs); n >= blockedMin && n == len(claimed) && !r.hostFetches(ctx) {
-		// Every fetch failing, a known-good video's too, looks like prv refusing the host,
+		// Every fetch failing, a known-good video's too, looks like the provider refusing the host,
 		// not like n broken videos: the tick's failure (CalculatorFailedVideos), and no
 		// attempt spent, as for a yt-dlp that cannot start; the rows stay `fetching`,
 		// claimed again after an hour.
 		for _, e := range r.fetchErrs {
 			log.Printf("ai detect: %s fetch failed: %s", e.q.nativeID, e.msg)
 		}
-		log.Printf("ai detect: every fetch of the tick failed (%d videos): prv may be refusing the host", n)
+		log.Printf("ai detect: every fetch of the tick failed (%d videos): the provider may be refusing the host", n)
 		failed += n
 	} else {
 		for _, e := range r.fetchErrs {
@@ -332,7 +333,7 @@ func (r *detectRun) hostFetches(ctx context.Context) bool {
 	return true
 }
 
-// jitter spreads a pause over [d/2, 3d/2), so prv never sees our host's fetches
+// jitter spreads a pause over [d/2, 3d/2), so the provider never sees our host's fetches
 // as a burst at the cron minute: a ban of the shared IP would stop every fetch.
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {

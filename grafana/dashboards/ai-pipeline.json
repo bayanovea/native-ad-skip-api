@@ -1928,7 +1928,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://example.invalid/video${__data.fields.native_id}"
+                    "url": "${PROVIDER_VIDEO_URL}"
                   }
                 ]
               },
@@ -2457,7 +2457,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://example.invalid/video${__data.fields.native_id}"
+                    "url": "${PROVIDER_VIDEO_URL}"
                   }
                 ]
               },
@@ -3660,7 +3660,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://example.invalid/video${__data.fields.native_id}"
+                    "url": "${PROVIDER_VIDEO_URL}"
                   }
                 ]
               },
@@ -4178,7 +4178,7 @@
                   {
                     "targetBlank": true,
                     "title": "",
-                    "url": "https://example.invalid/video${__data.fields.native_id}"
+                    "url": "${PROVIDER_VIDEO_URL}"
                   }
                 ]
               },

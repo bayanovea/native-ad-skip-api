@@ -12,8 +12,9 @@ and prints deltas against the previous one):
 python3 .claude/skills/ai-dashboard-check/check.py          # --no-save for a dry look, --all for full tables, --days N for the time range
 ```
 
-The public dashboard token is not in the repo: `AI_DASHBOARD_TOKEN` or `~/Web/data/ai-dashboard/public-token`
-(Grafana → the dashboard → Share → Public dashboard).
+Neither the Grafana address nor the public dashboard token is in the repo: `GRAFANA_URL` (the base URL,
+`http://<host>:3024`, the owner's shell env; unset = the script exits with a message) and `AI_DASHBOARD_TOKEN`
+or `~/Web/data/ai-dashboard/public-token` (Grafana → the dashboard → Share → Public dashboard).
 
 Read the output top-down and report in the usual Verdict / Why blocks. What "ok" means:
 

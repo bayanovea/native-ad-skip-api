@@ -13,7 +13,12 @@ import (
 
 var reviewNow = time.Date(2026, 10, 21, 23, 30, 0, 0, time.UTC)
 
-var testPrv, _ = provider.Lookup("prv")
+// testPrv is prv with the e2e templates (docker-compose.e2e.yml); Register panics on a duplicate, so once per binary.
+var testPrv = func() provider.Provider {
+	provider.Register(provider.Def{Name: "prv", VideoURL: "https://example.invalid/video{id}", LinkAt: "https://example.invalid/video{id}?t={t}"})
+	p, _ := provider.Lookup("prv")
+	return p
+}()
 
 func begin(t *testing.T, db *sql.DB) *sql.Tx {
 	t.Helper()

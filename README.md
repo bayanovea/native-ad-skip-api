@@ -1,6 +1,6 @@
 # native-ad-skip-api
 
-Crowdsourced ad/segment skipping for prv, rt and yt videos: users submit time-interval markups, a Go calculator aggregates them into consensus segments, browser extensions poll them to skip ads. For developers: [CLAUDE.md](CLAUDE.md) (architecture, commands, ops).
+Crowdsourced ad/segment skipping for three video platforms (providers `prv`, `rt`, `yt`): users submit time-interval markups, a Go calculator aggregates them into consensus segments, browser extensions poll them to skip ads. For developers: [CLAUDE.md](CLAUDE.md) (architecture, commands, ops).
 
 ## Процесс перехода на AI-first разметку / AI-first rollout
 

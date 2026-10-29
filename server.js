@@ -7,6 +7,7 @@ const promClient = require('prom-client');
 const routes = require('./prv/routes/routes');
 const { sequelize, bootstrap } = require('./db');
 const { redactRequest } = require('./lib/redact-request');
+const { legacyField } = require('./lib/legacy-field');
 const { registerCalculatorHeartbeat, registerAiMetrics } = require('./prometheus-wrapper');
 
 const app = express();
@@ -76,6 +77,7 @@ app.use('/api/doc', (req, res, next) => {
 }, swaggerUi.serve, swaggerUi.setup(apiSpec));
 
 app.use('/', routes);
+app.use(legacyField());
 app.use('/', require('./prv'));
 app.use('/rt', require('./rt'));
 app.use('/yt', require('./yt'));

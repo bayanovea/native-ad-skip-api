@@ -8,4 +8,4 @@ echo "NODE_APP_PORT=$NODE_APP_PORT" >> /app/.env
 echo "AUTH_TOKEN=$AUTH_TOKEN" >> /app/.env
 echo "HOST_IP=$HOST_IP" >> /app/.env
 # The AI command's switches and key; cron jobs see only /app/.env.
-env | grep -E '^(AI_[A-Z_]+|YTDLP_BIN|ANTHROPIC_API_KEY)=' >> /app/.env || true
+env | grep -E '^(AI_[A-Z_]+|YTDLP_BIN|ANTHROPIC_API_KEY|PROVIDER_[A-Z_]+|LEGACY_PRV)=' >> /app/.env || true

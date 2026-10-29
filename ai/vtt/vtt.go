@@ -1,6 +1,6 @@
 // Package vtt parses WebVTT subtitle files and collapses "rolling" captions
-// (yt/prv style, where each phrase is repeated across consecutive cues
-// with word-level timing tags) into one plain cue per phrase.
+// (each phrase repeated across consecutive cues with word-level timing tags)
+// into one plain cue per phrase.
 package vtt
 
 import (

@@ -878,6 +878,24 @@ test('prv POST /markup: duration within ±2 reuses the video, diff of 3 splits, 
     assert.deepEqual(res.body.map(s => s.end), [20], 'read with 302 serves the 303 row, same as the write');
 });
 
+// LEGACY_PRV=old (docker-compose.e2e.yml): the extension still sends the user id under the legacy field name.
+test('legacy alias: POST /markup with old_user_id stores it as prv_user_id on every provider; the time_saved response carries by_old_user_id', async () => {
+    const vid = '__e2e__legacy_alias';
+    const base = { video_id: vid, v: '1', user_id: 'legacy-u1', old_user_id: 4242, duration: 300, data: { intervals: [{ start: 0, end: 10 }] } };
+    await postMarkup('', { ...base, category_id: cats.prv.intro });
+    await postMarkup('rt', { ...base, category_id: cats.rt.intro });
+    for (const table of ['users', 'rt_users']) {
+        const rows = await dbQuery(`SELECT prv_user_id FROM ${table} WHERE generated_user_id = 'legacy-u1'`);
+        assert.deepEqual(rows, [{ prv_user_id: 4242 }], table);
+    }
+    assert.deepEqual(await dbQuery(`SELECT m.prv_user_id FROM markups m JOIN videos v ON v.id = m.video_id WHERE v.native_id = $1`, [vid]),
+        [{ prv_user_id: 4242 }]);
+
+    const res = await request('POST', '/events', [{ type: 'time_saved', user_id: 'legacy-u1', old_user_id: 4242, inc: 7 }]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.data.time_saved, { by_user_id: 7, by_prv_user_id: 7, by_old_user_id: 7, by_user: 7 });
+});
+
 // Rule 2: find by native_id with null duration, update it
 test('prv GET /video-calculated: falls back to null-duration video and updates it', async () => {
     const vid = '__e2e__prv_null_duration';
@@ -1012,7 +1030,7 @@ async function aiCalculated(nativeId) {
     return (await dbQuery('SELECT * FROM prv_ai_video_calculateds WHERE native_id = $1', [nativeId]))[0] || null;
 }
 
-test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic without a key is a startup error', async () => {
+test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic without a key or a missing PROVIDER_* template is a startup error', async () => {
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 600000, 1)`);
     // A command switched off after it ran must not leave a last success that ages into CalculatorStale.
@@ -1028,6 +1046,12 @@ test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic 
     r = runAi(['detect'], { AI_CLIENT: 'anthropic', ANTHROPIC_API_KEY: undefined });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /ANTHROPIC_API_KEY is not set/);
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+
+    // The platform's URL templates come from the env (ai/platform); a tick that would fetch needs both.
+    r = runAi(['detect'], { PROVIDER_LINK_AT: undefined });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /PROVIDER_VIDEO_URL and PROVIDER_LINK_AT must be set/);
     assert.equal((await aiVideo('-1_456000201')).status, 'seen');
 });
 

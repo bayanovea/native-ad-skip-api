@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/ai/platform"
 	"odedohbest/video-calculate/ai/provider"
 	"odedohbest/video-calculate/ai/vtt"
 	"odedohbest/video-calculate/calculator"
@@ -63,7 +64,7 @@ type judgeRun struct {
 	cfg        Config
 	db         *sql.DB
 	categories map[int]string
-	prv         provider.Provider
+	prv        provider.Provider
 	llm        llmClient
 	prompt     detector.Prompt
 	price      detector.Price
@@ -87,7 +88,7 @@ func Run(cfg Config) error {
 	if r.prompt, err = detector.LoadPrompt(cfg.PromptPath); err != nil {
 		return err
 	}
-	if r.prv, err = provider.Lookup("prv"); err != nil {
+	if r.prv, err = platform.FromEnv(); err != nil {
 		return err
 	}
 	var priced bool

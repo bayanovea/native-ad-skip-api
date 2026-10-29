@@ -17,7 +17,7 @@ import (
 
 // Track is one subtitle track as reported by yt-dlp.
 //
-// The prv extractor reports two entries per language: one derived from the stream
+// An extractor may report two entries per language: one derived from the stream
 // manifest (ManifestURL set, Ext "vtt") and one from the player's subtitle list,
 // where Ext carries the player's label ("vtt" or "Ru AUTO") rather than a format.
 type Track struct {
@@ -70,7 +70,7 @@ func (r *Runner) Info(ctx context.Context, url string) (*Info, []byte, error) {
 // WriteSubs downloads subtitle tracks for lang as VTT into outBase (yt-dlp appends
 // ".<lang>.vtt"). auto selects --write-auto-subs instead of --write-subs.
 //
-// A prv video whose only track is the player's (no manifest entry) has the label as
+// A video whose only track is the player's (no manifest entry) has the label as
 // its ext ("Ru AUTO"), so yt-dlp writes "<outBase>.ru.Ru AUTO", a VTT file all the
 // same; yt-dlp refuses such an ext unless allow-unsafe-ext, which is safe here (a
 // fixed name in our own directory, read as text only), and the file is renamed to

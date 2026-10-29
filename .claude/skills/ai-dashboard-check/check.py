@@ -6,7 +6,9 @@ import json, sys, time, urllib.request, os, datetime
 
 TOKEN_FILE = os.path.expanduser('~/Web/data/ai-dashboard/public-token')
 TOKEN = os.environ.get('AI_DASHBOARD_TOKEN') or open(TOKEN_FILE).read().strip()
-BASE = f'http://${HOST_IP}:3024/api/public/dashboards/{TOKEN}'
+GRAFANA_URL = os.environ.get('GRAFANA_URL')  # the Grafana base URL, not in the repo
+if not GRAFANA_URL: sys.exit('GRAFANA_URL is not set (e.g. http://<host>:3024)')
+BASE = f'{GRAFANA_URL.rstrip("/")}/api/public/dashboards/{TOKEN}'
 LOG = os.path.expanduser('~/Web/data/ai-dashboard/snapshots.jsonl')
 save = '--no-save' not in sys.argv
 show_all = '--all' in sys.argv

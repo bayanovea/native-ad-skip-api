@@ -4,7 +4,7 @@
 set -euo pipefail
 
 DB_NAME="${DB_NAME:?DB_NAME is required}"
-BUCKET="${BUCKET:-adskip-backups}"
+BUCKET="${BUCKET:?BUCKET is required}"
 DIR=/var/backups/pg
 KEEP_DAYS=3
 

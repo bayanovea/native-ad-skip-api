@@ -39,7 +39,11 @@ services:
       # One tick claims every queued test video, with no pause between fetches
       AI_BATCH_MAX: "100"
       AI_FETCH_PAUSE: "0"
-    command: node --test test/e2e.js test/moderation-resolver.test.js test/review-export.test.js
+      # The video platform under test: placeholder URL templates; an earlier prefix for the rename one-off and the API alias
+      PROVIDER_VIDEO_URL: https://example.invalid/video{id}
+      PROVIDER_LINK_AT: https://example.invalid/video{id}?t={t}
+      LEGACY_PRV: old
+    command: node --test test/e2e.js test/moderation-resolver.test.js test/review-export.test.js test/legacy-rename.test.js
     networks:
       - e2e-network
 

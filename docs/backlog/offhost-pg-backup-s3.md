@@ -10,7 +10,7 @@ restore drill are in the repo (`infrastructure/backup/`, rehearsed in `postgres:
 installed on `${HOST_IP}` yet. Prod data currently lives only on the VM plus Timeweb auto-backups (same provider,
 daily, keep 7) — the single-host situation that made the Yandex Cloud outage a data-loss question.
 
-Interim: `make pull-dump` (`scripts/pull-prod-dump.sh`) pulls a gzipped dump to `~/Web/dumps/adskip-prod/` on the
+Interim: `make pull-dump` (`scripts/pull-prod-dump.sh`) pulls a gzipped dump to `~/Web/dumps/native-ad-skip-prod/` on the
 owner's Mac; a SessionStart hook in the owner's `.claude/settings.local.json` nags when the newest one is over 7 days
 old. Retire both once S3 runs.
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const handler = require('../../middleware/handler');
+const { LEGACY_PRV } = require('../../lib/legacy-field');
 
 const EVENT_TYPES = ['interval_undo', 'interval_click', 'time_saved', 'client_failed'];
 
@@ -128,9 +129,12 @@ module.exports = function createEventsRoute(models) {
 
                     await user.reload();
 
+                    const byPrv = byPrvUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0);
                     timeSavedResponse = {
                         by_user_id: byUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
-                        by_prv_user_id: byPrvUserId.reduce((sum, r) => sum + (r.time_saved || 0), 0),
+                        by_prv_user_id: byPrv,
+                        // Old clients read the key under the legacy field name.
+                        ...(LEGACY_PRV && { [`by_${LEGACY_PRV}_user_id`]: byPrv }),
                         by_user: user.time_saved,
                     };
                 } catch (err) {

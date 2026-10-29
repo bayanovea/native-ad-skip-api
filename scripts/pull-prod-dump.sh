@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Pull a gzipped pg_dump of prod to this machine. Interim off-host backup until
 # the nightly S3 job lands (docs/backlog/offhost-pg-backup-s3.md). Run: make pull-dump
+# The repo names no host or DB: PROD_HOST (user@host) and DB_NAME come from the owner's shell env.
 set -euo pipefail
 
-HOST="${PROD_HOST:-root@${HOST_IP}}"
-DB_NAME="${DB_NAME:-adskip}"
-DIR="${DUMP_DIR:-$HOME/Web/dumps/adskip-prod}"
+[ -n "${PROD_HOST:-}" ] && [ -n "${DB_NAME:-}" ] || { echo "usage: PROD_HOST=user@host DB_NAME=<db> [DUMP_DIR=<dir>] $0" >&2; exit 1; }
+HOST=$PROD_HOST
+DIR="${DUMP_DIR:-$HOME/Web/dumps/native-ad-skip-prod}"
 
 mkdir -p "$DIR"
 FILE="$DIR/$DB_NAME-$(date +%F).sql.gz"

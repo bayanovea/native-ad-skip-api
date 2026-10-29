@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Crowdsourced video ad/segment skipping API.
-    Supports three providers: **prv** (no prefix), **RT** (`/rt`), **yt** (`/yt`).
+    Supports three video platforms: **prv**, the main one (no prefix), **rt** (`/rt`), **yt** (`/yt`).
 
 servers:
   - url: http://localhost:3022
@@ -277,7 +277,7 @@ paths:
         - name: views_text
           in: query
           schema: { type: string, maxLength: 128 }
-          description: "The video's view counter as the prv page shows it (`39,4 тыс просмотров`, `1.7M views`); whitespace collapsed, anything after `·` dropped. Optional; never a 400 (longer strings are cut to 128). With `v` present each request is counted per `video_id` for the AI detection queue after the response is sent; the server reads the count out of it (max kept) and keeps the latest string. Ignored without `v`."
+          description: "The video's view counter as the platform's page shows it (`39,4 тыс просмотров`, `1.7M views`); whitespace collapsed, anything after `·` dropped. Optional; never a 400 (longer strings are cut to 128). With `v` present each request is counted per `video_id` for the AI detection queue after the response is sent; the server reads the count out of it (max kept) and keeps the latest string. Ignored without `v`."
         - name: user_id
           in: query
           schema: { type: string }

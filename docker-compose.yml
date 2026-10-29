@@ -39,6 +39,10 @@ services:
       - AI_DAILY_BUDGET_VIDEOS=${AI_DAILY_BUDGET_VIDEOS:-}
       - AI_MIN_SEGMENT_SECONDS=${AI_MIN_SEGMENT_SECONDS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # The video platform: URL templates ({id}, {t}) and the earlier prefix of its DB objects / API field (see CLAUDE.md)
+      - PROVIDER_VIDEO_URL=${PROVIDER_VIDEO_URL:-}
+      - PROVIDER_LINK_AT=${PROVIDER_LINK_AT:-}
+      - LEGACY_PRV=${LEGACY_PRV:-}
   prometheus:
     image: prom/prometheus:v2.45.2
     restart: unless-stopped

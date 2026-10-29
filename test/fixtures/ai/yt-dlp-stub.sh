@@ -14,7 +14,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-id=${url#https://example.invalid/video}
+id=${url##*/video} # the id follows the last /video of the page URL (PROVIDER_VIDEO_URL)
 if [ -n "$YTDLP_STUB_REFUSE" ]; then
   echo "ERROR: [prv] $id: HTTP Error 403: Forbidden" >&2
   exit 1

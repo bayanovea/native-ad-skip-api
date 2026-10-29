@@ -19,6 +19,13 @@ import (
 	"odedohbest/video-calculate/ai/ytdlp"
 )
 
+// testPrv is prv with the e2e templates (docker-compose.e2e.yml); Register panics on a duplicate, so once per binary.
+var testPrv = func() provider.Provider {
+	provider.Register(provider.Def{Name: "prv", VideoURL: "https://example.invalid/video{id}", LinkAt: "https://example.invalid/video{id}?t={t}"})
+	p, _ := provider.Lookup("prv")
+	return p
+}()
+
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
 	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN"} {
 		t.Setenv(k, "")
@@ -254,7 +261,7 @@ func TestFetchTrackWithoutCues(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r, mock, _ := batchRun(t)
 			r.ytdlp = stubYtdlp(t, c.vtt)
-			r.prv, _ = provider.Lookup("prv")
+			r.prv = testPrv
 			mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, attempts = $3")).
 				WithArgs("-1_456000001", c.status, 1, sqlmock.AnyArg(), c.lastErr).WillReturnResult(sqlmock.NewResult(0, 1))
 			q := queued{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}}
@@ -268,7 +275,7 @@ func TestFetchTrackWithoutCues(t *testing.T) {
 func TestDetectEveryFetchFailedIsTheHosts(t *testing.T) {
 	r, _, _ := batchRun(t)
 	r.ytdlp = stubYtdlp(t, "")
-	r.prv, _ = provider.Lookup("prv")
+	r.prv = testPrv
 	claimed := []queued{
 		{nativeID: "-1_456000001", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}},
 		{nativeID: "-1_456000002", viewsMax: sql.NullInt64{Int64: 20000, Valid: true}},

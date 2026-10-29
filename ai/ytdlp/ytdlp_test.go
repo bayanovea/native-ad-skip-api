@@ -43,7 +43,7 @@ func TestRunMissingBinary(t *testing.T) {
 	}
 }
 
-// A prv track with only the player's entry has its label as ext: yt-dlp writes
+// A track with only the player's entry has its label as ext: yt-dlp writes
 // "<base>.ru.Ru AUTO", and callers read "<base>.ru.vtt".
 func TestWriteSubsRenamesLabelExt(t *testing.T) {
 	dir := t.TempDir()

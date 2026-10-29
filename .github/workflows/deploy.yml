@@ -92,14 +92,15 @@ jobs:
       env:
         PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         HOST_IP: ${{ secrets.HOST_IP }}
+        SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}   # the host's public key line, "ssh-ed25519 AAAA…"
       run: |
         mkdir -p ~/.ssh/
         chmod 700 ~/.ssh
         echo "$PRIVATE_KEY" > ~/.ssh/id_ed25519
         chmod 600 ~/.ssh/id_ed25519
-        # Pinned host key of the prod VM (public, not a secret). A rebuilt VM gets a
-        # new key: replace it here (ssh-keygen -F <ip> on a machine that trusts it).
-        echo "$HOST_IP ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE9SvsKQeM8YyA0/Az6Gsa8eI3XpxlMYxz0LmKlcsCs5" > ~/.ssh/known_hosts
+        # Pinned host key of the prod VM (a secret only so the repo names no host). A rebuilt
+        # VM gets a new key: replace the secret (ssh-keyscan -t ed25519 <ip> on a machine that trusts it).
+        echo "$HOST_IP $SSH_HOST_KEY" > ~/.ssh/known_hosts
         chmod 644 ~/.ssh/known_hosts
         printf 'Host *\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
         chmod 600 ~/.ssh/config
@@ -132,7 +133,16 @@ jobs:
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
         AI_MIN_SEGMENT_SECONDS: ${{ vars.AI_MIN_SEGMENT_SECONDS }}
         HOST_IP: ${{ secrets.HOST_IP }}
-        IMAGE_NAME: native-ad-skip-api
+        # Deployment values (secrets): the public hosts, the video platform's URL templates, the earlier
+        # prefix of the DB objects, the compose project name.
+        API_HOST: ${{ secrets.API_HOST }}
+        LANDING_HOST: ${{ secrets.LANDING_HOST }}
+        PROVIDER_VIDEO_URL: ${{ secrets.PROVIDER_VIDEO_URL }}
+        PROVIDER_LINK_AT: ${{ secrets.PROVIDER_LINK_AT }}
+        LEGACY_PRV: ${{ secrets.LEGACY_PRV }}
+        # The stack's project name: prod sets it to the name the stack was created with, so the containers
+        # and the named volumes (<project>_prometheus_data, _grafana_data) are kept; empty = a fresh stack's name.
+        COMPOSE_PROJECT: ${{ secrets.COMPOSE_PROJECT || 'native-ad-skip-api' }}
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # job token: can pull this repo's package, expires with the job
       # The remote script goes over stdin to 'bash -s', so no secret is on any
@@ -164,7 +174,12 @@ jobs:
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
             AI_MIN_SEGMENT_SECONDS "$AI_MIN_SEGMENT_SECONDS" \
             HOST_IP "$HOST_IP" \
-            IMAGE_NAME "$IMAGE_NAME" \
+            API_HOST "$API_HOST" \
+            LANDING_HOST "$LANDING_HOST" \
+            PROVIDER_VIDEO_URL "$PROVIDER_VIDEO_URL" \
+            PROVIDER_LINK_AT "$PROVIDER_LINK_AT" \
+            LEGACY_PRV "$LEGACY_PRV" \
+            COMPOSE_PROJECT "$COMPOSE_PROJECT" \
             IMAGE "$IMAGE" \
             IMAGE_TAG "$IMAGE_TAG" \
             GHCR_USER "$GHCR_USER" \
@@ -183,12 +198,33 @@ jobs:
         mv src.new src
         rm -f codebase.tar.gz
 
+        # The repo names no host and no video platform: the files the stack bind-mounts carry
+        # placeholders, filled here from the deploy environment (sed, no envsubst on the host).
+        # ${PROVIDER_VIDEO_URL} is a template with {id}: in a Grafana data link {id} becomes the
+        # field reference, in a SQL concatenation ('${PROVIDER_VIDEO_URL}' || <column>) the
+        # template's prefix before {id} is enough, so {id} must be last in the template.
+        for v in API_HOST LANDING_HOST PROVIDER_VIDEO_URL; do
+          [ -n "${!v}" ] || { echo "render: $v is empty" >&2; exit 1; }
+        done
+        case "$PROVIDER_VIDEO_URL" in *'{id}') ;; *) echo "render: PROVIDER_VIDEO_URL must end with {id}" >&2; exit 1;; esac
+        esc() { printf '%s' "$1" | sed 's/[&|#\\]/\\&/g'; }
+        prefix=$(esc "${PROVIDER_VIDEO_URL%'{id}'}")
+        sed -i \
+          -e "s|[$]{API_HOST}|$(esc "$API_HOST")|g" \
+          -e "s|[$]{LANDING_HOST}|$(esc "$LANDING_HOST")|g" \
+          -e "s#'[$]{PROVIDER_VIDEO_URL}' ||#'$prefix' ||#g" \
+          -e "s|[$]{PROVIDER_VIDEO_URL}|$prefix\${__data.fields.native_id}|g" \
+          src/config/prometheus.yml src/grafana/dashboards/*.json
+        if grep -l -E '\$\{(API_HOST|LANDING_HOST|PROVIDER_VIDEO_URL)\}' src/config/prometheus.yml src/grafana/dashboards/*.json; then
+          echo "render: placeholders left" >&2; exit 1
+        fi
+
         # Образ собран в CI и лежит в GHCR; хост только скачивает его. The pipe gives
         # login its own stdin, so it cannot read the rest of this script. Logout runs
         # whatever happens after it (set -e), so the job token never stays on the host.
         printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
         trap 'docker logout ghcr.io' EXIT
-        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml pull app < /dev/null
+        docker compose -p "$COMPOSE_PROJECT" -f /home/skipper-admin/tmp/src/docker-compose.yml pull app < /dev/null
 
         # Запуск с использованием Docker Compose v2. No 'down': the old stack keeps
         # serving until the pulled image is up, and stays up if the pull failed. --no-build
@@ -196,7 +232,7 @@ jobs:
         # image would be built on the host. --force-recreate restarts the monitoring services
         # too, so they pick up the re-extracted bind-mounted configs; up pulls the exporters' images
         # when missing.
-        docker compose -p "$IMAGE_NAME" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana node-exporter blackbox-exporter < /dev/null
+        docker compose -p "$COMPOSE_PROJECT" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana node-exporter blackbox-exporter < /dev/null
 
         # Old app images: keep the KEEP_IMAGES newest and the running one; a failed rm never fails the deploy.
         # The by-hand rollback (CLAUDE.md → Rollback) needs the image in the local cache; older shas go

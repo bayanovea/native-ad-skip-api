@@ -8,16 +8,14 @@ import (
 	"odedohbest/video-calculate/ai/ytdlp"
 )
 
-// prv: native ids look like "-<owner>_<video>"; the page is example.invalid/video<id>.
-type prv struct{}
+// platform is a Def with the URL templates expanded.
+type platform struct{ def Def }
 
-func init() { Register(prv{}) }
+func (p platform) Name() string                    { return p.def.Name }
+func (p platform) VideoURL(nativeID string) string { return expand(p.def.VideoURL, "{id}", nativeID) }
 
-func (prv) Name() string                    { return "prv" }
-func (prv) VideoURL(nativeID string) string { return "https://example.invalid/video" + nativeID }
-
-// LinkAt is the example.invalid player link with the start offset as ?t=1h2m3s.
-func (prv) LinkAt(nativeID string, seconds int) string {
+// LinkAt renders the start offset as 1h2m3s (hours and minutes only when non-zero).
+func (p platform) LinkAt(nativeID string, seconds int) string {
 	if seconds < 0 {
 		seconds = 0
 	}
@@ -28,18 +26,29 @@ func (prv) LinkAt(nativeID string, seconds int) string {
 	} else if m == 0 {
 		t = fmt.Sprintf("%ds", s)
 	}
-	return fmt.Sprintf("https://example.invalid/video%s?t=%s", nativeID, t)
+	return expand(p.def.LinkAt, "{id}", nativeID, "{t}", t)
+}
+
+func (p platform) ChannelURL(channel string) string {
+	if p.def.ChannelURL == "" {
+		return ""
+	}
+	return expand(p.def.ChannelURL, "{channel}", channel)
+}
+
+func expand(tmpl string, pairs ...string) string {
+	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
 // PickTrack prefers an author-uploaded track and falls back to auto-subtitles.
 //
-// The yt-dlp prv extractor lists two entries per language under `subtitles`: one
-// derived from the stream manifest (manifest_url set, ext "vtt", no label) and
-// one from the player's subtitle list, where `ext` carries the player's label.
-// A label containing "auto" means prv auto-subtitles. A plain "vtt" label is NOT
-// evidence of an uploaded track: a video labelled "Автоматические" in the player
-// showed up as "vtt" too (checked 2026-10-10), so anything else stays unknown.
-func (prv) PickTrack(info *ytdlp.Info, lang string) (t ytdlp.Track, typ transcript.TrackType, auto bool, ok bool) {
+// An extractor may list two entries per language under `subtitles`: one derived
+// from the stream manifest (manifest_url set, ext "vtt", no label) and one from
+// the player's subtitle list, where `ext` carries the player's label. A label
+// containing "auto" means auto-subtitles. A plain "vtt" label is NOT evidence
+// of an uploaded track: a video labelled "Автоматические" in the player showed
+// up as "vtt" too (checked 2026-10-10), so anything else stays unknown.
+func (platform) PickTrack(info *ytdlp.Info, lang string) (t ytdlp.Track, typ transcript.TrackType, auto bool, ok bool) {
 	subs := info.Subtitles[lang]
 	if len(subs) > 0 {
 		typ = transcript.TrackUnknown

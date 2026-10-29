@@ -157,7 +157,7 @@ func TestClaimOne(t *testing.T) {
 	}
 
 	for _, id := range []string{"", "x", "-1_", "1_2/../3", "-1_456000001?x=1"} {
-		if _, err := claimOne(db, id); err == nil || !strings.Contains(err.Error(), "is not a prv video id") {
+		if _, err := claimOne(db, id); err == nil || !strings.Contains(err.Error(), "is not a video id of the provider") {
 			t.Errorf("%q: got %v", id, err)
 		}
 	}

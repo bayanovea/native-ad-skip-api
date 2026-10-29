@@ -28,14 +28,14 @@ const (
 	statusTimelineUnreliable = "timeline_unreliable"
 )
 
-// nativeIDRegex is a prv id ("-<owner>_<video>"), valid in Go and Postgres alike (PRV_NATIVE_ID
+// nativeIDRegex is a native id of the provider ("-<owner>_<video>"), valid in Go and Postgres alike (PRV_NATIVE_ID
 // in prv/repository/ai.js is its copy); anything else never reaches yt-dlp's URL.
 const nativeIDRegex = `^-?[0-9]+_[0-9]+$`
 
 var nativeIDPattern = regexp.MustCompile(nativeIDRegex)
 
 // communityIDRegex is the ids the tick takes on its own: a community's video (negative owner), never a
-// user's personal upload; the manual run still takes any prv id.
+// user's personal upload; the manual run still takes any native id.
 const communityIDRegex = `^-[0-9]+_[0-9]+$`
 
 // A crashed run leaves its row in `fetching`; after an hour the queue and a manual run take it again.
@@ -107,7 +107,7 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 func claimOne(db *sql.DB, nativeID string) (queued, error) {
 	q := queued{nativeID: nativeID}
 	if !nativeIDPattern.MatchString(nativeID) {
-		return q, fmt.Errorf("%q is not a prv video id (-<owner>_<video>)", nativeID)
+		return q, fmt.Errorf("%q is not a video id of the provider (-<owner>_<video>)", nativeID)
 	}
 	if _, err := db.Exec(`INSERT INTO prv_ai_videos (native_id) VALUES ($1) ON CONFLICT (native_id) DO NOTHING`, nativeID); err != nil {
 		return q, err
