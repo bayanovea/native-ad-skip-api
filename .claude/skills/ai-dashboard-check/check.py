@@ -74,8 +74,9 @@ def put(k, fn):
 put('ai_first', lambda: single('AI_FIRST: отдаём AI-сегменты клиентам'))
 put('detect_on', lambda: single('Детектор (ai detect)'))
 put('judge_on', lambda: single('Судья (ai judge)'))
-put('since_tick_s', lambda: {k.split('"provider": "')[1].rstrip('"}'): round(v) for k, v in
-                            (query(by_title['Секунд с последнего успешного тика'])[0][-1].items()) if 'provider' in k})
+put('since_tick_s', lambda: {k.split('"provider": "')[1].rstrip('"}'): round(v)
+                             for frame in query(by_title['Секунд с последнего успешного тика'])
+                             for k, v in frame[-1].items() if 'provider' in k})
 put('usd_total', lambda: round(single('Потрачено всего'), 2))
 put('usd_24h', lambda: round(single('Потрачено за 24 ч'), 2))
 put('usd_per_video', lambda: round(single('Средняя цена видео'), 4))
