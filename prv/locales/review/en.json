@@ -147,6 +147,7 @@
   "error_bounds_range": "Times must be between 0 and 24 hours.",
   "error_bounds_order": "The start must come before the end.",
   "warn_bounds_short": "Shorter than {seconds} s: it will be saved, but viewers will not get this segment while the {seconds}-second limit stands.",
+  "warn_bounds_absorb": "Covers {count} other served segment(s) of this category: the save merges them into this one, and their votes are lost.",
   "error_bounds_overlap": "These times overlap another AI segment of this video. Decide that item first.",
   "item_corrected": "→ corrected: {start} – {end} ({name})",
   "transcript_title": "Subtitles around the item",

@@ -21,20 +21,13 @@
 // --served: default sheet ai-served-<YYYY-MM-DD>, default priority urgent; --seed (default 1) makes the pick
 //   reproducible; entries already in review and entries whose bounds a verdict set (`source: review`) are left out.
 
-const { splitSheet, rng, shuffle } = require('../lib/review-sheet');
+const { splitSheet, rng, shuffle, cuesOver } = require('../lib/review-sheet');
+const { linkAt } = require('../lib/player-link');
 const { scriptSequelize } = require('../lib/script-db');
 const { MIN_SEGMENT_SECONDS, HIDDEN_REASONS } = require('../lib/ai-rules');
 const definePrvModels = require('../prv/db');
 const createReviewRepository = require('../prv/repository/review');
 const { PRIORITIES } = createReviewRepository;
-
-// provider.LinkAt in Go: the player opens 2 s early, as every sheet link does.
-function linkAt(nativeId, seconds) {
-    const s = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    const t = h > 0 ? `${h}h${m}m${sec}s` : m > 0 ? `${m}m${sec}s` : `${sec}s`;
-    return `https://example.invalid/video${nativeId}?t=${t}`;
-}
 
 function usage(msg) {
     if (msg) console.error(msg);
@@ -76,10 +69,6 @@ function parseArgs(argv) {
     }
     if (opts.seed != null) usage('--seed goes with --served');
     return { ...opts, sheet: opts.sheet || `ai-below-threshold-${day}`, priority: opts.priority || 'optional', minSeconds: opts.minSeconds ?? MIN_SEGMENT_SECONDS };
-}
-
-function cuesOver(cues, e) {
-    return (cues || []).filter((c) => c.end > e.start && c.start < e.end).map((c) => c.text).join('\n') || null;
 }
 
 async function hiddenItems(sequelize, review, categories, opts) {

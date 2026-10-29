@@ -12,6 +12,8 @@ const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
 const VIDEO_FLAGS = ['track_mismatch'];
 const VALID_FLAGS = new Set(VIDEO_FLAGS);
 const SIGNALS_WINDOW = 30;
+// The importer's --max-items default and the judge's batchMax (ai/judge/review.go): a batch one reviewer finishes in a sitting.
+const BATCH_MAX = 30;
 const LOCK_IDLE_HOURS = 12;
 // Batch priorities, highest first: `urgent` is the judge's (prod videos people watch now),
 // `important` the default, `optional` a pass to do when there is time.
@@ -558,6 +560,46 @@ module.exports = function createReviewRepository(models, sequelize) {
                   ORDER BY i.position, i.id`,
                 { replacements: { sheet }, type: QueryTypes.SELECT, transaction }
             );
+        },
+
+        /**
+         * The part of `sheet` that takes `n` more items: its newest part that nobody holds or has a verdict in with
+         * room within BATCH_MAX (locked FOR UPDATE), else a new part named the importer's way (`<sheet>`, then
+         * `<sheet>-p2`, …) registered `urgent` with one review needed. The judge's reviewBatch (ai/judge/review.go)
+         * in JS: a reviewer's batch never grows under them. Needs the caller's transaction.
+         */
+        async openPart(sheet, n, { transaction }) {
+            const [free] = await sequelize.query(
+                `SELECT b.batch FROM prv_review_batches b
+                  WHERE b.batch IN (SELECT batch FROM prv_review_items WHERE COALESCE(sheet, batch) = :sheet)
+                    AND b.locked_by IS NULL
+                    AND (SELECT COUNT(*) FROM prv_review_items i WHERE i.batch = b.batch) + :n <= :max
+                    AND NOT EXISTS (SELECT 1 FROM prv_review_items i JOIN prv_review_verdicts r ON r.item_id = i.id WHERE i.batch = b.batch)
+                  ORDER BY b.created_at DESC, b.batch DESC LIMIT 1 FOR UPDATE OF b`,
+                { replacements: { sheet, n, max: BATCH_MAX }, type: QueryTypes.SELECT, transaction });
+            if (free) return free.batch;
+            const [{ parts }] = await sequelize.query(
+                `SELECT COUNT(DISTINCT batch)::int AS parts FROM prv_review_items WHERE COALESCE(sheet, batch) = :sheet`,
+                { replacements: { sheet }, type: QueryTypes.SELECT, transaction });
+            const batch = parts > 0 ? `${sheet}-p${parts + 1}` : sheet;
+            await this.createBatch(batch, { reviews_needed: 1, priority: 'urgent' }, { transaction });
+            return batch;
+        },
+
+        // The next position in `sheet` (max + 1 over all its parts).
+        async nextPosition(sheet, { transaction } = {}) {
+            const [{ last }] = await sequelize.query(
+                `SELECT COALESCE(MAX(position), 0)::int AS last FROM prv_review_items WHERE COALESCE(sheet, batch) = :sheet`,
+                { replacements: { sheet }, type: QueryTypes.SELECT, transaction });
+            return last + 1;
+        },
+
+        // The ai items without a verdict on AI row `video_id`, as `{ batch, item_code, start, end }` (newest first).
+        async openAiItems(video_id, { transaction } = {}) {
+            return sequelize.query(
+                `SELECT i.batch, i.item_code, i.start, i."end" FROM prv_review_items i
+                  WHERE i.kind = 'ai' AND i.video_id = :video_id AND NOT ${IS_DECIDED} ORDER BY i.id DESC`,
+                { replacements: { video_id }, type: QueryTypes.SELECT, transaction });
         },
 
         /**

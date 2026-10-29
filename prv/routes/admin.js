@@ -14,13 +14,14 @@ function scriptString(value) {
 
 // The video's AI detection state, served and hidden entries, or '' when the
 // detector never saw it.
-async function aiBlock(models, video, token) {
-    const [aiVideo, aiRow, served, categories, judgements] = await Promise.all([
+async function aiBlock(models, video, token, reviewRepository) {
+    const [aiVideo, aiRow, served, categories, judgements, openItems] = await Promise.all([
         models.AiVideo.findByPk(video.native_id),
         models.AiVideoCalculated.findByPk(video.id),
         findAiCalculated(models, video.id),
         models.MarkupCategory.findAll(),
         models.AiJudgement.findAll({ where: { video_id: video.id }, order: [['id', 'DESC']] }),
+        reviewRepository.openAiItems(video.id),
     ]);
     if (!aiVideo && !aiRow) return '';
 
@@ -36,6 +37,13 @@ async function aiBlock(models, video, token) {
         const state = aiRow.withdrawn_at
             ? `withdrawn ${escapeHtml(formatDate(aiRow.withdrawn_at))} by ${escapeHtml(aiRow.withdrawn_by)}${aiRow.withdrawn_reason ? `: ${escapeHtml(aiRow.withdrawn_reason)}` : ''}`
             : `published ${escapeHtml(formatDate(aiRow.published_at))}`;
+        // The entry's open review item (the judge's rule: one open item per entry), or the link that creates one.
+        const reviewCell = e => {
+            const open = openItems.find(i => i.start === e.start && i.end === e.end);
+            return open
+                ? `<span class="muted ai-in-review" title="Open review item">${escapeHtml(open.batch)} ${escapeHtml(open.item_code)}</span>`
+                : `<button class="delete-btn" onclick="sendAi(this, ${Number(e.start)}, ${Number(e.end)})">Send to review</button>`;
+        };
         const entryRows = (list, cls, last) => list.map(e => {
             const name = categoryName[e.category_id] || e.category_id;
             return `
@@ -45,6 +53,7 @@ async function aiBlock(models, video, token) {
         ? ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>' : ''}</td>
                 <td class="muted">${escapeHtml(e.confidence)}</td>
                 <td class="muted">${escapeHtml(last(e))}</td>
+                <td>${reviewCell(e)}</td>
             </tr>`;
         }).join('');
         const entries = entryRows(aiRow.data || [], 'ai-entry', e => e.rating ?? 0);
@@ -58,11 +67,11 @@ async function aiBlock(models, video, token) {
     </div>
     ${entries ? `
     <table class="ai-table">
-        <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th></tr></thead>
+        <thead><tr><th>Category</th><th>Interval</th><th>Confidence</th><th>Rating</th><th>Review</th></tr></thead>
         <tbody>${entries}</tbody>
     </table>` : '<div class="no-calc">No entry to serve.</div>'}${hidden ? `
     <table class="ai-table">
-        <thead><tr><th>Hidden</th><th>Interval</th><th>Confidence</th><th>Reason</th></tr></thead>
+        <thead><tr><th>Hidden</th><th>Interval</th><th>Confidence</th><th>Reason</th><th>Review</th></tr></thead>
         <tbody>${hidden}</tbody>
     </table>` : ''}`;
     }
@@ -90,10 +99,20 @@ async function aiBlock(models, video, token) {
             if (res.ok) location.reload();
             else { btn.disabled = false; alert('Error: ' + res.status); }
         }
+        async function sendAi(btn, start, end) {
+            if (!confirm('Send the segment ' + start + '-' + end + ' to review? It goes to today\'s urgent ai-admin batch.')) return;
+            btn.disabled = true;
+            const res = await fetch('/admin/video/${video.id}/ai/review?verifyBearerToken=' + encodeURIComponent(${scriptString(token)})
+                + '&start=' + start + '&end=' + end);
+            const text = await res.text();
+            if (res.status === 201) { alert(text); location.reload(); return; }
+            btn.disabled = false;
+            alert((res.ok ? '' : 'Error ' + res.status + ': ') + text);
+        }
     </script>`;
 }
 
-module.exports = function createAdminRoutes(models, { markupRepository, aiRepository }) {
+module.exports = function createAdminRoutes(models, { markupRepository, aiRepository, reviewRepository }) {
     const router = express.Router();
 
     router.get('/admin/video/:video_id', handler(async (req, res) => {
@@ -198,7 +217,7 @@ module.exports = function createAdminRoutes(models, { markupRepository, aiReposi
         </tbody>`;
         }).join('');
 
-        const ai = await aiBlock(models, video, token);
+        const ai = await aiBlock(models, video, token, reviewRepository);
 
         const html = `<!DOCTYPE html>
 <html lang="en">
@@ -352,6 +371,23 @@ ${ai}
         const withdrawn = await aiRepository.withdraw(videoId, 'admin', 'withdrawn on /admin/video');
         if (!withdrawn) { res.status(404).send('No published AI row'); return; }
         res.status(200).send('Withdrawn');
+    }));
+
+    // The operator's way to get a review item on one entry of the AI row (served or hidden, any row state).
+    router.get('/admin/video/:video_id/ai/review', handler(async (req, res) => {
+        if (!process.env.AUTH_TOKEN || req.query.verifyBearerToken !== process.env.AUTH_TOKEN) {
+            res.status(401).send('Unauthorized');
+            return;
+        }
+        const videoId = Number(req.params.video_id);
+        if (!Number.isInteger(videoId)) { res.status(400).send('Bad video id'); return; }
+        const bounds = { start: Number(req.query.start), end: Number(req.query.end) };
+        if (!Number.isInteger(bounds.start) || !Number.isInteger(bounds.end)) { res.status(400).send('Bad bounds'); return; }
+
+        const sent = await aiRepository.sendToReview(videoId, bounds, reviewRepository);
+        if (sent.outcome === 'none') { res.status(404).send('No AI entry at these bounds'); return; }
+        if (sent.outcome === 'open') { res.status(409).send(`Already in review: ${sent.batch} ${sent.item_code}`); return; }
+        res.status(201).send(`Sent to review: ${sent.batch} ${sent.item_code}`);
     }));
 
     router.get('/admin/video/:video_id/user/:prv_user_id', handler(async (req, res) => {

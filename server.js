@@ -26,6 +26,7 @@ const metricsMiddleware = promBundle({
     normalizePath: [
         [/^\/admin\/video\/[^/]+\/user\/\d+$/, '/admin/video/#video_id/user/#prv_user_id'],
         [/^\/admin\/video\/[^/]+\/ai\/withdraw$/, '/admin/video/#video_id/ai/withdraw'],
+        [/^\/admin\/video\/[^/]+\/ai\/review$/, '/admin/video/#video_id/ai/review'],
         [/^\/admin\/video\/[^/]+$/, '/admin/video/#video_id'],
         [/^\/admin\/user\/\d+$/, '/admin/user/#internal_id'],
         [/^\/admin\/review\/(?!(decide|reviewers)$)[^/]+$/, '/admin/review/#batch'],

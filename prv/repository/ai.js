@@ -2,6 +2,8 @@ const { QueryTypes } = require('sequelize');
 const { voteRating } = require('../../lib/segment-rating');
 const { ReviewInputError, KEEP_VERDICTS } = require('./review');
 const { MIN_SEGMENT_SECONDS, HIDDEN_REASONS } = require('../../lib/ai-rules');
+const { cuesOver } = require('../../lib/review-sheet');
+const { linkAt } = require('../../lib/player-link');
 
 // A prv video id (`<owner>_<id>`, owner negative for a community); anything else is never queued for `ai detect`
 // (ai/pipeline/queue.go nativeIDRegex is the same pattern).
@@ -76,21 +78,27 @@ module.exports = function createAiRepository(models, sequelize) {
          * `hidden` with reason `review`, at `to`, and the row is withdrawn by `review` when that empties `data`;
          * sponsor / self_promotion keep it, or put it back, with that category at `to` (`source: 'review'` once
          * moved), in `data` with the rating of the votes on the new category and bounds, or in `hidden` with reason
-         * `short` when under MIN_SEGMENT_SECONDS. Bounds overlapping another served entry are refused
-         * (ReviewInputError, nothing written). A row withdrawn by judge or review is served again once every served
-         * entry has a keep verdict. Idempotent; returns true when the row changed.
+         * `short` when under MIN_SEGMENT_SECONDS. Served entries of the same category lying entirely inside `to`
+         * are absorbed (the pieces of one ad become this entry; their votes and items are left behind); a partial
+         * overlap or a covered entry of another category is refused (ReviewInputError, nothing written). A row
+         * withdrawn by judge or review is served again once every served entry has a keep verdict. Idempotent;
+         * returns `{ changed, absorbed }`.
          */
         async applyVerdict(item, verdict, { from = item, to = from, transaction }) {
-            if (item.kind !== 'ai' || item.video_id == null) return false;
+            const none = { changed: false, absorbed: 0 };
+            if (item.kind !== 'ai' || item.video_id == null) return none;
             const row = await models.AiVideoCalculated.findOne({
                 where: { video_id: item.video_id }, lock: transaction.LOCK.UPDATE, transaction });
-            if (!row) return false;
+            if (!row) return none;
+            let absorbed = 0;
             const atFrom = e => e.start === from.start && e.end === from.end;
             const inData = row.data.findIndex(atFrom);
             const inHidden = inData === -1 ? row.hidden.findIndex(atFrom) : -1;
             const old = inData !== -1 ? row.data[inData] : row.hidden[inHidden];
             const others = { data: row.data.filter((_, i) => i !== inData), hidden: row.hidden.filter((_, i) => i !== inHidden) };
             let toData = null, toHidden = null;
+            // An entry absorbed by a merge sits inside a served one: its item is history, a verdict on it changes nothing.
+            if (!old && others.data.some(e => e.start <= from.start && from.end <= e.end)) return { changed: false, absorbed: 0 };
             if (KEEP_VERDICTS.has(verdict)) {
                 const category = await models.MarkupCategory.findOne({ where: { category: verdict }, transaction });
                 // An entry put back at bounds a reviewer set is theirs, not the detector's.
@@ -105,9 +113,12 @@ module.exports = function createAiRepository(models, sequelize) {
                 if (to.end - to.start < MIN_SEGMENT_SECONDS) {
                     if (!alreadyShort) toHidden = { ...entry, reason: HIDDEN_REASONS.SHORT };
                 } else if (!alreadyServed) {
-                    if (others.data.some(e => e.start < to.end && to.start < e.end)) {
+                    const overlapping = others.data.filter(e => e.start < to.end && to.start < e.end);
+                    if (overlapping.some(e => e.category_id !== category.id || e.start < to.start || to.end < e.end)) {
                         throw new ReviewInputError(`bounds ${to.start}-${to.end} overlap another AI segment of the video`, 'bounds_overlap');
                     }
+                    absorbed = overlapping.length;
+                    others.data = others.data.filter(e => !overlapping.includes(e));
                     const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: to.start, end: to.end }, { transaction });
                     toData = { ...entry, ...(rating ? { rating } : {}) };
                 }
@@ -123,7 +134,8 @@ module.exports = function createAiRepository(models, sequelize) {
             }
 
             if (!row.withdrawn_at && !KEEP_VERDICTS.has(verdict) && inData !== -1 && data.length === 0) {
-                return (await this.withdraw(row.video_id, 'review', `review: ${verdict} on ${item.batch} ${item.item_code}`, { transaction })) || changed;
+                const withdrawn = await this.withdraw(row.video_id, 'review', `review: ${verdict} on ${item.batch} ${item.item_code}`, { transaction });
+                return { changed: withdrawn || changed, absorbed };
             }
             if (row.withdrawn_at && RESTORABLE_BY.has(row.withdrawn_by) && data.length > 0 && await allKept(row, data, transaction)) {
                 await row.update({ withdrawn_at: null, withdrawn_by: null, withdrawn_reason: null, updated_at: sequelize.fn('NOW') }, { transaction });
@@ -132,7 +144,51 @@ module.exports = function createAiRepository(models, sequelize) {
                     { replacements: { nativeId: row.native_id }, transaction });
                 changed = true;
             }
-            return changed;
+            return { changed, absorbed };
+        },
+
+        /**
+         * Put the entry at `start`–`end` of AI row `videoId` (served or hidden, the row in any state) in front of an
+         * assessor: one ai item in today's `ai-admin-<date>` sheet, placed by reviewRepository.openPart (the judge's
+         * rule), code `M<position>`, cues from the run over the bounds, the player link at start − 2 s. Under the AI
+         * row's lock, then the batch row's (the judge's order; the decide route's batch → AI row order never meets
+         * it because neither adds to a batch someone holds or has a verdict in). Returns `{ outcome, batch, item_code }`
+         * with outcome `created`, `open` (an item without a verdict already sits on the entry: its batch / code) or
+         * `none` (no row or no entry at the bounds).
+         */
+        async sendToReview(videoId, { start, end }, reviewRepository, now = new Date()) {
+            return sequelize.transaction(async (transaction) => {
+                const row = await models.AiVideoCalculated.findOne({ where: { video_id: videoId }, lock: transaction.LOCK.UPDATE, transaction });
+                const entry = row && [...row.data.map(e => ({ ...e, served: true })), ...row.hidden].find(e => e.start === start && e.end === end);
+                if (!entry) return { outcome: 'none' };
+                const open = (await reviewRepository.openAiItems(videoId, { transaction })).find(i => i.start === start && i.end === end);
+                if (open) return { outcome: 'open', batch: open.batch, item_code: open.item_code };
+                const [category, run] = await Promise.all([
+                    models.MarkupCategory.findByPk(entry.category_id, { transaction }),
+                    models.AiRun.findByPk(row.run_id, { attributes: ['transcript'], transaction }),
+                ]);
+                const sheet = `ai-admin-${now.toISOString().slice(0, 10)}`;
+                const batch = await reviewRepository.openPart(sheet, 1, { transaction });
+                const position = await reviewRepository.nextPosition(sheet, { transaction });
+                const item = {
+                    item_code: `M${position}`, position, native_id: row.native_id, start, end, proposed: category.category,
+                    cues: cuesOver(run && run.transcript && run.transcript.cues, entry), link: linkAt(row.native_id, start - 2),
+                    flagged_by: ['admin: sent to review',
+                        `entry: ${category.category} ${entry.confidence}, ${end - start} s, ${entry.served ? 'served' : `hidden: ${entry.reason}`}`],
+                    kind: 'ai', video_id: videoId,
+                };
+                await reviewRepository.insertItems(sheet, batch, [item], { transaction });
+                return { outcome: 'created', batch, item_code: item.item_code };
+            });
+        },
+
+        // The row's served entries as `{ category, start, end }` (category by name), or [] without a row.
+        async servedEntries(videoId, { transaction } = {}) {
+            const row = await models.AiVideoCalculated.findByPk(videoId, { attributes: ['data'], transaction });
+            if (!row) return [];
+            const categories = await models.MarkupCategory.findAll({ transaction });
+            const name = Object.fromEntries(categories.map(c => [c.id, c.category]));
+            return row.data.map(e => ({ category: name[e.category_id] || String(e.category_id), start: e.start, end: e.end }));
         },
     };
 };

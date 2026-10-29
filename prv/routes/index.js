@@ -24,7 +24,7 @@ router.use('/', require('./videos')(models, { videoRepository, durationLogReposi
 router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('./users')(models));
 router.use('/', require('./events')(models));
-router.use('/', require('./admin')(models, { markupRepository, aiRepository }));
+router.use('/', require('./admin')(models, { markupRepository, aiRepository, reviewRepository }));
 router.use('/', require('./admin-moderation')(models, { markupRepository, moderationRepository }));
 router.use('/', require('./admin-review')(models, { reviewRepository, aiRepository }));
 

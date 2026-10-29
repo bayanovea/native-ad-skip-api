@@ -76,7 +76,7 @@ async function main() {
                     let changed = false;
                     if (item.verdict) {
                         const adopted = await review.getItemById(id, { transaction });
-                        changed = await ai.applyVerdict(adopted, item.verdict.verdict, { from: e, to: adopted.effective_bounds, transaction });
+                        ({ changed } = await ai.applyVerdict(adopted, item.verdict.verdict, { from: e, to: adopted.effective_bounds, transaction }));
                         what = `${item.verdict.verdict} ${changed ? 'applied' : 'unchanged'}`;
                     }
                     outcome = changed ? 'applied' : 'converted';

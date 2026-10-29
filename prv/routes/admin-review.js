@@ -173,6 +173,14 @@ function presentItem(item) {
     };
 }
 
+// The other served entries of an ai item's AI row (the page's absorb warning), null for a sheet item
+// or an item without a row. The item's own entry sits at its effective bounds.
+async function aiEntriesAround(aiRepository, item) {
+    if (item.kind !== 'ai' || item.video_id == null) return null;
+    const eff = item.effective_bounds || item;
+    return (await aiRepository.servedEntries(item.video_id)).filter(e => e.start !== eff.start || e.end !== eff.end);
+}
+
 // The longest known duration of the item's video when the item starts after
 // it (the subtitle track is from a longer cut, so the player opens at 0),
 // else null. Shown as a warning so the assessor does not take it for a bug.
@@ -589,6 +597,7 @@ function renderItemPage(payload, token, t, langLink) {
         item_id: item.id,
         item_code: item.item_code,
         own_bounds: item.own_bounds,
+        ai_entries: item.ai_entries,
         prev: nav.prev ? nav.prev.item_code : null,
         next: nav.next ? nav.next.item_code : null,
         prev_player_link: nav.prev ? nav.prev.player_link : null,
@@ -606,7 +615,7 @@ function renderItemPage(payload, token, t, langLink) {
         letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
-            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds', 'warn_bounds_short',
+            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds', 'warn_bounds_short', 'warn_bounds_absorb',
             ...['format', 'range', 'order'].map(why => `error_bounds_${why}`)]
             .map(key => [key, t.text(key)])),
     };
@@ -801,7 +810,7 @@ function renderItemPage(payload, token, t, langLink) {
         // Bounds go only with a keep verdict.
         const keep = v === 'sponsor' || v === 'self_promotion';
         ['bound-start', 'bound-end', 'bounds-clear'].forEach(function (id) { document.getElementById(id).disabled = !keep; });
-        if (!keep) clearBounds();
+        if (keep) showBoundsWarning(); else clearBounds();
         setStatus('');
     }
     function boundInputs() {
@@ -821,8 +830,17 @@ function renderItemPage(payload, token, t, langLink) {
         const b = { start: parsePlayerTime(raw[0]), end: parsePlayerTime(raw[1]) };
         const why = validateVerdictBounds(b);
         if (why) return { error: tr('error_bounds_' + why) };
-        if (b.end - b.start < STATE.min_segment_seconds) return { bounds: b, warning: tr('warn_bounds_short', { seconds: STATE.min_segment_seconds }) };
-        return { bounds: b };
+        const warnings = [];
+        if (b.end - b.start < STATE.min_segment_seconds) warnings.push(tr('warn_bounds_short', { seconds: STATE.min_segment_seconds }));
+        const absorbed = absorbedBy(b);
+        if (absorbed) warnings.push(tr('warn_bounds_absorb', { count: absorbed }));
+        return { bounds: b, warning: warnings.join(' ') || undefined };
+    }
+    // Served entries of the picked category lying entirely inside the bounds: the save merges them into this one.
+    function absorbedBy(b) {
+        return (STATE.ai_entries || []).filter(function (e) {
+            return e.category === picked && b.start <= e.start && e.end <= b.end;
+        }).length;
     }
     function showBoundsWarning() {
         document.getElementById('bounds-warn').textContent = readBounds().warning || '';
@@ -1058,6 +1076,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
         let item;
         let reviewer;
         let aiApplied = false;
+        let absorbed = 0;
         try {
             if (!(await reviewRepository.isReviewer(typeof body.reviewer === 'string' ? body.reviewer.trim() : ''))) {
                 throw new ReviewInputError(`unknown reviewer ${body.reviewer}`);
@@ -1086,7 +1105,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
                     const from = await reviewRepository.effectiveBounds(before.id, { transaction });
                     await reviewRepository.recordVerdict({ item_id: body.item_id, verdict: body.verdict, comment, reviewer, source: 'page', bounds, transaction });
                     if (lockedItem.kind === 'ai') {
-                        aiApplied = await aiRepository.applyVerdict(lockedItem, body.verdict, { from, to: bounds || from, transaction });
+                        ({ changed: aiApplied, absorbed } = await aiRepository.applyVerdict(lockedItem, body.verdict, { from, to: bounds || from, transaction }));
                     }
                 }
                 if (body.track_mismatch !== undefined) {
@@ -1119,6 +1138,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             next_item: next ? next.item_code : null,
             next_player_link: next ? safeLink(next.link) : null,
             ai_applied: aiApplied,
+            absorbed,
         });
     }));
 
@@ -1186,6 +1206,7 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
             reviewRepository.getTranscript(raw, context),
         ]);
         item.beyond_video_s = beyondVideo(item, signals.videos);
+        item.ai_entries = await aiEntriesAround(aiRepository, raw);
         const payload = {
             reviewer,
             batch: progress,

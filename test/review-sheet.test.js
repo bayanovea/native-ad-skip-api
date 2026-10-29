@@ -4,7 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { parseSheet, normalizeVerdict, formatPlayerTime, parsePlayerTime, validateVerdictBounds, splitSheet, entryInsideSheetItem } = require('../lib/review-sheet');
+const { parseSheet, normalizeVerdict, formatPlayerTime, parsePlayerTime, validateVerdictBounds, splitSheet, entryInsideSheetItem, cuesOver } = require('../lib/review-sheet');
+const { linkAt } = require('../lib/player-link');
 
 const md = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.md'), 'utf8');
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/review-sheet.key.tsv'), 'utf8');
@@ -278,4 +279,19 @@ test('entryInsideSheetItem: the entry inside the item by less than a second at e
     assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300.04, end: 319.96 }), true, 'just outside, within the slack');
     assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300.05, end: 320 }), false, 'starts 0.05 s before the item');
     assert.equal(entryInsideSheetItem({ start: 300, end: 320 }, { start: 300, end: 319.95 }), false, 'ends 0.05 s after the item');
+});
+
+test('cuesOver: the text of the cues overlapping the bounds, one per line; null when none or no cues', () => {
+    const cues = [{ start: 0, end: 5, text: 'a' }, { start: 5, end: 10, text: 'b' }, { start: 10, end: 15, text: 'c' }];
+    assert.equal(cuesOver(cues, { start: 4, end: 11 }), 'a\nb\nc');
+    assert.equal(cuesOver(cues, { start: 5, end: 10 }), 'b', 'touching ends do not overlap');
+    assert.equal(cuesOver(cues, { start: 20, end: 30 }), null);
+    assert.equal(cuesOver(undefined, { start: 0, end: 1 }), null);
+});
+
+test('linkAt: the prv player link in the Go provider\'s format, clamped at 0', () => {
+    assert.equal(linkAt('-1_2', 58), 'https://example.invalid/video-1_2?t=58s');
+    assert.equal(linkAt('-1_2', 1235), 'https://example.invalid/video-1_2?t=20m35s');
+    assert.equal(linkAt('-1_2', 3661.9), 'https://example.invalid/video-1_2?t=1h1m1s');
+    assert.equal(linkAt('-1_2', -2), 'https://example.invalid/video-1_2?t=0s');
 });

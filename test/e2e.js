@@ -1812,6 +1812,96 @@ async function aiItems(videoId) {
 
 const fixtureReason = nativeId => JSON.parse(fs.readFileSync(path.join(APP_DIR, 'test/fixtures/ai', `${nativeId}.judge.json`), 'utf8')).reason;
 
+test('ai-first: the admin send-to-review link creates an urgent ai item on a served or hidden entry (M codes, today\'s ai-admin batch, held part → next part), refuses an open item with 409, wrong token 401, no entry 404; the block shows open items', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000531';
+    const sp = cats.prv.sponsor;
+    const sheet = `ai-admin-${new Date().toISOString().slice(0, 10)}`;
+    const parts = async () => (await dbQuery(`SELECT DISTINCT batch FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, [sheet])).map(r => r.batch);
+    const partName = k => (k === 1 ? sheet : `${sheet}-p${k}`);
+    const n0 = (await parts()).length;
+    const judgeBatch = 'e2e-ai-send-judge';
+    const { videoId, items: [a1, a2] } = await aiReviewSeed(vid, judgeBatch, [[30, 70], [200, 230]]);
+    await dbQuery(`DELETE FROM prv_review_items WHERE id = $1`, [a2.id]);
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = $2 WHERE video_id = $1`, [videoId,
+        JSON.stringify([{ category_id: cats.prv.self_promotion, start: 300, end: 320, confidence: 'medium', source: 'ai', reason: 'confidence' }])]);
+    await dbQuery(`UPDATE prv_ai_runs SET transcript = $2 WHERE id = (SELECT run_id FROM prv_ai_video_calculateds WHERE video_id = $1)`,
+        [videoId, JSON.stringify({ meta: {}, cues: [{ start: 198, end: 205, text: 'спонсор выпуска' }, { start: 205, end: 240, text: 'ссылка в описании' }, { start: 300, end: 310, text: 'мой канал' }] })]);
+    const page = async () => (await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    const send = (start, end, token = VOTE_AUTH, id = videoId) => requestOn(AI_PORT, 'GET', `/admin/video/${id}/ai/review?verifyBearerToken=${token}&start=${start}&end=${end}`);
+    const held = [];
+    try {
+        let html = await page();
+        assert.match(html, new RegExp(`<span class="muted ai-in-review"[^>]*>${judgeBatch} A1</span>`), 'the open judge item is shown');
+        assert.doesNotMatch(html, /sendAi\(this, 30, 70\)/);
+        assert.match(html, /sendAi\(this, 200, 230\)/);
+        assert.match(html, /sendAi\(this, 300, 320\)/, 'hidden entries too');
+
+        assert.equal((await send(200, 230, 'wrong')).status, 401);
+        assert.equal((await send(200, 230, VOTE_AUTH, 'abc')).status, 400);
+        assert.equal((await send('x', 230)).status, 400);
+        assert.equal((await send(200, 231)).status, 404);
+        assert.equal((await send(200, 230, VOTE_AUTH, videoId + 100000)).status, 404);
+        let res = await send(30, 70);
+        assert.deepEqual([res.status, res.body], [409, `Already in review: ${judgeBatch} A1`]);
+        assert.equal((await aiItems(videoId)).length, 1, 'nothing written');
+
+        res = await send(200, 230);
+        assert.deepEqual([res.status, res.body], [201, `Sent to review: ${partName(n0 + 1)} M1`]);
+        let [item] = (await aiItems(videoId)).filter(i => i.item_code === 'M1');
+        assert.deepEqual([item.sheet, item.batch, item.kind, item.video_id, item.native_id, item.start, item.end, item.proposed, item.position, item.cues, item.link, item.flagged_by],
+            [sheet, partName(n0 + 1), 'ai', videoId, vid, 200, 230, 'sponsor', 1, 'спонсор выпуска\nссылка в описании', `https://example.invalid/video${vid}?t=3m18s`,
+                ['admin: sent to review', 'entry: sponsor high, 30 s, served']]);
+        const [b] = await dbQuery(`SELECT priority, reviews_needed, locked_by FROM prv_review_batches WHERE batch = $1`, [item.batch]);
+        assert.deepEqual(b, { priority: 'urgent', reviews_needed: 1, locked_by: null });
+        html = await page();
+        assert.match(html, new RegExp(`${partName(n0 + 1)} M1</span>`), 'the page reflects the new item');
+        assert.doesNotMatch(html, /sendAi\(this, 200, 230\)/);
+        assert.deepEqual([(await send(200, 230)).status], [409]);
+
+        res = await send(300, 320);
+        assert.deepEqual([res.status, res.body], [201, `Sent to review: ${partName(n0 + 1)} M2`], 'a hidden entry, same free part');
+        [item] = (await aiItems(videoId)).filter(i => i.item_code === 'M2');
+        assert.deepEqual([item.proposed, item.cues, item.flagged_by[1]], ['self_promotion', 'мой канал', 'entry: self_promotion medium, 20 s, hidden: confidence']);
+
+        // A held part never grows: the next item opens a new part; a withdrawn row still takes items.
+        held.push(...(await dbQuery(`UPDATE prv_review_batches SET locked_by = 'gkshi', locked_at = NOW() WHERE batch = $1 RETURNING batch`, [item.batch])).map(r => r.batch));
+        await dbQuery(`UPDATE prv_ai_video_calculateds SET data = data || $2::jsonb, withdrawn_at = NOW(), withdrawn_by = 'judge' WHERE video_id = $1`,
+            [videoId, JSON.stringify([{ category_id: sp, start: 400, end: 450, confidence: 'high', source: 'ai' }])]);
+        res = await send(400, 450);
+        assert.deepEqual([res.status, res.body], [201, `Sent to review: ${partName(n0 + 2)} M3`]);
+
+        // A decided item is no longer open: the entry can be sent again.
+        await takeReview(judgeBatch);
+        await decideAi(a1, 'sponsor');
+        res = await send(30, 70);
+        assert.deepEqual([res.status, res.body], [201, `Sent to review: ${partName(n0 + 2)} M4`]);
+    } finally {
+        await dbQuery(`UPDATE prv_review_batches SET locked_by = NULL, locked_at = NULL WHERE batch = ANY($1)`, [held]);
+    }
+});
+
+test('ai-first: the owner\'s merge: send an entry to review from /admin/video, take the batch, keep with covering bounds → two sponsor entries served, the merged one by review', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000532';
+    const sp = cats.prv.sponsor;
+    const { videoId } = await aiReviewSeed(vid, 'e2e-ai-owner-closed', [[1237, 1245], [1258, 1275], [1286, 1294], [1344, 1378]]);
+    // The entries' own items were decided by someone else in a closed batch.
+    await dbQuery(`INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source) SELECT id, 'sponsor', 'gkshi', 'page' FROM prv_review_items WHERE video_id = $1`, [videoId]);
+
+    const res = await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}/ai/review?verifyBearerToken=${VOTE_AUTH}&start=1258&end=1275`);
+    assert.equal(res.status, 201, res.body);
+    const item = (await aiItems(videoId)).find(i => i.item_code.startsWith('M'));
+    await takeReview(item.batch);
+    const saved = await decideBounds(item, 'sponsor', { start: '20:37', end: '21:37', source: 'typed' }, { comment: 'one ad' });
+    assert.equal(saved.status, 201, JSON.stringify(saved.body));
+    assert.deepEqual([saved.body.ai_applied, saved.body.absorbed], [true, 2]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 1237, 1297, 'review', undefined], [sp, 1344, 1378, 'ai', undefined]]);
+    assert.deepEqual(await servedBounds(vid), [[sp, 1237, 1297], [sp, 1344, 1378]]);
+    const html = (await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    assert.match(html, /data-start="1237" data-end="1297"><\/span> <span class="badge review-badge"/);
+});
+
 test('ai judge: off by default; no signal → ok by rules, an undo → the LLM says review (items, row served); not due before 24 h; one LLM call per interval', async () => {
     const quiet = await aiPublished('-1_456000401');
     const undone = await aiPublished('-1_456000402');
@@ -2347,6 +2437,7 @@ test('ai review bounds: the item page carries the transcript window (words when 
 
     let body = (await getReview(batch, { item: 'A1', format: 'json' })).body;
     assert.deepEqual([body.context, body.transcript], [60, { from: 0, to: 130, has_words: true, cues: transcript.cues.slice(0, 2) }]);
+    assert.deepEqual(body.item.ai_entries, [], 'the only served entry is the item\'s own');
     body = (await getReview(batch, { item: 'A1', format: 'json', context: '600' })).body;
     assert.deepEqual([body.transcript.to, body.transcript.cues.length], [670, 3]);
     for (const context of ['601', '-1', '1.5', 'x']) {
@@ -2376,9 +2467,61 @@ test('ai review bounds: the item page carries the transcript window (words when 
         VALUES ($1, 'C1', 1, $2, 30, 70, 'sponsor', 'цитата', 'https://example.invalid/video-1_456000515?t=28s')`, [sheet, vid]);
     await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1)', [sheet]);
     body = (await getReview(sheet, { item: 'C1', format: 'json' })).body;
-    assert.equal(body.transcript, null);
+    assert.deepEqual([body.transcript, body.item.ai_entries], [null, null]);
     html = (await getReview(sheet, { item: 'C1' })).body;
     assert.ok(!html.includes('id="transcript"') && html.includes('цитата') && html.includes('id="bound-start"'), 'typed bounds only');
+});
+
+test('ai review merge: a keep whose bounds cover same-category served entries absorbs them (one entry, source review, rating from the new bounds, hidden untouched); a partial overlap and another category stay 400 bounds_overlap; an absorbed entry\'s item is history', async () => {
+    await aiFirstServer();
+    const vid = '-1_456000521';
+    const batch = 'e2e-ai-merge';
+    const sp = cats.prv.sponsor;
+    const self = cats.prv.self_promotion;
+    // The owner's video of 2026-10-29: three pieces of one ad, then a separate one.
+    const { videoId, items: [a1, a2, a3, a4] } = await aiReviewSeed(vid, batch, [[1237, 1245], [1258, 1275], [1286, 1294], [1344, 1378]]);
+    const hidden = [{ category_id: sp, start: 1247, end: 1250, confidence: 'low', source: 'ai', reason: 'short' }];
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = $2 WHERE video_id = $1`, [videoId, JSON.stringify(hidden)]);
+    await dbQuery(`INSERT INTO votes (user_id, video_id, category_id, start, "end", vote, "createdAt", "updatedAt") VALUES
+        ('merge-voter', $1, $2, 1237, 1245, 1, NOW(), NOW()), ('merge-voter', $1, $2, 1286, 1294, 1, NOW(), NOW())`, [videoId, sp]);
+    await takeReview(batch);
+
+    const json = (await getReview(batch, { item: 'A2', format: 'json' })).body.item;
+    assert.deepEqual(json.ai_entries, [{ category: 'sponsor', start: 1237, end: 1245 }, { category: 'sponsor', start: 1286, end: 1294 },
+        { category: 'sponsor', start: 1344, end: 1378 }], 'the page knows the other served entries');
+    const html = (await getReview(batch, { item: 'A2' })).body;
+    assert.ok(html.includes('"ai_entries":[{') && html.includes('warn_bounds_absorb'), 'the page can warn before the save');
+
+    // Partial overlap of a neighbour: refused, nothing written.
+    let res = await decideBounds(a2, 'sponsor', { start: 1240, end: 1297, source: 'typed' });
+    assert.deepEqual([res.status, res.body], [400, RU.text('error_bounds_overlap')]);
+    // A covered entry of another category: refused.
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = jsonb_set(data, '{3,category_id}', $2::text::jsonb) WHERE video_id = $1`, [videoId, String(self)]);
+    res = await decideBounds(a2, 'sponsor', { start: 1237, end: 1378, source: 'typed' });
+    assert.deepEqual([res.status, res.body], [400, RU.text('error_bounds_overlap')]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 1237, 1245, 'ai', undefined], [sp, 1258, 1275, 'ai', undefined], [sp, 1286, 1294, 'ai', undefined], [self, 1344, 1378, 'ai', undefined]], 'unchanged (the seed writes no ratings)');
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = jsonb_set(data, '{3,category_id}', $2::text::jsonb) WHERE video_id = $1`, [videoId, String(sp)]);
+
+    // The merge: 1237–1297 covers the first and third piece entirely.
+    res = await decideBounds(a2, 'sponsor', { start: '20:37', end: '21:37', source: 'typed' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual([res.body.ai_applied, res.body.absorbed, res.body.effective_bounds], [true, 2, { start: 1237, end: 1297, reviewer: REVIEWER, source: 'typed' }]);
+    assert.deepEqual(await aiEntries(videoId), [[sp, 1237, 1297, 'review', undefined], [sp, 1344, 1378, 'ai', undefined]],
+        'one merged entry, the absorbed entries\' votes count nowhere');
+    assert.deepEqual((await dbQuery(`SELECT hidden FROM prv_ai_video_calculateds WHERE video_id = $1`, [videoId]))[0].hidden, hidden, 'hidden untouched');
+    assert.deepEqual(await servedBounds(vid), [[sp, 1237, 1297], [sp, 1344, 1378]]);
+
+    // The absorbed entries' items are history: their verdicts change nothing; the merged item still drives its entry.
+    res = await decideBounds(a1, 'not_ad', null);
+    assert.deepEqual([res.status, res.body.ai_applied, res.body.absorbed], [201, false, 0]);
+    res = await decideBounds(a3, 'sponsor', null);
+    assert.deepEqual([res.status, res.body.ai_applied], [201, false]);
+    assert.deepEqual(await servedBounds(vid), [[sp, 1237, 1297], [sp, 1344, 1378]]);
+    assert.equal((await decideBounds(a2, 'not_ad', null)).body.ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 1344, 1378]]);
+    // A plain move reports no absorption.
+    res = await decideBounds(a4, 'sponsor', { start: 1340, end: 1378, source: 'typed' });
+    assert.deepEqual([res.status, res.body.ai_applied, res.body.absorbed], [201, true, 0]);
 });
 
 test('ai judge: a keep verdict that moved the entry is its baseline: every entry kept → ok by rules, the old bounds\' signals stay behind', async () => {
@@ -5716,7 +5859,7 @@ test('review page: default item is the first open one, blind until decided, deci
     assert.equal(d.status, 201, JSON.stringify(d.body));
     assert.deepEqual(d.body, { item_id: item.id, item_code: 'C7', verdict: 'self_promotion', bounds: null,
         effective_bounds: { start: item.start, end: item.end, reviewer: null, source: null },
-        track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null, ai_applied: false });
+        track_mismatch: false, flagged_by: [REVIEW_RUN], next_item: null, next_player_link: null, ai_applied: false, absorbed: 0 });
 
     r = await getReview(batch, { item: 'C7', format: 'json' });
     assert.equal(r.body.item.verdict.verdict, 'self_promotion');
