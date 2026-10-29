@@ -2,7 +2,7 @@
   "name": "native-ad-skip-api",
   "version": "1.0.0",
   "private": true,
-  "repository": "git@github.com:odedohbest/native-ad-skip-api.git",
+  "repository": "git@github.com:bayanovea/native-ad-skip-api.git",
   "author": "odedohbest <odedohbest@gmail.com>",
   "license": "MIT",
   "scripts": {
