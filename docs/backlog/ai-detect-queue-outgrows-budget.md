@@ -13,6 +13,9 @@ Snapshots of the ai-dashboard-check skill (`queue_now` = eligible `seen` + due r
 | 2026-10-28 16:58 | 281       | 267      | |
 | 2026-10-29 04:48 | 332       | 196      | |
 | 2026-10-29 05:24 | 313       | 198      | morning MSK: the tick drains faster than videos arrive |
+| 2026-10-29 11:49 | 269       | 199      | |
+| 2026-10-29 17:15 | 428       | 200      | |
+| 2026-10-30 16:28 | 512       | 200      | +84 in 23 h against 200 claims: inflow ~280/day, no sign of the burst ending yet |
 
 `budget_pct` sits at ~100 throughout. Net over the 12.9 h from the first snapshot: +48 in the queue
 against ~106 claims, i.e. an eligible inflow of ~290/day, above the 200/day budget.
