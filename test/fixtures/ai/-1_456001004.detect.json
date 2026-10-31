@@ -1,0 +1,8 @@
+{
+ "segments": [
+  {"category": "sponsor", "first_cue": 2, "last_cue": 4, "confidence": "high", "quote": "а теперь пара слов"},
+  {"category": "sponsor", "first_cue": 5, "last_cue": 5, "confidence": "high", "quote": "вернёмся"},
+  {"category": "self_promotion", "first_cue": 6, "last_cue": 7, "confidence": "high", "quote": "подписывайтесь"},
+  {"category": "sponsor", "first_cue": 8, "last_cue": 8, "confidence": "high", "quote": "промокод"}
+ ]
+}

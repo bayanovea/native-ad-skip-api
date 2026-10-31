@@ -275,6 +275,24 @@ module.exports = function(sequelize) {
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_judgements', timestamps: false, indexes: [{ fields: ['video_id'] }] });
 
+    // One row per second-model call on a detector run (ai/pipeline/confirm.go): a first-model segment is served
+    // only when the second model found it too. confirmed / unconfirmed / extra are NULL when the call failed (`error`).
+    const AiConfirmation = sequelize.define('ai_confirmation', {
+        run_id: { type: DataTypes.INTEGER, allowNull: false, unique: true, references: { model: 'prv_ai_runs', key: 'id' } },
+        video_id: { type: DataTypes.INTEGER, allowNull: false },
+        native_id: { type: DataTypes.STRING, allowNull: false },
+        model: { type: DataTypes.TEXT, allowNull: false },
+        prompt_sha: { type: DataTypes.TEXT, allowNull: false },
+        raw_output: { type: DataTypes.JSONB, allowNull: true },
+        usage: { type: DataTypes.JSONB, allowNull: true },
+        cost_usd: { type: DataTypes.FLOAT, allowNull: true },
+        error: { type: DataTypes.TEXT, allowNull: true },
+        confirmed: { type: DataTypes.INTEGER, allowNull: true },
+        unconfirmed: { type: DataTypes.INTEGER, allowNull: true },
+        extra: { type: DataTypes.INTEGER, allowNull: true }, // second-model segments that match no first-model one
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+    }, { tableName: 'prv_ai_confirmations', timestamps: false, indexes: [{ fields: ['created_at'] }] });
+
     // Phase 3 (audio drift): subtitle-vs-audio shifts per video, steps [{at_s, shift_s}] with shift = subtitle time − audio time. No writer in the product yet.
     const AiTimeline = sequelize.define('ai_timeline', {
         native_id: { type: DataTypes.STRING, allowNull: false },
@@ -300,5 +318,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiTimeline };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiConfirmation, AiTimeline };
 };

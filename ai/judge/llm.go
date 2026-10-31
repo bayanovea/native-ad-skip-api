@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"odedohbest/video-calculate/ai/detector"
+	"odedohbest/video-calculate/ai/review"
 	"odedohbest/video-calculate/ai/vtt"
 )
 
@@ -225,7 +226,7 @@ func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]str
 		if e.Source == entrySourceReview {
 			marker = " (bounds by review)"
 		}
-		fmt.Fprintf(&b, "[%d] %s %d-%d s%s: %s\n", i, categories[e.CategoryID], e.Start, e.End, marker, cueText(cues, float64(e.Start), float64(e.End), " "))
+		fmt.Fprintf(&b, "[%d] %s %d-%d s%s: %s\n", i, categories[e.CategoryID], e.Start, e.End, marker, review.CueText(cues, float64(e.Start), float64(e.End), " "))
 	}
 	b.WriteString("</ai_segments>\n<signals>\n")
 	c := s.Counters
@@ -260,17 +261,6 @@ func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]str
 	}
 	b.WriteString("</video>\n")
 	return detector.Request{System: p.Text, User: b.String(), Schema: llmSchema, Key: v.NativeID}
-}
-
-// cueText joins the text of the cues inside [from, to].
-func cueText(cues []vtt.Cue, from, to float64, sep string) string {
-	var parts []string
-	for _, c := range cues {
-		if c.End > from && c.Start < to {
-			parts = append(parts, c.Text)
-		}
-	}
-	return strings.Join(parts, sep)
 }
 
 // runCues reads the transcript the AI row was detected from (prv_ai_runs).

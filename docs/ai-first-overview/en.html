@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-10-29 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-10-30 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -52,7 +52,15 @@
     <div class="node ai"><b>1. Is it an ad?</b><span>the AI's answer, if it is sure enough: a sponsor needs medium confidence, self-promotion high. An assessor's verdict overrides both the AI and these thresholds: "ad" makes even a doubtful segment ready to serve, "not an ad" sets it aside for good.</span></div>
     <div class="node warn"><b>2. May it be served?</b><span>at least 5 seconds long, for every segment, with a verdict or without.</span></div>
   </div>
-  <p class="caption">Nothing is deleted: the rest is set aside with its reason, "not sure", "too short" or "an assessor said no". When the owner changes a rule (say, the minimum length), every AI markup is recomputed once; assessors' verdicts stay the last word.</p>
+  <p class="caption">Nothing is deleted: the rest is set aside with its reason, "not sure", "too short", "the second model did not find it" or "an assessor said no". When the owner changes a rule (say, the minimum length), every AI markup is recomputed once; assessors' verdicts stay the last word.</p>
+
+  <h3>Second opinion: two models must agree</h3>
+  <p>A separate switch, off by default. When it is on, a second model from another vendor (OpenAI) reads the same subtitle text on its own. A segment that passed both steps above is ready to serve only when the second model found an ad of the same category in about the same place.</p>
+  <div class="branch">
+    <div class="node ok"><b>Both found it</b><span>the segment is ready to serve, with the first model's edges.</span></div>
+    <div class="node warn"><b>Only the first found it</b><span>the segment is set aside ("the second model did not find it") and goes to an assessor; an "ad" verdict puts it on the air, "not an ad" sets it aside for good.</span></div>
+  </div>
+  <p class="caption">What only the second model found is never served and never sent to an assessor: we only count it. If the second model does not answer, the video is published from the first model, as without the switch.</p>
 
   <h3>Shifted subtitles: why the track check comes first</h3>
   <p>The detector sees only the subtitle text and its timing. If the subtitle track belongs to another version of the video (longer, cut differently), every time is shifted and a "clean" segment lands in the wrong place.</p>
@@ -127,7 +135,7 @@
   <div class="note ok">The judge never closes a case on its own: a human has the last word. It only pulls doubtful segments and calls an assessor.</div>
 
   <h3>The assessor in phase 2: a verdict changes what is live</h3>
-  <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason, and optional batches of the segments the AI was not sure of (<code>ai-below-threshold-&lt;date&gt;</code>). The decision is the same as before, but now it acts at once:</p>
+  <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason, optional batches of the segments the AI was not sure of (<code>ai-below-threshold-&lt;date&gt;</code>) and, with the second opinion on, batches of the segments the second model did not find (<code>ai-second-&lt;date&gt;</code>, items <code>D</code>). The decision is the same as before, but now it acts at once:</p>
   <div class="branch">
     <div class="node ok"><b>sponsor / self_promotion</b><span>the segment stays live (or comes back, or goes live for the first time if the AI was not sure of it) with that category; when the assessor gave times, those edges go live (under 5 seconds: saved, not served); times that cover neighbouring segments of the same category merge them into one (the detector sometimes cuts one ad into pieces; the page says how many it covers). If the judge withdrew the whole markup and every segment of it is confirmed, the markup is live again.</span></div>
     <div class="node warn"><b>not_ad / unclear</b><span>the segment is taken off the AI markup and set aside for good: no rule brings it back, only a later verdict. Once all are removed, the markup is withdrawn and viewers get the human segments.</span></div>
@@ -148,6 +156,7 @@
         <li>Decide by the text, as before. One verdict puts one segment on or off the air.</li>
         <li>Start and end times with a sponsor / self-promotion verdict change the segment's edges for viewers at once; votes on the old edges are not carried over. Edges under 5 seconds are saved but not served.</li>
         <li>In the batches of doubtful segments a sponsor / self-promotion verdict puts the segment on the air although the AI was not sure (unless it is shorter than 5 seconds: then set the real times).</li>
+        <li>In the <code>ai-second</code> batches the first model found the segment and the second did not; it is off the air until you say sponsor / self-promotion.</li>
         <li>The track flag is a separate checkbox; it never replaces the verdict.</li>
       </ul>
     </div>
@@ -159,6 +168,7 @@
     <li><b>Per video.</b> An admin can withdraw the AI markup of one video; verdicts never bring that one back.</li>
     <li><b>Human markups live on in parallel.</b> They are never lost and always ready to replace the AI.</li>
     <li><b>Rules are changed by a recompute.</b> The confidence thresholds and the minimum length are the owner's to change; a change recomputes every AI markup once, and verdicts stay the last word.</li>
+    <li><b>Second opinion.</b> Its own switch: turning it off publishes new videos from one model again; segments already set aside wait for a verdict.</li>
     <li><b>Budget.</b> The detector handles a limited number of videos per day; overspend raises an alert.</li>
   </ul>
 </div>

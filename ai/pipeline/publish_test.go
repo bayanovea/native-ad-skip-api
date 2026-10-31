@@ -30,7 +30,7 @@ func TestEntriesSplitsServedAndHidden(t *testing.T) {
 		pred("sponsor", "high", 200.5, 205.4),      // 201..205 is 4 s: short
 		pred("sponsor", "high", 300, 305),          // exactly 5 s: served
 		pred("sponsor", "low", 400, 402),           // both: confidence first (the truth layer before the serving filter)
-	}, cats, 5)
+	}, cats, 5, nil)
 	wantServed := []Entry{
 		re(2, 11, 40, "high", "ai", "", 0),
 		re(2, 50, 60, "medium", "ai", "", 0),
@@ -47,23 +47,41 @@ func TestEntriesSplitsServedAndHidden(t *testing.T) {
 		t.Fatalf("got %+v / %+v\nwant %+v / %+v", served, hidden, wantServed, wantHidden)
 	}
 
-	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 200.5, 205.4), pred("sponsor", "high", 300, 305)}, cats, 3)
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 200.5, 205.4), pred("sponsor", "high", 300, 305)}, cats, 3, nil)
 	if !reflect.DeepEqual(served, []Entry{re(2, 201, 205, "high", "ai", "", 0), re(2, 300, 305, "high", "ai", "", 0)}) || len(hidden) != 0 {
 		t.Fatalf("threshold 3: got %+v / %+v", served, hidden)
 	}
-	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 300, 305)}, cats, 6)
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "high", 300, 305)}, cats, 6, nil)
 	if len(served) != 0 || !reflect.DeepEqual(hidden, []Entry{re(2, 300, 305, "high", "ai", "short", 0)}) {
 		t.Fatalf("threshold 6: got %+v / %+v", served, hidden)
 	}
 
-	served, hidden = entries([]detector.Prediction{pred("sponsor", "low", 10.2, 10.9), pred("sponsor", "high", 20.5, 21.4)}, cats, 1)
+	served, hidden = entries([]detector.Prediction{pred("sponsor", "low", 10.2, 10.9), pred("sponsor", "high", 20.5, 21.4)}, cats, 1, nil)
 	if len(served) != 0 || len(hidden) != 0 {
 		t.Fatalf("no whole second inside: want nothing stored, got %+v / %+v", served, hidden)
 	}
 
-	served, hidden = entries(nil, cats, 5)
+	served, hidden = entries(nil, cats, 5, nil)
 	if served == nil || len(served) != 0 || hidden == nil || len(hidden) != 0 {
 		t.Fatalf("no predictions: want empty, non-nil lists (published as []), got %#v / %#v", served, hidden)
+	}
+}
+
+func TestEntriesUnconfirmedOnlyForWhatWouldBeServed(t *testing.T) {
+	cats := map[string]int{"sponsor": 2, "self_promotion": 3}
+	preds := []detector.Prediction{
+		pred("sponsor", "high", 10, 40),   // confirmed: served
+		pred("sponsor", "high", 50, 80),   // not confirmed: unconfirmed
+		pred("sponsor", "low", 90, 120),   // not confirmed, below the threshold: confidence
+		pred("sponsor", "high", 130, 132), // not confirmed, short: short
+	}
+	served, hidden := entries(preds, cats, 5, []bool{true, false, false, false})
+	if !reflect.DeepEqual(served, []Entry{re(2, 10, 40, "high", "ai", "", 0)}) || !reflect.DeepEqual(hidden, []Entry{
+		re(2, 50, 80, "high", "ai", "unconfirmed", 0), re(2, 90, 120, "low", "ai", "confidence", 0), re(2, 130, 132, "high", "ai", "short", 0)}) {
+		t.Fatalf("got %+v / %+v", served, hidden)
+	}
+	if served, hidden := entries(preds, cats, 5, nil); len(served) != 2 || len(hidden) != 2 {
+		t.Fatalf("no gate: got %+v / %+v", served, hidden)
 	}
 }
 

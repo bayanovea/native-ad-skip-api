@@ -467,11 +467,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) AS usd",
+          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations) AS usd",
           "refId": "A"
         }
       ],
-      "description": "Детектор (prv_ai_runs) + судья (prv_ai_judgements), за всё время."
+      "description": "Детектор (prv_ai_runs) + судья (prv_ai_judgements) + второе мнение (prv_ai_confirmations), за всё время."
     },
     {
       "id": 7,
@@ -539,7 +539,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements WHERE created_at > NOW() - INTERVAL '24 hours') AS usd",
+          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations WHERE created_at > NOW() - INTERVAL '24 hours') AS usd",
           "refId": "A"
         }
       ],
@@ -853,11 +853,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) FILTER (WHERE e ->> 'reason' = 'confidence') AS \"ниже порога\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'short') AS \"короткие\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'review') AS \"сняты асессором\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL",
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE e ->> 'reason' = 'confidence') AS \"ниже порога\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'short') AS \"короткие\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'review') AS \"сняты асессором\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'unconfirmed') AS \"не подтверждены\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL",
           "refId": "A"
         }
       ],
-      "description": "Сегменты модели в hidden неотозванных строк, зрителям не отдаются: уверенность ниже порога (до вердикта асессора), короче AI_MIN_SEGMENT_SECONDS, асессор сказал not_ad / unclear. Порог меняется переменной и ai regate."
+      "description": "Сегменты модели в hidden неотозванных строк, зрителям не отдаются: уверенность ниже порога (до вердикта асессора), короче AI_MIN_SEGMENT_SECONDS, асессор сказал not_ad / unclear, вторая модель не нашла (ждут асессора). Порог меняется переменной и ai regate."
     },
     {
       "id": 12,
@@ -3116,10 +3116,547 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'), 'detect' AS metric, SUM(cost_usd) AS value FROM prv_ai_runs WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'judge' AS metric, SUM(cost_usd) AS value FROM prv_ai_judgements WHERE $__timeFilter(created_at) GROUP BY 1\nORDER BY 1",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'), 'detect' AS metric, SUM(cost_usd) AS value FROM prv_ai_runs WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'judge' AS metric, SUM(cost_usd) AS value FROM prv_ai_judgements WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'confirm' AS metric, SUM(cost_usd) AS value FROM prv_ai_confirmations WHERE $__timeFilter(created_at) GROUP BY 1\nORDER BY 1",
           "refId": "A"
         }
       ]
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "title": "4б. Второе мнение: сегмент отдаётся, только если его нашла и вторая модель (AI_SECOND_CLIENT)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 108
+      },
+      "id": 65
+    },
+    {
+      "id": 66,
+      "type": "stat",
+      "title": "Вызовов второй модели",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"всего\", COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS \"за 24 ч\" FROM prv_ai_confirmations",
+          "refId": "A"
+        }
+      ],
+      "description": "Строки prv_ai_confirmations: один вызов второй модели на ответ детектора. Ноль при AI_SECOND_CLIENT=off."
+    },
+    {
+      "id": 67,
+      "type": "stat",
+      "title": "Подтверждено второй моделью",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * SUM(confirmed) / NULLIF(SUM(confirmed) + SUM(unconfirmed), 0) AS \"доля\" FROM prv_ai_confirmations WHERE error IS NULL",
+          "refId": "A"
+        }
+      ],
+      "description": "Из сегментов, которые прошли бы пороги уверенности и длины: доля, которую вторая модель тоже нашла (та же категория, IoU ≥ 0.3). Остальные скрыты как unconfirmed."
+    },
+    {
+      "id": 68,
+      "type": "stat",
+      "title": "Не подтверждено: ждут асессора",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT (SELECT COUNT(*) FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL AND e ->> 'reason' = 'unconfirmed') AS \"скрыто\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-second-%' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)) AS \"открытых D\"",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты в hidden с причиной unconfirmed (неотозванные строки) и открытые вопросы D<n> в батчах ai-second-<дата>. Keep асессора отдаёт сегмент зрителям, not_ad скрывает навсегда."
+    },
+    {
+      "id": 69,
+      "type": "stat",
+      "title": "Ошибок второго вызова за 24 ч",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_confirmations WHERE error IS NOT NULL AND created_at > NOW() - INTERVAL '24 hours'",
+          "refId": "A"
+        }
+      ],
+      "description": "Вторая модель не ответила или ответила невалидно: такие видео опубликованы по ответу первой модели, как без второго мнения. Причины — справа внизу."
+    },
+    {
+      "id": 70,
+      "type": "stat",
+      "title": "Нашла только вторая модель",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(SUM(extra), 0) AS \"сегментов\", COUNT(*) FILTER (WHERE extra > 0) AS \"видео\" FROM prv_ai_confirmations",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты второй модели без пары у первой. Не отдаются и не уходят асессорам: только счёт (их ответ лежит в raw_output)."
+    },
+    {
+      "id": 71,
+      "type": "stat",
+      "title": "Цена второго мнения",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 109,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(AVG(cost_usd), 0) AS \"за видео\", COALESCE(SUM(cost_usd) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) AS \"за 24 ч\" FROM prv_ai_confirmations",
+          "refId": "A"
+        }
+      ],
+      "description": "Синхронный вызов, без скидки батча. Месячный потолок — лимит аккаунта второй модели."
+    },
+    {
+      "id": 72,
+      "type": "timeseries",
+      "title": "Второе мнение по дням",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 114,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'), SUM(confirmed) AS \"подтверждено\", SUM(unconfirmed) AS \"не подтверждено\", SUM(extra) AS \"только вторая\", COUNT(*) FILTER (WHERE error IS NOT NULL) AS \"ошибок\"\nFROM prv_ai_confirmations WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты по дате вызова (created_at): подтверждённые, скрытые как unconfirmed, найденные только второй моделью; ошибки — число видео."
+    },
+    {
+      "id": 73,
+      "type": "bargauge",
+      "title": "Ошибки второго вызова: причины",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 114,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "namePlacement": "top",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT CASE\n  WHEN error ILIKE '%insufficient_quota%' OR error ILIKE '%billing%' THEN 'кончился бюджет аккаунта'\n  WHEN error LIKE '%429%' THEN 'лимит запросов (429)'\n  WHEN error LIKE 'segment %' THEN 'невалидный ответ: индексы реплик'\n  WHEN error LIKE 'finish_reason length%' THEN 'ответ обрезан (max tokens)'\n  WHEN error LIKE 'refusal%' THEN 'модель отказалась'\n  WHEN error ~ ' 5[0-9][0-9] ' OR error ILIKE '%timeout%' THEN 'сбой API / таймаут'\n  ELSE 'другое'\nEND AS \"причина\", COUNT(*) AS \"видео\" FROM prv_ai_confirmations WHERE error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "Нормализованный error из prv_ai_confirmations, за всё время."
     },
     {
       "type": "row",
@@ -3130,7 +3667,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 108
+        "y": 122
       },
       "id": 46
     },
@@ -3144,7 +3681,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 109,
+        "y": 123,
         "w": 6,
         "h": 8
       },
@@ -3210,7 +3747,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 109,
+        "y": 123,
         "w": 6,
         "h": 8
       },
@@ -3276,7 +3813,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 109,
+        "y": 123,
         "w": 6,
         "h": 8
       },
@@ -3342,7 +3879,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 109,
+        "y": 123,
         "w": 6,
         "h": 8
       },
@@ -3408,7 +3945,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 117,
+        "y": 131,
         "w": 8,
         "h": 8
       },
@@ -3478,7 +4015,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 117,
+        "y": 131,
         "w": 4,
         "h": 8
       },
@@ -3545,7 +4082,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 117,
+        "y": 131,
         "w": 12,
         "h": 8
       },
@@ -3618,7 +4155,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 125,
+        "y": 139,
         "w": 24,
         "h": 10
       },
@@ -3789,7 +4326,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 135
+        "y": 149
       },
       "id": 55
     },
@@ -3803,7 +4340,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 136,
+        "y": 150,
         "w": 12,
         "h": 8
       },
@@ -3878,7 +4415,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 136,
+        "y": 150,
         "w": 4,
         "h": 8
       },
@@ -3943,7 +4480,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 136,
+        "y": 150,
         "w": 4,
         "h": 8
       },
@@ -4006,7 +4543,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 136,
+        "y": 150,
         "w": 4,
         "h": 8
       },
@@ -4069,7 +4606,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 144,
+        "y": 158,
         "w": 6,
         "h": 8
       },
@@ -4136,7 +4673,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 144,
+        "y": 158,
         "w": 18,
         "h": 8
       },

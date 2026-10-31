@@ -24,12 +24,14 @@ type Entry struct {
 }
 
 // Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet),
-// shorter than AI_MIN_SEGMENT_SECONDS (the serving filter), or not an ad on
-// review (prv/repository/ai.js applyVerdict; no rule ever serves it again).
+// shorter than AI_MIN_SEGMENT_SECONDS (the serving filter), not an ad on
+// review (prv/repository/ai.js applyVerdict; no rule ever serves it again), or
+// not found by the second model (confirm.go; only a keep verdict serves it).
 const (
-	reasonConfidence = "confidence"
-	reasonShort      = "short"
-	reasonReview     = "review"
+	reasonConfidence  = "confidence"
+	reasonShort       = "short"
+	reasonReview      = "review"
+	reasonUnconfirmed = "unconfirmed"
 )
 
 // accepted is the product threshold the held-out SCORE was measured with:
@@ -48,9 +50,11 @@ func accepted(category, confidence string) bool {
 // end down: a skip never cuts content the model did not mark, and votes match
 // segments by integer bounds) and splits them into served and hidden. A span
 // with no whole second inside is dropped: no threshold could ever serve it.
-func entries(preds []detector.Prediction, categories map[string]int, minSeconds int) (served, hidden []Entry) {
+// confirmed, parallel to preds, is the second model's opinion (nil = none): it is
+// checked last, so only an entry the rules would serve becomes unconfirmed.
+func entries(preds []detector.Prediction, categories map[string]int, minSeconds int, confirmed []bool) (served, hidden []Entry) {
 	served, hidden = []Entry{}, []Entry{}
-	for _, p := range preds {
+	for i, p := range preds {
 		start, end := int(math.Ceil(p.Start)), int(math.Floor(p.End))
 		if end <= start {
 			continue
@@ -61,6 +65,8 @@ func entries(preds []detector.Prediction, categories map[string]int, minSeconds 
 			e.Reason = reasonConfidence
 		case end-start < minSeconds:
 			e.Reason = reasonShort
+		case confirmed != nil && !confirmed[i]:
+			e.Reason = reasonUnconfirmed
 		default:
 			served = append(served, e)
 			continue

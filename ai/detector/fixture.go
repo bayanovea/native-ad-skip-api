@@ -14,12 +14,20 @@ const fixtureBatchPrefix = "fixture-"
 // <dir>/<Request.Key>.detect.json, the model's JSON output, so tests never call
 // the API. A batch has ended as soon as it is submitted.
 type FixtureClient struct {
-	dir   string
-	model string
+	dir    string
+	model  string
+	suffix string
 }
 
 func NewFixtureClient(dir, model string) *FixtureClient {
-	return &FixtureClient{dir: dir, model: model}
+	return NewFixtureClientSuffix(dir, model, ".detect.json")
+}
+
+// NewFixtureClientSuffix reads <Key><suffix> instead (AI_SECOND_CLIENT=fixture:
+// ".second.json"); a <Key>.second-error file (the suffix's stem + "-error") makes
+// Detect fail with its text, as an API error.
+func NewFixtureClientSuffix(dir, model, suffix string) *FixtureClient {
+	return &FixtureClient{dir: dir, model: model, suffix: suffix}
 }
 
 // Model implements Client.
@@ -30,7 +38,10 @@ var FixtureUsage = Usage{InputTokens: 10000, OutputTokens: 200}
 
 // Detect implements Client; a missing fixture is an error, as a failed call.
 func (f *FixtureClient) Detect(_ context.Context, req Request) (Result, error) {
-	b, err := os.ReadFile(filepath.Join(f.dir, req.Key+".detect.json"))
+	if b, err := os.ReadFile(filepath.Join(f.dir, req.Key+strings.TrimSuffix(f.suffix, ".json")+"-error")); err == nil {
+		return Result{}, fmt.Errorf("fixture: %s", strings.TrimSpace(string(b)))
+	}
+	b, err := os.ReadFile(filepath.Join(f.dir, req.Key+f.suffix))
 	if err != nil {
 		return Result{}, fmt.Errorf("fixture: %w", err)
 	}

@@ -40,3 +40,19 @@ or stop and let the judge's batches be the only review queue.
   batch `2026-10-24-corpus-1-p1-blind` (C7,C8,C10,C15,C17,C18,C21,C22,C24,C27,C29,C30; one per
   video; `important`, Gam excluded; imported 2026-10-31). When it is decided, compare per item
   with Gam's p1 verdicts; disagreement → re-check p1 before step 1. Export and score only after p2–p6.
+
+**Step 1 (2026-10-31, all of p1–p6 and misses decided, blind p1 still open):** imported into the eval
+store as `blind-union-corpus-1-2026-10-24` (Gam) and `misses-corpus-1-2026-10-24`; run
+`…-v2.2-batch-nt-corpus1`, 133 videos scored; the sheet favours this run.
+- flagged 177: 175 ads, 2 `unclear`, 0 `not_ad` (held-out v2.1: ~70 % ads); 138 proposed
+  `self_promotion`, 136 kept as such; 3 category changes; no bounds, no comments.
+- SCORE raw −1.05 (52 % of ad time removed, 3 050 s wrong cut) → reviewed 0.55 (69 %, 266 s), same at
+  IoU 0.3 and 0.5. Reviewed `any_ad` precision 0.95 / recall 0.96 by count, 0.98 / 0.75 by seconds;
+  the missed time is sponsor (recall 0.65 by seconds, start error p90 17.8 s).
+- precision by confidence (reviewed): self_promotion high 0.83 (90/108), medium 0.94 (49/52); the
+  high FPs are mostly category conflicts with human sponsor labels (`any_ad` high 0.94).
+- misses 83: 52 ads the model missed, 28 human labels not ads (34 %), 3 unclear.
+- cost: Gam ~1.0 h for the 177 flagged (median 13–22 s per item), ~1.1 h for the 83 misses.
+- reading: the flagged side is the class humans do not label (self-promotion), not a model error class;
+  only the misses can still give a prompt rule (step 2). The 0 % `not_ad` at 13 s per item is exactly
+  what the blind batch checks: decide nothing about the rest of the corpus before it is in.

@@ -50,3 +50,22 @@ func TestFixtureClient(t *testing.T) {
 		t.Fatalf("submit-error fixture: got %v", err)
 	}
 }
+
+func TestFixtureClientSuffix(t *testing.T) {
+	dir := t.TempDir()
+	out := `{"segments":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "-1_456000001.second.json"), []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "-1_456000002.second-error"), []byte("rate limited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := NewFixtureClientSuffix(dir, "gpt-5", ".second.json")
+	ctx := context.Background()
+	if res, err := f.Detect(ctx, Request{Key: "-1_456000001"}); err != nil || res.Raw != out || f.Model() != "gpt-5" {
+		t.Fatalf("second fixture: %+v %v", res, err)
+	}
+	if _, err := f.Detect(ctx, Request{Key: "-1_456000002"}); err == nil || err.Error() != "fixture: rate limited" {
+		t.Fatalf("second-error fixture: got %v", err)
+	}
+}

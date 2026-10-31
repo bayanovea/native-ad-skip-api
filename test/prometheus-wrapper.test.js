@@ -82,7 +82,10 @@ function fakeDb(answer) {
 
 const aiRows = (videos) => (sql) => {
     if (sql.includes('FROM prv_ai_videos')) return videos;
-    if (sql.includes('cost_usd')) return [{ kind: 'detect', total: 0.125, day: 0.05 }, { kind: 'judge', total: 0, day: 0 }];
+    if (sql.includes('cost_usd')) {
+        assert.match(sql, /'confirm' AS kind[\s\S]*FROM prv_ai_confirmations/);
+        return [{ kind: 'detect', total: 0.125, day: 0.05 }, { kind: 'judge', total: 0, day: 0 }, { kind: 'confirm', total: 0.25, day: 0.0625 }];
+    }
     if (sql.includes('FROM prv_ai_judgements')) return [{ decision: 'review', by: 'llm', n: '2' }];
     return [{ n: '4' }];
 };
@@ -100,6 +103,8 @@ test('registerAiMetrics: one refresh per scrape fills the AI gauges', async () =
     assert.match(output, /^ai_cost_usd\{kind="judge"\} 0$/m);
     assert.match(output, /^ai_cost_usd_24h\{kind="detect"\} 0.05$/m);
     assert.match(output, /^ai_cost_usd_24h\{kind="judge"\} 0$/m);
+    assert.match(output, /^ai_cost_usd\{kind="confirm"\} 0.25$/m);
+    assert.match(output, /^ai_cost_usd_24h\{kind="confirm"\} 0.0625$/m);
     assert.match(output, /^ai_judgements\{decision="review",by="llm"\} 2$/m);
     assert.match(output, /^ai_review_open 4$/m);
 });

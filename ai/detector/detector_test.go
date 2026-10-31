@@ -106,3 +106,10 @@ func TestFormatApplyMergesIntoWindows(t *testing.T) {
 		t.Fatalf("zero Format must not change cues")
 	}
 }
+
+func TestOpenAICost(t *testing.T) {
+	c := Prices["gpt-5"].Cost(Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CacheReadTokens: 1_000_000})
+	if want := 1.25 + 1.0 + 0.125; c < want-1e-9 || c > want+1e-9 {
+		t.Fatalf("gpt-5 cost %v, want %v", c, want)
+	}
+}

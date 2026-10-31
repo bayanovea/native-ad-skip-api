@@ -62,6 +62,20 @@ func TestPlaceNeverMovesAReviewEntry(t *testing.T) {
 	}
 }
 
+// The second model's veto is undone only by a keep verdict, never by a threshold.
+func TestPlaceUnconfirmedStaysHiddenUnlessKept(t *testing.T) {
+	hidden := []Entry{re(2, 30, 70, "high", "ai", "unconfirmed", 0), re(2, 100, 103, "high", "ai", "unconfirmed", 0)}
+	served, hid, in, moved := place([]Entry{}, hidden, nil, regateCats, 1)
+	if len(served) != 0 || !reflect.DeepEqual(hid, hidden) || in != 0 || moved {
+		t.Fatalf("no verdict: got %+v / %+v in %d moved %v", served, hid, in, moved)
+	}
+	served, hid, in, moved = place([]Entry{}, hidden, pins([2]int{30, 70}, [2]int{100, 103}), regateCats, 5)
+	if !reflect.DeepEqual(served, []Entry{re(2, 30, 70, "high", "ai", "", 0)}) ||
+		!reflect.DeepEqual(hid, []Entry{re(2, 100, 103, "high", "ai", "short", 0)}) || in != 1 || !moved {
+		t.Fatalf("kept: got %+v / %+v in %d moved %v", served, hid, in, moved)
+	}
+}
+
 // Served entries never overlap: a hidden entry the rules would serve stays hidden while it
 // overlaps a served one (a keep verdict moved an entry over it), also one entering in the same pass.
 func TestPlaceKeepsAHiddenEntryOverlappingAServedOneHidden(t *testing.T) {

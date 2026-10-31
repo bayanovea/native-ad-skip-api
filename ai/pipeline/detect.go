@@ -45,6 +45,8 @@ type Config struct {
 	FixtureDir        string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
 	PromptPath        string        // AI_PROMPT
 	YtdlpBin          string        // YTDLP_BIN
+	SecondClient      string        // AI_SECOND_CLIENT: off | openai | fixture (<native_id>.second.json): the second opinion
+	SecondModel       string        // AI_SECOND_MODEL
 }
 
 // ConfigFromEnv reads Config; an empty variable takes the default.
@@ -56,7 +58,14 @@ func ConfigFromEnv() (Config, error) {
 		FixtureDir:    env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:    env("AI_PROMPT", "/app/ai/prompts/v2.2.md"),
 		// Absolute: cron's PATH (/usr/bin:/bin) does not reach the image's /usr/local/bin.
-		YtdlpBin: env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
+		YtdlpBin:     env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
+		SecondClient: env("AI_SECOND_CLIENT", "off"),
+		SecondModel:  env("AI_SECOND_MODEL", "gpt-6-luna"),
+	}
+	switch c.SecondClient {
+	case "off", "openai", "fixture":
+	default:
+		return c, fmt.Errorf("AI_SECOND_CLIENT must be off, openai or fixture, got %q", c.SecondClient)
 	}
 	for _, v := range []struct {
 		name string
@@ -130,8 +139,10 @@ type detectRun struct {
 	categories  map[string]int
 	ytdlp       *ytdlp.Runner
 	prv         provider.Provider
-	fetchPause  time.Duration // 0 for the manual run
-	fetchErrs   []fetchErr    // this detect call's yt-dlp errors, recorded once the call knows whether all failed
+	fetchPause  time.Duration   // 0 for the manual run
+	fetchErrs   []fetchErr      // this detect call's yt-dlp errors, recorded once the call knows whether all failed
+	second      detector.Client // nil with AI_SECOND_CLIENT=off
+	secondPrice detector.Price
 }
 
 type fetchErr struct {
@@ -249,6 +260,19 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	var priced bool
 	if r.price, priced = detector.Prices[cfg.Model]; !priced {
 		log.Printf("ai detect: no price for %s, cost recorded as 0", cfg.Model)
+	}
+	switch cfg.SecondClient {
+	case "openai":
+		if r.second, err = detector.NewOpenAI(cfg.SecondModel, effort); err != nil {
+			return nil, fmt.Errorf("AI_SECOND_CLIENT=openai: %w", err)
+		}
+	case "fixture":
+		r.second = detector.NewFixtureClientSuffix(cfg.FixtureDir, cfg.SecondModel, ".second.json")
+	}
+	if r.second != nil {
+		if r.secondPrice, priced = detector.Prices[cfg.SecondModel]; !priced {
+			log.Printf("ai detect: no price for %s, second opinion cost recorded as 0", cfg.SecondModel)
+		}
 	}
 	return r, nil
 }
@@ -492,7 +516,8 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 		}
 		if r.batch == nil {
 			res, err := r.client.Detect(ctx, p.req)
-			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err); err != nil {
+			c := r.confirm(ctx, p.q.nativeID, p.meta, p.cues, res, err)
+			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", p.q.nativeID, err)
 				failed++
 			}
@@ -570,6 +595,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		nativeID string
 		runID    int64
 		videoID  int
+		meta     transcript.Meta
 		cues     []vtt.Cue
 	}
 	rows, err := r.db.Query(`SELECT v.native_id, v.batch_id, run.id, run.video_id, run.transcript
@@ -594,7 +620,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 			failed++
 			continue
 		}
-		w.cues = st.Cues
+		w.meta, w.cues = st.Meta, st.Cues
 		batches[batchID] = append(batches[batchID], w)
 	}
 	rows.Close()
@@ -614,7 +640,8 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		}
 		for _, w := range videos {
 			res, err := r.client.Detect(ctx, detector.Request{Key: w.nativeID})
-			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, res, err); err != nil {
+			c := r.confirm(ctx, w.nativeID, w.meta, w.cues, res, err)
+			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", w.nativeID, err)
 				failed++
 			}
@@ -646,7 +673,9 @@ func (r *detectRun) expire() error {
 // transaction under the queue row's lock; a video another run already resolved is
 // skipped. A failed call or an invalid answer marks the video failed (the run row
 // keeps what came back); the error return is for the database only, and the caller logs it.
-func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, res detector.Result, callErr error) error {
+// c is the second opinion (nil with the switch off): its row and the unconfirmed
+// entries' review items go into the same transaction.
+func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, res detector.Result, callErr error, c *confirmation) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -685,9 +714,14 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		return nil
 	}
 
-	data, hidden := entries(detector.Resolve(units, res.Output), r.categories, r.cfg.MinSegmentSeconds)
+	data, hidden := entries(detector.Resolve(units, res.Output), r.categories, r.cfg.MinSegmentSeconds, c.gate())
 	if err := publish(tx, videoID, nativeID, runID, data, hidden); err != nil {
 		return err
+	}
+	if c != nil {
+		if err := r.record(tx, c, runID, videoID, nativeID, data, hidden, cues, time.Now()); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'published', batch_id = NULL, last_error = NULL, updated_at = NOW()
 		WHERE native_id = $1`, nativeID); err != nil {
@@ -696,8 +730,20 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit published: %w", err)
 	}
-	log.Printf("ai detect: %s published: %d served, %d hidden of %d segments, video %d, run %d, $%.4f",
-		nativeID, len(data), len(hidden), len(res.Output.Segments), videoID, runID, cost)
+	second := ""
+	if c != nil && c.err != nil {
+		second = fmt.Sprintf(" (second opinion of %s failed: served unconfirmed)", c.model)
+	} else if c != nil {
+		n := 0
+		for _, e := range hidden {
+			if e.Reason == reasonUnconfirmed {
+				n++
+			}
+		}
+		second = fmt.Sprintf(" (%d unconfirmed by %s, $%.4f)", n, c.model, c.cost)
+	}
+	log.Printf("ai detect: %s published: %d served, %d hidden%s of %d segments, video %d, run %d, $%.4f",
+		nativeID, len(data), len(hidden), second, len(res.Output.Segments), videoID, runID, cost)
 	return nil
 }
 

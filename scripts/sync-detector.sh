@@ -67,12 +67,14 @@ done
 cp "$EVAL/prompts/$PROMPT.md" "$ROOT/ai/prompts/$PROMPT.md"
 echo "$SHA" > "$ROOT/ai/SOURCE"
 
-sdk() { grep -oE 'github.com/anthropics/anthropic-sdk-go v[^ ]+' "$1" | cut -d' ' -f2 || true; }
-want="$(sdk "$EVAL/go.mod")"
-have="$(sdk "$ROOT/go.mod")"
-if [ "$want" != "$have" ]; then
-  echo "anthropic-sdk-go: eval $want, here ${have:-none}: go get github.com/anthropics/anthropic-sdk-go@$want && go mod tidy && go mod vendor" >&2
-fi
+sdk() { grep -oE "$2 v[^ ]+" "$1" | cut -d' ' -f2 || true; }
+for mod in github.com/anthropics/anthropic-sdk-go github.com/openai/openai-go/v3; do
+  want="$(sdk "$EVAL/go.mod" "$mod")"
+  have="$(sdk "$ROOT/go.mod" "$mod")"
+  if [ "$want" != "$have" ]; then
+    echo "$mod: eval $want, here ${have:-none}: go get $mod@$want && go mod tidy && go mod vendor" >&2
+  fi
+done
 
 cd "$ROOT"
 go build -mod=vendor ./ai/...

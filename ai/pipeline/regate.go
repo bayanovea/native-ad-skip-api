@@ -133,7 +133,8 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 	return true, nil
 }
 
-// place puts each entry where the rules say: a review entry stays hidden, a pinned one
+// place puts each entry where the rules say: a review entry stays hidden, so does an
+// unconfirmed one (the second model's veto) unless pinned, a pinned one
 // (latest verdict a keep) skips the confidence rule, the length rule applies to all,
 // confidence before short as in entries(). in counts the entries entering data, moved
 // is any change (a hidden entry whose reason changed too). An entry leaving data drops
@@ -147,11 +148,11 @@ func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, categories
 	served, hid = []Entry{}, []Entry{}
 	for i, e := range append(append([]Entry{}, data...), hidden...) {
 		wasServed := i < len(data)
-		if !wasServed && (e.Reason == reasonReview || overlapsAny(e, served)) {
+		_, kept := pinned[judge.EntryKey{Start: e.Start, End: e.End}]
+		if !wasServed && (e.Reason == reasonReview || e.Reason == reasonUnconfirmed && !kept || overlapsAny(e, served)) {
 			hid = append(hid, e)
 			continue
 		}
-		_, kept := pinned[judge.EntryKey{Start: e.Start, End: e.End}]
 		reason := ""
 		switch {
 		case !kept && !accepted(names[e.CategoryID], e.Confidence):
@@ -222,7 +223,7 @@ func backfillHidden(tx *sql.Tx, cats map[string]int, minSeconds int, runID int64
 		log.Printf("ai regate: run %d not backfilled: %v", runID, err)
 		return nil, nil
 	}
-	_, hidden := entries(detector.Resolve(units, out), cats, minSeconds)
+	_, hidden := entries(detector.Resolve(units, out), cats, minSeconds, nil)
 	var add []Entry
 	for _, e := range hidden {
 		if !overlapsAny(e, data) {

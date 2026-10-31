@@ -121,6 +121,7 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         # AI switches: repository variables; unset is empty, which docker-compose.yml turns into off / the code default.
         AI_FIRST: ${{ vars.AI_FIRST }}
         AI_DETECT_ENABLED: ${{ vars.AI_DETECT_ENABLED }}
@@ -132,6 +133,8 @@ jobs:
         AI_MIN_REQUESTS: ${{ vars.AI_MIN_REQUESTS }}
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
         AI_MIN_SEGMENT_SECONDS: ${{ vars.AI_MIN_SEGMENT_SECONDS }}
+        AI_SECOND_CLIENT: ${{ vars.AI_SECOND_CLIENT }}
+        AI_SECOND_MODEL: ${{ vars.AI_SECOND_MODEL }}
         HOST_IP: ${{ secrets.HOST_IP }}
         # Deployment values (secrets): the public hosts, the video platform's URL templates, the earlier
         # prefix of the DB objects, the compose project name.
@@ -163,6 +166,7 @@ jobs:
             TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN" \
             TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID" \
             ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
+            OPENAI_API_KEY "$OPENAI_API_KEY" \
             AI_FIRST "$AI_FIRST" \
             AI_DETECT_ENABLED "$AI_DETECT_ENABLED" \
             AI_JUDGE_ENABLED "$AI_JUDGE_ENABLED" \
@@ -173,6 +177,8 @@ jobs:
             AI_MIN_REQUESTS "$AI_MIN_REQUESTS" \
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
             AI_MIN_SEGMENT_SECONDS "$AI_MIN_SEGMENT_SECONDS" \
+            AI_SECOND_CLIENT "$AI_SECOND_CLIENT" \
+            AI_SECOND_MODEL "$AI_SECOND_MODEL" \
             HOST_IP "$HOST_IP" \
             API_HOST "$API_HOST" \
             LANDING_HOST "$LANDING_HOST" \

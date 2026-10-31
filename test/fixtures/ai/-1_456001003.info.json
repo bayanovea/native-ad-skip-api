@@ -1,0 +1,18 @@
+{
+ "id": "-1_456001003",
+ "title": "e2e -1_456001003",
+ "duration": 600.4,
+ "subtitles": {
+  "ru": [
+   {
+    "ext": "vtt",
+    "url": "https://example.invalid/m.vtt",
+    "manifest_url": "https://example.invalid/m.m3u8"
+   },
+   {
+    "ext": "Ru AUTO",
+    "url": "https://example.invalid/a.vtt"
+   }
+  ]
+ }
+}

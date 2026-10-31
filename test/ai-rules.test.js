@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
-const { parseMinSegmentSeconds } = require('../lib/ai-rules');
+const { parseMinSegmentSeconds, HIDDEN_REASONS } = require('../lib/ai-rules');
 
 test('parseMinSegmentSeconds: unset or empty is 5, a positive integer is taken', () => {
     assert.equal(parseMinSegmentSeconds(undefined), 5);
@@ -28,4 +28,8 @@ test('MIN_SEGMENT_SECONDS is read once on require; an invalid value throws there
     const r = load('0');
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /AI_MIN_SEGMENT_SECONDS must be an integer of at least 1/);
+});
+
+test('HIDDEN_REASONS are the Go pipeline\'s reasons, unconfirmed (the second model\'s veto) included', () => {
+    assert.deepEqual(Object.values(HIDDEN_REASONS).sort(), ['confidence', 'review', 'short', 'unconfirmed']);
 });

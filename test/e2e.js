@@ -1507,6 +1507,126 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.equal((await aiVideo('-1_456000209')).status, 'failed');
 });
 
+// The second opinion (AI_SECOND_CLIENT=fixture: <native_id>.second.json, <native_id>.second-error), gpt-6-luna at its price.
+const SECOND_ENV = { AI_SECOND_CLIENT: 'fixture', AI_DETECT_ENABLED: undefined };
+const SECOND_COST = 10000 * 0.1 / 1e6 + 200 * 0.5 / 1e6;
+const secondSheet = () => `ai-second-${new Date().toISOString().slice(0, 10)}`;
+const confirmationOf = async (nativeId) => (await dbQuery('SELECT * FROM prv_ai_confirmations WHERE native_id = $1', [nativeId]))[0];
+
+test('ai second: a segment both models found is served, one only Claude found is hidden unconfirmed with a D item in today\'s ai-second batch (important), a second-only segment is counted on the confirmation row, not an entry', async () => {
+    const vid = '-1_456001001';
+    const r = runAi(['detect', vid], SECOND_ENV);
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /ai detect: -1_456001001 published: 1 served, 3 hidden \(2 unconfirmed by gpt-6-luna, \$0\.0011\) of 4 segments/);
+
+    const ai = await aiCalculated(vid);
+    const sp = cats.prv.sponsor;
+    const self = cats.prv.self_promotion;
+    assert.deepEqual(ai.data, [{ category_id: sp, start: 30, end: 70, confidence: 'high', source: 'ai' }]);
+    assert.deepEqual(ai.hidden, [
+        { category_id: sp, start: 75, end: 90, confidence: 'high', source: 'ai', reason: 'unconfirmed' },
+        { category_id: self, start: 300, end: 320, confidence: 'high', source: 'ai', reason: 'unconfirmed' },
+        { category_id: sp, start: 480, end: 483, confidence: 'high', source: 'ai', reason: 'short' },
+    ], 'the length rule comes first: a short segment stays short whatever the second model says');
+
+    const c = await confirmationOf(vid);
+    assert.deepEqual([c.run_id, c.video_id, c.model, c.error, c.confirmed, c.unconfirmed, c.extra],
+        [ai.run_id, ai.video_id, 'gpt-6-luna', null, 1, 2, 1]);
+    assert.match(c.prompt_sha, /^[0-9a-f]{64}$/);
+    assert.equal(c.raw_output.segments.length, 2);
+    assert.ok(Math.abs(c.cost_usd - SECOND_COST) < 1e-12, `synchronous, gpt-6-luna price: ${c.cost_usd}`);
+
+    const items = await dbQuery(`SELECT i.*, b.priority, b.locked_by FROM prv_review_items i JOIN prv_review_batches b USING (batch)
+        WHERE i.native_id = $1 ORDER BY i.position`, [vid]);
+    assert.deepEqual(items.map(i => [i.sheet, i.item_code, i.kind, i.video_id, i.start, i.end, i.proposed, i.priority, i.locked_by]), [
+        [secondSheet(), 'D1', 'ai', ai.video_id, 75, 90, 'sponsor', 'important', null],
+        [secondSheet(), 'D2', 'ai', ai.video_id, 300, 320, 'self_promotion', 'important', null],
+    ]);
+    assert.deepEqual(items.map(i => i.link), ['https://example.invalid/video-1_456001001?t=1m13s', 'https://example.invalid/video-1_456001001?t=4m58s']);
+    assert.deepEqual(items[0].flagged_by, ['second gpt-6-luna: not found', 'entry: sponsor high, 15 s']);
+    assert.equal(items[0].cues, 'вернёмся к ноутбуку');
+    assert.equal(items[0].batch, secondSheet());
+
+    // The first model found nothing: the second call is still made and recorded (the measurement).
+    const empty = runAi(['detect', '-1_456001003'], SECOND_ENV);
+    assert.equal(empty.status, 0, empty.stdout + empty.stderr);
+    assert.deepEqual([(await aiCalculated('-1_456001003')).data, (await aiCalculated('-1_456001003')).hidden], [[], []]);
+    const e = await confirmationOf('-1_456001003');
+    assert.deepEqual([e.error, e.confirmed, e.unconfirmed, e.extra], [null, 0, 0, 1]);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE native_id = '-1_456001003'`))[0].n, 0);
+});
+
+test('ai second: a failing second call publishes Claude\'s segments as today, records the error, counts no failed video; /metrics carries ai_cost_usd{kind="confirm"}', async () => {
+    const vid = '-1_456001002';
+    const r = runAi(['detect', vid], SECOND_ENV);
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /ai detect: -1_456001002 second opinion failed: fixture: 429 Too Many Requests: rate limit reached/);
+    assert.match(out, /ai detect: -1_456001002 published: 3 served, 1 hidden \(second opinion of gpt-6-luna failed: served unconfirmed\)/);
+    const ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end]), [[30, 70], [75, 90], [300, 320]], 'as without the switch');
+    assert.deepEqual(ai.hidden.map(e => e.reason), ['short']);
+    const c = await confirmationOf(vid);
+    assert.deepEqual([c.error, c.confirmed, c.unconfirmed, c.extra, c.cost_usd, c.raw_output],
+        ['fixture: 429 Too Many Requests: rate limit reached', null, null, null, 0, null]);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE native_id = $1`, [vid]))[0].n, 0);
+
+    // On a cron tick (batch, then the synchronous second call) the video is published and the tick is a success:
+    // the first model answered. Thresholds no other test row reaches, so the tick takes this video only.
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456001004', 2100000000, 1)`);
+    const tick = runAi(['detect'], { ...SECOND_ENV, AI_DETECT_ENABLED: 'on', AI_MIN_VIEWS: '2000000000', AI_MIN_REQUESTS: '1000000' });
+    assert.equal(tick.status, 0, tick.stdout + tick.stderr);
+    assert.match(tick.stdout + tick.stderr, /ai detect: -1_456001004 second opinion failed/);
+    assert.equal((await aiVideo('-1_456001004')).status, 'published');
+    assert.deepEqual((await aiCalculated('-1_456001004')).data.map(e => [e.start, e.end]), [[30, 70], [75, 90], [300, 320]]);
+    const hb = await heartbeat('ai_detect');
+    assert.equal(hb.failed_videos, 0, 'a failed second opinion is no failed video of the tick');
+    assert.ok(hb.last_success_at >= hb.last_run_at);
+
+    const text = await fetchMetrics();
+    const [{ total, day }] = await dbQuery(`SELECT COALESCE(SUM(cost_usd), 0) AS total,
+        COALESCE(SUM(cost_usd) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) AS day FROM prv_ai_confirmations`);
+    assert.ok(Number(total) > 0);
+    assert.match(text, new RegExp(`^ai_cost_usd\\{kind="confirm"\\} ${Number(total)}$`, 'm'));
+    assert.match(text, new RegExp(`^ai_cost_usd_24h\\{kind="confirm"\\} ${Number(day)}$`, 'm'));
+});
+
+test('ai second: a keep on an unconfirmed entry serves it, not_ad hides it as review; ai regate with a lower threshold leaves an undecided unconfirmed entry hidden; the admin page shows the reason', async (t) => {
+    await aiFirstServer();
+    const vid = '-1_456001001';
+    const { video_id: videoId } = await aiCalculated(vid);
+    const unconfirmed = (start, end) => ({ category_id: cats.prv.sponsor, start, end, confidence: 'high', source: 'ai', reason: 'unconfirmed' });
+
+    let page = (await requestOn(AI_PORT, 'GET', `/admin/video/${videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    assert.match(page, /unconfirmed/);
+
+    const before = await aiCalculated('-1_456000201');
+    t.after(() => runAi(['regate'])); // back at the default threshold for the other rows
+    let r = runAi(['regate'], { AI_MIN_SEGMENT_SECONDS: '3' });
+    assert.equal(r.status, 0, r.stderr);
+    let ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end]), [[30, 70], [480, 483]], 'the 3-s sponsor is served at min 3');
+    assert.deepEqual(ai.hidden.slice(0, 1), [unconfirmed(75, 90)], 'the second model\'s veto is not a threshold');
+    assert.deepEqual(ai.hidden.map(e => e.reason), ['unconfirmed', 'unconfirmed']);
+    r = runAi(['regate']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual((await aiCalculated('-1_456000201')).data, before.data);
+
+    const [d1, d2] = await dbQuery(`SELECT id, item_code, batch FROM prv_review_items WHERE native_id = $1 ORDER BY position`, [vid]);
+    await takeReview(d1.batch);
+    assert.equal((await decideAi(d1, 'sponsor')).ai_applied, true);
+    assert.equal((await decideAi(d2, 'not_ad')).ai_applied, true);
+    ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end, e.source]), [[30, 70, 'ai'], [75, 90, 'ai']], 'kept: served, in start order');
+    assert.deepEqual(ai.hidden.map(e => [e.start, e.end, e.reason]), [[300, 320, 'review'], [480, 483, 'short']]);
+    assert.deepEqual(await servedBounds(vid), [[cats.prv.sponsor, 30, 70], [cats.prv.sponsor, 75, 90]]);
+
+    r = runAi(['regate']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual((await aiCalculated(vid)).data.map(e => [e.start, e.end]), [[30, 70], [75, 90]], 'a kept entry stays served');
+});
+
 test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed tick); a yt-dlp that cannot start is the tick’s', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000207', 600000, 1)`);
     let r = runAi(['detect']);
@@ -2826,12 +2946,12 @@ test('ai judge: review items go to the day’s newest part that nobody holds or 
 
 // Every AI_* variable (and the yt-dlp / key ones) dropped, as on a deploy that sets none of them.
 const NO_AI_ENV = Object.fromEntries([...Object.keys(process.env).filter(k => k.startsWith('AI_')),
-    'AI_DETECT_ENABLED', 'YTDLP_BIN', 'ANTHROPIC_API_KEY'].map(k => [k, undefined]));
+    'AI_DETECT_ENABLED', 'AI_SECOND_CLIENT', 'YTDLP_BIN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'].map(k => [k, undefined]));
 
 // What the detector, the judge and the review hook write; prv_ai_videos without the read path's upsert columns.
 async function aiSnapshot() {
     const snap = {};
-    for (const t of ['prv_ai_runs', 'prv_ai_video_calculateds', 'prv_ai_judgements', 'prv_ai_timelines',
+    for (const t of ['prv_ai_runs', 'prv_ai_video_calculateds', 'prv_ai_judgements', 'prv_ai_confirmations', 'prv_ai_timelines',
         'prv_review_items', 'prv_review_verdicts', 'prv_review_batches']) snap[t] = await dbQuery(`SELECT * FROM ${t} ORDER BY 1`);
     snap.prv_ai_videos = await dbQuery(`SELECT native_id, status, attempts, next_attempt_at, batch_id, last_error,
         judged_at, judge_counters, first_seen_at FROM prv_ai_videos ORDER BY native_id`);

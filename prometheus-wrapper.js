@@ -81,12 +81,12 @@ function registerAiMetrics(sequelize) {
     });
     const cost = new client.Gauge({
         name: 'ai_cost_usd',
-        help: 'Model cost in USD so far: detect (prv_ai_runs) and judge (prv_ai_judgements)',
+        help: 'Model cost in USD so far: detect (prv_ai_runs), judge (prv_ai_judgements), confirm (prv_ai_confirmations)',
         labelNames: ['kind'],
     });
     const cost24h = new client.Gauge({
         name: 'ai_cost_usd_24h',
-        help: 'Model cost in USD over the last 24 h: detect (prv_ai_runs) and judge (prv_ai_judgements)',
+        help: 'Model cost in USD over the last 24 h: detect (prv_ai_runs), judge (prv_ai_judgements), confirm (prv_ai_confirmations)',
         labelNames: ['kind'],
     });
     const judgements = new client.Gauge({
@@ -112,7 +112,7 @@ function registerAiMetrics(sequelize) {
         try {
             results = await Promise.all([
                 'SELECT status, COUNT(*) AS n FROM prv_ai_videos GROUP BY status',
-                `${costOf('detect', 'prv_ai_runs')} UNION ALL ${costOf('judge', 'prv_ai_judgements')}`,
+                [costOf('detect', 'prv_ai_runs'), costOf('judge', 'prv_ai_judgements'), costOf('confirm', 'prv_ai_confirmations')].join(' UNION ALL '),
                 'SELECT decision, "by", COUNT(*) AS n FROM prv_ai_judgements GROUP BY decision, "by"',
                 `SELECT COUNT(*) AS n FROM prv_review_items i
                   WHERE i.kind = 'ai' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)`,
