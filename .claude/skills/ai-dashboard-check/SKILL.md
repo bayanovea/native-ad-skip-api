@@ -38,6 +38,10 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   videos, fine. yt-dlp `'NoneType' object has no attribute 'split'` / `expected string or bytes-like object` =
   extractor bug on single pages (3 videos on 2026-10-25); many at once or every fetch failing = host ban, see
   `ai detect: every fetch of the tick failed` in docker logs and `AI_DETECT_ENABLED=off`.
+- **Second opinion** (`AI_SECOND_ENABLED=on` since 2026-11-01, `gpt-6-luna`): `second_errors_24h` 0 (a burst of
+  429 = the OpenAI project limit or balance is out, videos then publish unconfirmed); `second_confirmed_pct` ~85–95
+  (held-out: 280 of 311 at IoU 0.3); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
+  `ai-second-<date>`; `second_cost` ~$0.003–0.006 per video.
 - **Quality signals** (only meaningful once users see AI segments, i.e. `ai_first 1`): `votes` `< 0`,
   `against_table`, `withdrawn`, `verdicts not_ad`. `misses` = videos the model called clean but users marked.
 
