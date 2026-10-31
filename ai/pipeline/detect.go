@@ -45,7 +45,8 @@ type Config struct {
 	FixtureDir        string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
 	PromptPath        string        // AI_PROMPT
 	YtdlpBin          string        // YTDLP_BIN
-	SecondClient      string        // AI_SECOND_CLIENT: off | openai | fixture (<native_id>.second.json): the second opinion
+	SecondEnabled     bool          // AI_SECOND_ENABLED=on: the second opinion before publish
+	SecondClient      string        // AI_SECOND_CLIENT: openai | fixture (<native_id>.second.json)
 	SecondModel       string        // AI_SECOND_MODEL
 }
 
@@ -58,14 +59,15 @@ func ConfigFromEnv() (Config, error) {
 		FixtureDir:    env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:    env("AI_PROMPT", "/app/ai/prompts/v2.2.md"),
 		// Absolute: cron's PATH (/usr/bin:/bin) does not reach the image's /usr/local/bin.
-		YtdlpBin:     env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
-		SecondClient: env("AI_SECOND_CLIENT", "off"),
-		SecondModel:  env("AI_SECOND_MODEL", "gpt-6-luna"),
+		YtdlpBin:      env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
+		SecondEnabled: os.Getenv("AI_SECOND_ENABLED") == "on",
+		SecondClient:  env("AI_SECOND_CLIENT", "openai"),
+		SecondModel:   env("AI_SECOND_MODEL", "gpt-6-luna"),
 	}
 	switch c.SecondClient {
-	case "off", "openai", "fixture":
+	case "openai", "fixture":
 	default:
-		return c, fmt.Errorf("AI_SECOND_CLIENT must be off, openai or fixture, got %q", c.SecondClient)
+		return c, fmt.Errorf("AI_SECOND_CLIENT must be openai or fixture, got %q", c.SecondClient)
 	}
 	for _, v := range []struct {
 		name string
@@ -141,7 +143,7 @@ type detectRun struct {
 	prv         provider.Provider
 	fetchPause  time.Duration   // 0 for the manual run
 	fetchErrs   []fetchErr      // this detect call's yt-dlp errors, recorded once the call knows whether all failed
-	second      detector.Client // nil with AI_SECOND_CLIENT=off
+	second      detector.Client // nil unless AI_SECOND_ENABLED=on
 	secondPrice detector.Price
 }
 
@@ -261,12 +263,13 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	if r.price, priced = detector.Prices[cfg.Model]; !priced {
 		log.Printf("ai detect: no price for %s, cost recorded as 0", cfg.Model)
 	}
-	switch cfg.SecondClient {
-	case "openai":
+	switch {
+	case !cfg.SecondEnabled:
+	case cfg.SecondClient == "openai":
 		if r.second, err = detector.NewOpenAI(cfg.SecondModel, effort); err != nil {
 			return nil, fmt.Errorf("AI_SECOND_CLIENT=openai: %w", err)
 		}
-	case "fixture":
+	default:
 		r.second = detector.NewFixtureClientSuffix(cfg.FixtureDir, cfg.SecondModel, ".second.json")
 	}
 	if r.second != nil {

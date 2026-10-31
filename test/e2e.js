@@ -1507,8 +1507,8 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.equal((await aiVideo('-1_456000209')).status, 'failed');
 });
 
-// The second opinion (AI_SECOND_CLIENT=fixture: <native_id>.second.json, <native_id>.second-error), gpt-6-luna at its price.
-const SECOND_ENV = { AI_SECOND_CLIENT: 'fixture', AI_DETECT_ENABLED: undefined };
+// The second opinion (AI_SECOND_ENABLED=on, AI_SECOND_CLIENT=fixture: <native_id>.second.json, <native_id>.second-error), gpt-6-luna at its price.
+const SECOND_ENV = { AI_SECOND_ENABLED: 'on', AI_SECOND_CLIENT: 'fixture', AI_DETECT_ENABLED: undefined };
 const SECOND_COST = 10000 * 0.1 / 1e6 + 200 * 0.5 / 1e6;
 const secondSheet = () => `ai-second-${new Date().toISOString().slice(0, 10)}`;
 const confirmationOf = async (nativeId) => (await dbQuery('SELECT * FROM prv_ai_confirmations WHERE native_id = $1', [nativeId]))[0];
@@ -2946,7 +2946,7 @@ test('ai judge: review items go to the day’s newest part that nobody holds or 
 
 // Every AI_* variable (and the yt-dlp / key ones) dropped, as on a deploy that sets none of them.
 const NO_AI_ENV = Object.fromEntries([...Object.keys(process.env).filter(k => k.startsWith('AI_')),
-    'AI_DETECT_ENABLED', 'AI_SECOND_CLIENT', 'YTDLP_BIN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'].map(k => [k, undefined]));
+    'AI_DETECT_ENABLED', 'AI_SECOND_ENABLED', 'YTDLP_BIN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'].map(k => [k, undefined]));
 
 // What the detector, the judge and the review hook write; prv_ai_videos without the read path's upsert columns.
 async function aiSnapshot() {

@@ -23,7 +23,7 @@ func NewFixtureClient(dir, model string) *FixtureClient {
 	return NewFixtureClientSuffix(dir, model, ".detect.json")
 }
 
-// NewFixtureClientSuffix reads <Key><suffix> instead (AI_SECOND_CLIENT=fixture:
+// NewFixtureClientSuffix reads <Key><suffix> instead (AI_SECOND_ENABLED=on with AI_SECOND_CLIENT=fixture:
 // ".second.json"); a <Key>.second-error file (the suffix's stem + "-error") makes
 // Detect fail with its text, as an API error.
 func NewFixtureClientSuffix(dir, model, suffix string) *FixtureClient {

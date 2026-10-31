@@ -3125,7 +3125,7 @@
       "type": "row",
       "collapsed": false,
       "panels": [],
-      "title": "4б. Второе мнение: сегмент отдаётся, только если его нашла и вторая модель (AI_SECOND_CLIENT)",
+      "title": "4б. Второе мнение: сегмент отдаётся, только если его нашла и вторая модель (AI_SECOND_ENABLED)",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -3195,7 +3195,7 @@
           "refId": "A"
         }
       ],
-      "description": "Строки prv_ai_confirmations: один вызов второй модели на ответ детектора. Ноль при AI_SECOND_CLIENT=off."
+      "description": "Строки prv_ai_confirmations: один вызов второй модели на ответ детектора. Ноль при AI_SECOND_ENABLED=off."
     },
     {
       "id": 67,

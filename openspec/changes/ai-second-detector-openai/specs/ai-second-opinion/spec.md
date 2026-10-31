@@ -6,14 +6,18 @@ Defines the second-model confirmation of AI-detected segments: a segment reaches
 ## ADDED Requirements
 
 ### Requirement: The second opinion is off unless switched on
-The system SHALL make no second-model call and SHALL publish exactly as before this change unless the second-opinion switch is set to a client. Turning it on is an environment change; no code default or migration turns it on.
+The system SHALL make no second-model call and SHALL publish exactly as before this change unless the second-opinion on/off switch is `on`; which client makes the call is a separate setting. Turning it on is an environment change; no code default or migration turns it on.
 
 #### Scenario: Default environment
 - **WHEN** the switch is unset or `off` and a video's detection answer arrives
 - **THEN** the video is published from that answer alone, no confirmation row is written and no entry has the reason `unconfirmed`
 
+#### Scenario: A client set while the switch is off
+- **WHEN** the client is set and the switch is unset or `off`
+- **THEN** nothing changes and no key is needed
+
 #### Scenario: Switched on without a key
-- **WHEN** the switch names the real client and its API key is unset
+- **WHEN** the switch is `on`, the client is the real one and its API key is unset
 - **THEN** a detect tick that would call the model exits with an error naming the key before any fetch, as the Claude client does without its key
 
 ### Requirement: Every answered video gets one second-model call

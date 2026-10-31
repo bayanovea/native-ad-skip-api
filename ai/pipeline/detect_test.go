@@ -27,15 +27,15 @@ var testPrv = func() provider.Provider {
 }()
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
-	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN", "AI_SECOND_CLIENT", "AI_SECOND_MODEL"} {
+	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN", "AI_SECOND_ENABLED", "AI_SECOND_CLIENT", "AI_SECOND_MODEL"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.SecondClient != "off" || c.SecondModel != "gpt-6-luna" {
-		t.Fatalf("second opinion: got %q %q, want off gpt-6-luna", c.SecondClient, c.SecondModel)
+	if c.SecondEnabled || c.SecondClient != "openai" || c.SecondModel != "gpt-6-luna" {
+		t.Fatalf("second opinion: got %v %q %q, want off, openai, gpt-6-luna", c.SecondEnabled, c.SecondClient, c.SecondModel)
 	}
 	want := Config{MinViews: 500000, MinRequests: 20, DailyBudget: 300, BatchMax: 5, MinSegmentSeconds: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
@@ -78,15 +78,19 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 }
 
 func TestConfigSecondClient(t *testing.T) {
-	for _, v := range []string{"off", "openai", "fixture"} {
+	t.Setenv("AI_SECOND_ENABLED", "on")
+	if c, err := ConfigFromEnv(); err != nil || !c.SecondEnabled {
+		t.Fatalf("on: got %+v, %v", c, err)
+	}
+	for _, v := range []string{"openai", "fixture"} {
 		t.Setenv("AI_SECOND_CLIENT", v)
 		if c, err := ConfigFromEnv(); err != nil || c.SecondClient != v {
 			t.Fatalf("%s: got %+v, %v", v, c, err)
 		}
 	}
-	t.Setenv("AI_SECOND_CLIENT", "on")
+	t.Setenv("AI_SECOND_CLIENT", "off")
 	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "AI_SECOND_CLIENT") {
-		t.Fatalf("on: want an error naming AI_SECOND_CLIENT, got %v", err)
+		t.Fatalf("off: want an error naming AI_SECOND_CLIENT (the switch is AI_SECOND_ENABLED), got %v", err)
 	}
 }
 
@@ -98,7 +102,7 @@ func TestNewDetectRunSecondClientNeedsItsKey(t *testing.T) {
 	t.Setenv("PROVIDER_VIDEO_URL", "https://example.invalid/video{id}")
 	t.Setenv("PROVIDER_LINK_AT", "https://example.invalid/video{id}?t={t}")
 	t.Setenv("OPENAI_API_KEY", "")
-	cfg := Config{Client: "fixture", PromptPath: prompt, SecondClient: "openai", SecondModel: "gpt-6-luna"}
+	cfg := Config{Client: "fixture", PromptPath: prompt, SecondEnabled: true, SecondClient: "openai", SecondModel: "gpt-6-luna"}
 	if _, err := newDetectRun(cfg, true); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
 		t.Fatalf("want a startup error naming OPENAI_API_KEY, got %v", err)
 	}
@@ -107,9 +111,9 @@ func TestNewDetectRunSecondClientNeedsItsKey(t *testing.T) {
 	if err != nil || r.second == nil || r.second.Model() != "gpt-6-luna" || r.secondPrice.Input != 0.10 {
 		t.Fatalf("fixture second client: %+v %v", r, err)
 	}
-	cfg.SecondClient = "off"
+	cfg.SecondEnabled, cfg.SecondClient = false, "openai"
 	if r, err = newDetectRun(cfg, true); err != nil || r.second != nil {
-		t.Fatalf("off: %+v %v", r, err)
+		t.Fatalf("off: no client and no key needed, got %+v %v", r, err)
 	}
 }
 

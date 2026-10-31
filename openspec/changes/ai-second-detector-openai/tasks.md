@@ -21,7 +21,7 @@
 
 ## 4. Go pipeline
 
-- [x] 4.1 `ai/pipeline/detect.go` `Config` + `ConfigFromEnv`: `SecondClient` (`AI_SECOND_CLIENT`: `off` | `openai` | `fixture`, else error), `SecondModel` (`AI_SECOND_MODEL`, default `gpt-6-luna`); `newDetectRun` builds `r.second detector.Client` (OpenAI: `detector.NewOpenAI(model)`, startup error without the key; fixture: 2.2) and its price. Verify: `detect_test.go` cases for the three values and the bad one.
+- [x] 4.1 `ai/pipeline/detect.go` `Config` + `ConfigFromEnv`: `SecondEnabled` (`AI_SECOND_ENABLED=on`), `SecondClient` (`AI_SECOND_CLIENT`: `openai` | `fixture`, else error), `SecondModel` (`AI_SECOND_MODEL`, default `gpt-6-luna`); `newDetectRun` builds `r.second detector.Client` (OpenAI: `detector.NewOpenAI(model)`, startup error without the key; fixture: 2.2) and its price. Verify: `detect_test.go` cases for the three values and the bad one.
 - [x] 4.2 `ai/review` (new package): `Batch(tx, sheet, n)` and `InsertItem(tx, …)` moved out of `ai/judge/review.go` (the judge calls them; its tests unchanged). Verify: `go test -mod=vendor ./ai/judge/ ./ai/review/`.
 - [x] 4.3 `ai/pipeline/confirm.go`: `confirm(ctx, nativeID, cues, first detector.Result) confirmation` (the call with the same `Request` as the first, `detector.Validate`, `detector.Resolve` both, IoU ≥ 0.3 same-category match → per-first-segment confirmed flags, `extra` count, usage/cost/error; failure → `gate: false` + error text + log `second opinion failed`); `writeConfirmation(tx, …)` the row; `addUnconfirmedItems(tx, …)` the `D<n>` items in `ai-second-<date>` with priority `important` through `ai/review`. `confirm_test.go` (sqlmock): agreement, category mismatch, low IoU, second-only, failure leaves the gate off, items inserted per unconfirmed entry. Verify: `go test -mod=vendor ./ai/pipeline -run Confirm`.
 - [x] 4.4 `ai/pipeline/publish.go`: `reasonUnconfirmed`; `entries()` takes the confirmed flags (nil = no gate) and labels would-be-served unmatched segments `unconfirmed` after the confidence and length checks. `publish_test.go`: reason order (a low-confidence unmatched segment reads `confidence`), nil flags = today. Verify: `go test -mod=vendor ./ai/pipeline -run Entries`.
@@ -31,7 +31,7 @@
 
 ## 5. Wiring and dashboard
 
-- [x] 5.1 `docker-compose.yml` (`AI_SECOND_CLIENT=${AI_SECOND_CLIENT:-off}`, `AI_SECOND_MODEL=${AI_SECOND_MODEL:-}`, `OPENAI_API_KEY=${OPENAI_API_KEY:-}`), `.github/workflows/deploy.yml` (both lists: two `vars.*`, one `secrets.*`), `docker-compose.e2e.yml` unchanged: the `ai second:` tests pass `AI_SECOND_CLIENT=fixture` per run, so every other ai test and `ai defaults` run without it. Verify: `docker compose -f docker-compose.yml config` shows the three on `app`; e2e group 6 runs with the fixture client.
+- [x] 5.1 `docker-compose.yml` (`AI_SECOND_ENABLED=${AI_SECOND_ENABLED:-off}`, `AI_SECOND_CLIENT=${AI_SECOND_CLIENT:-}`, `AI_SECOND_MODEL=${AI_SECOND_MODEL:-}`, `OPENAI_API_KEY=${OPENAI_API_KEY:-}`), `.github/workflows/deploy.yml` (both lists: three `vars.*`, one `secrets.*`), `docker-compose.e2e.yml` unchanged: the `ai second:` tests pass `AI_SECOND_ENABLED=on` + `AI_SECOND_CLIENT=fixture` per run, so every other ai test and `ai defaults` run without it. Verify: `docker compose -f docker-compose.yml config` shows the three on `app`; e2e group 6 runs with the fixture client.
 - [x] 5.2 `grafana/dashboards/ai-pipeline.json`: hidden-by-reason panel + `unconfirmed` column; a "Второе мнение" row (calls per day, confirmed share, unconfirmed entries, failures by normalised `error`, second-only segments, cost per day and 24 h) from `prv_ai_confirmations`. Verify: every new SQL run against the local dump with a seeded `prv_ai_confirmations` row (`psql` on localhost:5433), `python3 -m json.tool` on the file.
 
 ## 6. End-to-end tests (`test/e2e.js`, fixtures `test/fixtures/ai/`)
@@ -49,6 +49,6 @@
 
 ## Workflow follow-up
 
-- Deploy with every switch off; then the owner sets `OPENAI_API_KEY`, the account's $100 hard limit and `AI_SECOND_CLIENT=openai`, and redeploys with `image_tag` = the running sha.
+- Deploy with every switch off; then the owner sets `OPENAI_API_KEY`, the account's $100 hard limit and `AI_SECOND_ENABLED=on`, and redeploys with `image_tag` = the running sha.
 - Day-after check: dashboard second-opinion row, open `D` items, `ai_cost_usd_24h{kind="confirm"}`.
 - Archive the change after the prod check; the archive is the record (no copy into `docs/plans/completed/`).

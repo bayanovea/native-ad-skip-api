@@ -39,7 +39,8 @@ services:
       - AI_DAILY_BUDGET_VIDEOS=${AI_DAILY_BUDGET_VIDEOS:-}
       - AI_MIN_SEGMENT_SECONDS=${AI_MIN_SEGMENT_SECONDS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - AI_SECOND_CLIENT=${AI_SECOND_CLIENT:-off}
+      - AI_SECOND_ENABLED=${AI_SECOND_ENABLED:-off}
+      - AI_SECOND_CLIENT=${AI_SECOND_CLIENT:-}
       - AI_SECOND_MODEL=${AI_SECOND_MODEL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # The video platform: URL templates ({id}, {t}) and the earlier prefix of its DB objects / API field (see CLAUDE.md)

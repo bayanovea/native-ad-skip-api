@@ -19,7 +19,7 @@ import (
 // on the held-out set 0.5 vetoed 18 more true ads than 0.3 for 4 more wrong cuts (owner, 2026-10-31).
 const confirmIoU = 0.3
 
-// confirmation is the second model's opinion on one run (AI_SECOND_CLIENT).
+// confirmation is the second model's opinion on one run (AI_SECOND_ENABLED).
 // confirmed is parallel to detector.Resolve of the first answer; nil when the
 // second call failed, and then nothing is gated.
 type confirmation struct {
