@@ -6,13 +6,41 @@ context: |
   Every AI_* switch defaults off in code and docker-compose.yml; turning one on is only ever the owner's env change.
   A push to main deploys to prod; never push without the owner's explicit go.
   Behaviour changes come with tests (Go: calculator / ai packages; Node: make test-unit, make test-e2e).
-  Deferred work goes to docs/backlog/ (one file per item); plans in docs/plans/ record the applied diff.
+  Deferred work goes to docs/backlog/ (one file per item); plans in docs/plans/ record the applied diff; an OpenSpec change is recorded by its archive alone.
   Code: simple, compact, matching the surrounding style; no comments that restate the mechanism.
   Write all artifacts in English.
+  ai/{detector,transcript,vtt,provider,ytdlp} and the detector prompt are eval-repo copies: change them in ~/Web/native-ad-skip-eval first, then scripts/sync-detector.sh.
+  Prod is read and written only through commands the owner runs (`! ssh … 'bash -s'`).
 
 rules:
   proposal:
     - State what is out of scope
     - Name the backlog item it comes from, when there is one
+  specs:
+    - Name thresholds and switches by their env variable, never by the prod value
+    - Every switch-gated requirement has a scenario with the switch off (today's behaviour)
+  design:
+    - "State how the change could serve a wrong segment and why it does not (precision-first), when it touches serving"
+    - "Name lock order and transaction boundaries when it touches video_calculateds, the AI row or a review batch row"
+    - "Rollback: what the previous image does with the new schema and data"
+    - "Cite owner decisions as (owner, YYYY-MM-DD) with the reason"
   tasks:
     - Each task names the files it touches and the test that proves it
+    - "A Docs group: the CLAUDE.md sections by name; when AI-first behaviour changes at the concept level, docs/ai-first-overview/{ru,en}.html with the header date and both artifacts republished"
+    - "Dashboard tasks: each changed SQL run against the local dump (localhost:5433) with seeded rows, the JSON parses, env-tagged literals (/* AI_MIN_VIEWS */ …) updated"
+    - "A new env flag: docker-compose.yml and both lists in .github/workflows/deploy.yml"
+    - "Last task: cleanup pass (leftover names via grep, transient state, open questions)"
+    - "End with a Workflow follow-up section: the deploy, any switch the owner flips, the day-after prod check, archive"
+
+operations:
+  apply:
+    guidance:
+      - Dashboard JSON and docs to parallel subagents; Go and e2e inline
+      - "Before reporting done: make test-unit, go test -mod=vendor ./calculator ./ai/..., make test-e2e"
+      - Commit on the owner's "commit"; push only on the owner's "push" (push = prod deploy)
+  archive:
+    guidance:
+      - Only after the owner confirms the prod check, in deploy order (a later delta can build on an earlier spec)
+      - "Own commit: openspec: archive <name> (verified on prod YYYY-MM-DD)"
+      - Delete the backlog item the change came from, if a task has not already
+      - The archived change is the only record; no copy into docs/plans/completed/

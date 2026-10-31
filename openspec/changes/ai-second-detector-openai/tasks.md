@@ -51,4 +51,4 @@
 
 - Deploy with every switch off; then the owner sets `OPENAI_API_KEY`, the account's $100 hard limit and `AI_SECOND_CLIENT=openai`, and redeploys with `image_tag` = the running sha.
 - Day-after check: dashboard second-opinion row, open `D` items, `ai_cost_usd_24h{kind="confirm"}`.
-- Archive the change after the prod check; move the design's decisions into `docs/plans/completed/` as the project's plan rules require.
+- Archive the change after the prod check; the archive is the record (no copy into `docs/plans/completed/`).
