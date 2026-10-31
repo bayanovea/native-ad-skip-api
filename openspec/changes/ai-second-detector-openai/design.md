@@ -36,6 +36,10 @@ See proposal.md for why. What shapes the how:
 9. **Config.** `AI_SECOND_ENABLED` (`off` default | `on`, the owner's switch like `AI_DETECT_ENABLED`), `AI_SECOND_CLIENT` (`openai` default | `fixture`, the transport like `AI_CLIENT`; split from the switch on 2026-11-01), `AI_SECOND_MODEL` (`gpt-6-luna`), `OPENAI_API_KEY`; `Config` fields `SecondClient`, `SecondModel`; `init_env.sh`'s grep gains `OPENAI_API_KEY`; the deploy workflow's env and `printf %q` lists and `docker-compose.yml` gain the three (`AI_SECOND_CLIENT` and `AI_SECOND_MODEL` as repository variables, `OPENAI_API_KEY` a secret).
 10. **Cost.** `detector.Price.Cost` with the OpenAI row; `priceFactor` 1 (no batch). `prometheus-wrapper.js` adds `costOf('confirm', 'prv_ai_confirmations')`; the `AiCostDaily` threshold stays (the OpenAI spend is bounded by the account's hard limit, which the owner sets to the $100).
 
+## How it could serve a wrong segment
+
+It cannot add one: the second model only removes entries from `data` (an `unconfirmed` entry is hidden; a second-only segment never becomes an entry), and the served bounds stay the first model's. The two ways a wrong segment still reaches viewers are today's: both models agree on a wrong cut (on the held-out set 36 of 61 wrong cuts passed at IoU 0.3), or the second call fails and the video is published from the first model alone (owner, 2026-10-30: degrade rather than hold, so an OpenAI outage never empties AI-first; the failures are on the dashboard).
+
 ## Risks / Trade-offs
 
 - [The veto costs recall: every segment the second model misses waits for an assessor] → the eval agreement score is read before the switch goes on; the review load is one item per unconfirmed entry, sized by that number; `AI_SECOND_ENABLED=off` restores today's path for new videos at once (existing `unconfirmed` entries stay until a verdict or a keep, by design).
@@ -57,7 +61,7 @@ See proposal.md for why. What shapes the how:
 
    Claude against itself (batch vs cli) at 0.5 vetoes 16 / 250 and 14 / 61: luna's veto is not noise. Luna marks far more self_promotion (276 of 493 segments), hence the second-only count.
 2. `scripts/sync-detector.sh ~/Web/native-ad-skip-eval`, `go mod vendor`; product work per tasks.md; merge, deploy with every switch off (no behaviour change; the new table is created by `sync()`).
-3. Owner: `OPENAI_API_KEY` secret, account hard limit at $100/month, `AI_SECOND_ENABLED=on` variable, deploy with `image_tag` = the running sha.
+3. Owner: `OPENAI_API_KEY` secret (a restricted service-account key of the OpenAI project `adskip-prod`, chat completions only), the project's hard spend limit at $100/month, `AI_SECOND_ENABLED=on` variable, deploy with `image_tag` = the running sha.
 4. Day after: the dashboard's second-opinion row (calls, agreement, failures, cost), open `D` items on `/admin/review`.
 5. Rollback: `AI_SECOND_ENABLED=off` (new videos take today's path); a code rollback to a pre-change image leaves `prv_ai_confirmations` and the `unconfirmed` reason in place, which that image treats as any hidden entry (never served, keep verdict serves it).
 
