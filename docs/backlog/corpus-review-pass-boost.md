@@ -29,3 +29,14 @@ when nothing urgent or important is open.
    judge's `ai-judge-*` batches on live videos, which cost no detect run and cover videos people watch.
 Then decide: continue over the whole corpus in quiet time (optional batches, ~150 videos a round),
 or stop and let the judge's batches be the only review queue.
+
+**Interim (2026-10-31, p1 + misses decided by Gam, p2–p6 open, p4 has 2 by bayanovea):**
+- p1 (30 items, 28 videos): 30/30 ads, no bounds, no comments; one category change
+  (C22 `self_promotion` → `sponsor`). Pace: median 22 s per item, 12 under 20 s (misses ~30 s).
+  `track_mismatch` on 8 of 28 videos.
+- misses (83): 52 ads the model missed, 28 `not_ad` (human labels wrong), 3 `unclear`;
+  sponsor ↔ self_promotion differs from the human label in 8 of the 52.
+- 100 % keeps at that pace with `Proposed as:` visible → blind agreement check first:
+  batch `2026-10-24-corpus-1-p1-blind` (C7,C8,C10,C15,C17,C18,C21,C22,C24,C27,C29,C30; one per
+  video; `important`, Gam excluded; imported 2026-10-31). When it is decided, compare per item
+  with Gam's p1 verdicts; disagreement → re-check p1 before step 1. Export and score only after p2–p6.
