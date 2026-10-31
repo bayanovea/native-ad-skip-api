@@ -231,7 +231,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'AI spent {{ $values.A }} USD in 24 h, about 1.5× a full budget day (AI_DAILY_BUDGET_VIDEOS 200 × ~$0.052): check prv_ai_runs / prv_ai_judgements, AI_DETECT_ENABLED=off stops it'
+          summary: 'AI spent {{ $values.A }} USD in 24 h, about 1.5× a full budget day (AI_DAILY_BUDGET_VIDEOS 230 × (~$0.052 detect + ~$0.006 second opinion)): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements, AI_DETECT_ENABLED=off stops it'
         data:
           - refId: A
             relativeTimeRange:
@@ -254,7 +254,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [15]
+                    params: [20]
       # No series means node-exporter is not scraped: that alerts too.
       - uid: host-disk-low
         title: HostDiskLow
