@@ -56,3 +56,13 @@ store as `blind-union-corpus-1-2026-10-24` (Gam) and `misses-corpus-1-2026-10-24
 - reading: the flagged side is the class humans do not label (self-promotion), not a model error class;
   only the misses can still give a prompt rule (step 2). The 0 % `not_ad` at 13 s per item is exactly
   what the blind batch checks: decide nothing about the rest of the corpus before it is in.
+
+**Step 2 (2026-10-31, the 52 confirmed misses):** no new prompt rule worth a version. 36 are lead-ins /
+tails of a gold stretch the model hit (783 s, boundary seconds only), 6 were predicted but dropped by the
+serving filter (confidence or < 5 s, 171 s), 2 just under IoU 0.3, 8 had nothing predicted (3 208 s, of
+which one whole-stream sponsor label C3 = 2 724 s; C11 / C70 of the same label are `not_ad`: check in the
+player). Covered by v2.2 already: staged sketches around a pitch, narrated lead-ins, own promotion. Excluded
+on purpose: show intros (the assessor marks the same kind both ad and not ad: C18 vs C41). Not in the prompt:
+ready-made commercial spots at 0:00 and platform / other-show promos, ~250 s ≈ 1.3 % of ad time, at most
++0.01 SCORE: one cheap eval try at most, risk = the video's own cold opens. The 28 `not_ad` human labels:
+18 content inside whole-video sponsor sweeps, 6 show intros, 4 overruns past a real ad.
