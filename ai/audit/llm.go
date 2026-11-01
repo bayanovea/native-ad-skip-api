@@ -51,9 +51,9 @@ const llmSchema = `{
 }`
 
 const (
-	llmMaxTokens = 2048
-	cuesMax      = 600 // characters of an item's cues the model sees
-	textMax      = 400 // characters kept of a model finding's text and of the summary
+	llmMaxTokens = 8192 // a 27-item batch's Russian findings ran out at 2048 (prod, 2026-11-01)
+	cuesMax      = 600  // characters of an item's cues the model sees
+	textMax      = 400  // characters kept of a model finding's text and of the summary
 )
 
 type llmResult struct {
