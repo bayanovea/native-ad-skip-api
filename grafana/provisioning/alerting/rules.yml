@@ -20,7 +20,7 @@ groups:
       # No series at all means the calculator never ran (or /metrics has no
       # heartbeat): that is the alert, hence noDataState Alerting. A is the age of
       # the last success over the provider's limit (prv/rt/yt 10 min, ai_detect
-      # 15 min, ai_judge 2 h), so one threshold of 1 serves all; a switched-off AI
+      # 15 min, ai_judge and ai_audit 2 h), so one threshold of 1 serves all; a switched-off AI
       # command deletes its row, so it has no series here.
       - uid: calculator-stale
         title: CalculatorStale
@@ -29,7 +29,7 @@ groups:
         noDataState: Alerting
         execErrState: Error
         annotations:
-          summary: 'calculator {{ $labels.provider }}: no successful run within its limit (prv/rt/yt 10 min, ai_detect 15 min, ai_judge 2 h)'
+          summary: 'calculator {{ $labels.provider }}: no successful run within its limit (prv/rt/yt 10 min, ai_detect 15 min, ai_judge / ai_audit 2 h)'
         data:
           - refId: A
             relativeTimeRange:
@@ -42,6 +42,7 @@ groups:
                 (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider!~"ai_.*"})) / 600
                 or (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider="ai_detect"})) / 900
                 or (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider="ai_judge"})) / 7200
+                or (time() - max by (provider) (calculator_last_success_timestamp_seconds{provider="ai_audit"})) / 7200
               instant: true
               range: false
               intervalMs: 1000
@@ -231,7 +232,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'AI spent {{ $values.A }} USD in 24 h, about 1.5× a full budget day (AI_DAILY_BUDGET_VIDEOS 230 × (~$0.052 detect + ~$0.006 second opinion)): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements, AI_DETECT_ENABLED=off stops it'
+          summary: 'AI spent {{ $values.A }} USD in 24 h, about 1.5× a full budget day (AI_DAILY_BUDGET_VIDEOS 230 × (~$0.052 detect + ~$0.006 second opinion)): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
         data:
           - refId: A
             relativeTimeRange:

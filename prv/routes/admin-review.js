@@ -3,7 +3,7 @@ const handler = require('../../middleware/handler');
 const { VERDICTS, formatPlayerTime, parsePlayerTime, validateVerdictBounds } = require('../../lib/review-sheet');
 // Inlined into the item page's script, so the page checks typed times by the server's rules.
 const CLIENT_HELPERS = [formatPlayerTime, parsePlayerTime, validateVerdictBounds].map(String).join('\n');
-const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, KEEP_VERDICTS, mayDecide } = require('../repository/review');
+const { ReviewInputError, ReviewConflictError, SIGNALS_WINDOW, KEEP_VERDICTS, OWNER_REVIEWER, mayDecide } = require('../repository/review');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { LANGS, COOKIE, translator, pickLang } = require('../../lib/i18n');
 const { REVIEWER_MAX, validReviewerName } = require('../../lib/reviewer-name');
@@ -238,6 +238,14 @@ const STYLE = `
         .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: #fff; }
         .badge-banned { background: #7f1d1d; color: #fecaca; margin-left: 6px; }
         .ai-badge { background: #7c3aed; }
+        .audits { border-left: 3px solid #f59e0b; }
+        .audit { padding: 10px 0; border-top: 1px solid #334155; }
+        .audit:first-of-type { border-top: none; }
+        .audit-head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+        .audit-head .spacer { flex: 1; }
+        .audit ul { margin-left: 18px; font-size: 0.85rem; line-height: 1.5; }
+        .severity-owner { background: #b45309; }
+        .severity-backlog { background: #475569; }
         .priority-urgent { background: #b91c1c; }
         .priority-important { background: #1d4ed8; }
         .priority-optional { background: #6b7280; }
@@ -391,7 +399,34 @@ function groupByPriority(rows) {
     return groups;
 }
 
-function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
+// The owner's block: the latest audit of each batch with new owner / backlog findings (ai audit), with a hide form.
+function renderAudits(audits, reviewer, token, t) {
+    if (!audits || audits.length === 0) return '';
+    const tok = escapeHtml(urlToken(token));
+    const audit = (a) => `
+        <div class="audit">
+            <div class="audit-head">
+                <a class="batch-link" href="/admin/review/${escapeHtml(encodeURIComponent(a.batch))}?reviewer=${escapeHtml(encodeURIComponent(reviewer))}&amp;verifyBearerToken=${tok}">${escapeHtml(a.batch)}</a>
+                <span class="muted">${escapeHtml(formatDate(a.created_at))}</span>
+                <span class="spacer"></span>
+                <form method="post" action="/admin/review/audits/${a.id}/hide?verifyBearerToken=${tok}">
+                    <input type="hidden" name="reviewer" value="${escapeHtml(reviewer)}">
+                    <button class="nav-btn" type="submit">${t('audit_hide')}</button>
+                </form>
+            </div>
+            ${a.summary ? `<div>${escapeHtml(a.summary)}</div>` : ''}
+            ${a.llm_error ? `<div class="muted">${t('audit_llm_error', { error: a.llm_error })}</div>` : ''}
+            <ul>${a.findings.map(f => `
+                <li><span class="badge severity-${escapeHtml(f.severity)}">${t(`audit_severity_${f.severity}`)}</span>
+                    ${f.items && f.items.length ? `<code>${escapeHtml(f.items.join(', '))}</code>` : ''} ${escapeHtml(f.text)}</li>`).join('')}</ul>
+        </div>`;
+    return `
+    <div class="card audits">
+        <h2>${t('audit_title')}</h2>${audits.map(audit).join('')}
+    </div>`;
+}
+
+function renderBatchList(batches, reviewer, showAll, token, t, langLink, audits = null) {
     const tok = escapeHtml(urlToken(token));
     const r = escapeHtml(encodeURIComponent(reviewer));
     const row = (b) => `
@@ -425,6 +460,7 @@ function renderBatchList(batches, reviewer, showAll, token, t, langLink) {
         <a href="/admin/review?reviewer=${r}&amp;format=json${showAll ? '&amp;show=all' : ''}&amp;verifyBearerToken=${tok}">${t('toolbar_json')}</a>
         ${langLink}
     </div>
+    ${renderAudits(audits, reviewer, token, t)}
     ${renderOnboarding(t)}
     ${batches.length > 0 ? sections : `<div class="card empty">${showAll ? t('list_empty_all') : t('list_empty_mine')}</div>`}
 <script>
@@ -1019,13 +1055,14 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
         }
         const showAll = req.query.show === 'all';
         const batches = await reviewRepository.listBatches({ reviewer, all: showAll });
+        const audits = reviewer === OWNER_REVIEWER ? await reviewRepository.ownerAudits() : null;
         if (req.query.format === 'json') {
-            res.json({ reviewer, batches });
+            res.json(audits ? { reviewer, batches, audits } : { reviewer, batches });
             return;
         }
         const t = languageOf(req, res);
         res.setHeader('Content-Type', 'text/html');
-        res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken, t, langSwitch(req, t)));
+        res.send(renderBatchList(batches, reviewer, showAll, req.query.verifyBearerToken, t, langSwitch(req, t), audits));
     }));
 
     // POST /admin/review/reviewers — register `{name}` (the name is the code).
@@ -1146,6 +1183,21 @@ module.exports = function createAdminReviewRoutes(models, { reviewRepository, ai
     // Take locks a batch available to the reviewer; release clears the lock of
     // its holder, or anyone's with `force: true`. 200 `{batch, locked_by,
     // locked_at}`, 400 bad input, 404 unknown batch, 409 conflict.
+    // POST /admin/review/audits/:id/hide — body `{reviewer}`; the owner only (403 otherwise), 404 for an
+    // unknown audit. The block's form gets 303 back to the list, JSON 200 `{id, hidden: true}`.
+    router.post('/admin/review/audits/:id/hide', handler(async (req, res) => {
+        if (!authorized(req, res)) return;
+        const reviewer = req.body && typeof req.body.reviewer === 'string' ? req.body.reviewer.trim() : '';
+        if (reviewer !== OWNER_REVIEWER) { res.status(403).send('only the owner hides audits'); return; }
+        const id = Number(req.params.id);
+        if (!(await reviewRepository.hideAudit(id, reviewer))) { res.status(404).send('Audit not found'); return; }
+        if (req.is('application/x-www-form-urlencoded')) {
+            res.redirect(303, `/admin/review?reviewer=${encodeURIComponent(reviewer)}&verifyBearerToken=${encodeURIComponent(req.query.verifyBearerToken)}`);
+            return;
+        }
+        res.json({ id, hidden: true });
+    }));
+
     function lockRoute(action) {
         return handler(async (req, res) => {
             if (!authorized(req, res)) return;

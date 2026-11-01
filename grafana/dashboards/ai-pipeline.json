@@ -467,7 +467,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations) AS usd",
+          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations) + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_review_audits) AS usd",
           "refId": "A"
         }
       ],
@@ -539,7 +539,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations WHERE created_at > NOW() - INTERVAL '24 hours') AS usd",
+          "rawSql": "SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_judgements WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_ai_confirmations WHERE created_at > NOW() - INTERVAL '24 hours') + (SELECT COALESCE(SUM(cost_usd), 0) FROM prv_review_audits WHERE created_at > NOW() - INTERVAL '24 hours') AS usd",
           "refId": "A"
         }
       ],
@@ -3116,7 +3116,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'), 'detect' AS metric, SUM(cost_usd) AS value FROM prv_ai_runs WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'judge' AS metric, SUM(cost_usd) AS value FROM prv_ai_judgements WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'confirm' AS metric, SUM(cost_usd) AS value FROM prv_ai_confirmations WHERE $__timeFilter(created_at) GROUP BY 1\nORDER BY 1",
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'), 'detect' AS metric, SUM(cost_usd) AS value FROM prv_ai_runs WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'judge' AS metric, SUM(cost_usd) AS value FROM prv_ai_judgements WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'confirm' AS metric, SUM(cost_usd) AS value FROM prv_ai_confirmations WHERE $__timeFilter(created_at) GROUP BY 1\nUNION ALL\nSELECT $__timeGroupAlias(created_at, '1d'), 'audit' AS metric, SUM(cost_usd) AS value FROM prv_review_audits WHERE $__timeFilter(created_at) GROUP BY 1\nORDER BY 1",
           "refId": "A"
         }
       ]

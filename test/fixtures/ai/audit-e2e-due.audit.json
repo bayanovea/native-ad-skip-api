@@ -1,0 +1,5 @@
+{"summary": "Оба сегмента подтверждены, в комментарии жалоба на ссылку.",
+ "findings": [
+  {"kind": "comment", "severity": "owner", "items": ["A1"], "text": "Асессор пишет, что ссылка на плеер не открывается.", "action": {"type": "none", "note": ""}},
+  {"kind": "other", "severity": "owner", "items": ["Z9"], "text": "Код не из батча, должен быть отброшен.", "action": {"type": "none", "note": ""}}
+ ]}

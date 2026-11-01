@@ -293,6 +293,27 @@ module.exports = function(sequelize) {
         created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
     }, { tableName: 'prv_ai_confirmations', timestamps: false, indexes: [{ fields: ['created_at'] }] });
 
+    // One row per audit of a finished review batch by `ai audit` (ai/audit): rule findings and the model's comment
+    // findings, each with `new` against the batch's previous row. Only notified_at and hidden_* are ever updated.
+    const ReviewAudit = sequelize.define('review_audit', {
+        batch: { type: DataTypes.TEXT, allowNull: false },
+        watermark: { type: DataTypes.INTEGER, allowNull: false }, // the batch's newest verdict id when audited
+        items: { type: DataTypes.INTEGER, allowNull: false },
+        metrics: { type: DataTypes.JSONB, allowNull: false },
+        findings: { type: DataTypes.JSONB, allowNull: false },
+        summary: { type: DataTypes.TEXT, allowNull: true },
+        model: { type: DataTypes.TEXT, allowNull: true },
+        prompt_sha: { type: DataTypes.TEXT, allowNull: true },
+        raw_output: { type: DataTypes.TEXT, allowNull: true },
+        usage: { type: DataTypes.JSONB, allowNull: true },
+        cost_usd: { type: DataTypes.FLOAT, allowNull: true },
+        llm_error: { type: DataTypes.TEXT, allowNull: true },
+        created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: sequelize.literal('CURRENT_TIMESTAMP') },
+        notified_at: { type: DataTypes.DATE, allowNull: true },
+        hidden_at: { type: DataTypes.DATE, allowNull: true },
+        hidden_by: { type: DataTypes.TEXT, allowNull: true },
+    }, { tableName: 'prv_review_audits', timestamps: false, indexes: [{ fields: ['batch'] }, { fields: ['created_at'] }] });
+
     // Phase 3 (audio drift): subtitle-vs-audio shifts per video, steps [{at_s, shift_s}] with shift = subtitle time − audio time. No writer in the product yet.
     const AiTimeline = sequelize.define('ai_timeline', {
         native_id: { type: DataTypes.STRING, allowNull: false },
@@ -318,5 +339,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiConfirmation, AiTimeline };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiConfirmation, AiTimeline, ReviewAudit };
 };

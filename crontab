@@ -5,3 +5,5 @@
 */5 * * * * flock -n /tmp/ai-detect.lock /app/prv/commands/ai/ai detect >> /proc/1/fd/1 2>&1
 # AI judge: exits at once unless AI_JUDGE_ENABLED=on (/app/.env)
 30 * * * * flock -n /tmp/ai-judge.lock /app/prv/commands/ai/ai judge >> /proc/1/fd/1 2>&1
+# Review batch audit: exits at once unless AI_AUDIT_ENABLED=on (/app/.env)
+45 * * * * flock -n /tmp/ai-audit.lock /app/prv/commands/ai/ai audit >> /proc/1/fd/1 2>&1

@@ -7294,3 +7294,189 @@ test('review page: onboarding block, closed by default, on the batch list and th
     const page = loadKeyboardPage((await request('GET', paths[1], null)).body, { local: memoryStorage(), session: memoryStorage() });
     assert.deepEqual({ ...page.state().letters }, { c: 'comment', j: 'next', k: 'prev', o: 'player', t: 'bounds' });
 });
+
+// ── Review batch audit (ai audit): fixture answers, a stub Telegram server ────
+
+// One stub for every audit test: it records the messages and answers with `status`.
+const telegramStub = { status: 200, messages: [], server: null, port: 0 };
+
+async function startTelegramStub() {
+    if (telegramStub.server) return;
+    telegramStub.server = http.createServer((req, res) => {
+        let buf = '';
+        req.on('data', c => (buf += c));
+        req.on('end', () => {
+            telegramStub.messages.push({ path: req.url, body: JSON.parse(buf) });
+            res.writeHead(telegramStub.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: telegramStub.status === 200 }));
+        });
+    });
+    await new Promise(r => telegramStub.server.listen(0, '127.0.0.1', r));
+    telegramStub.port = telegramStub.server.address().port;
+}
+
+after(() => { if (telegramStub.server) telegramStub.server.close(); });
+
+// Async, so this process's stub can answer while the binary waits on it.
+function runAudit(args = [], env = {}) {
+    const e = { ...process.env, DB_NAME: TEST_DB, AI_AUDIT_ENABLED: 'on', TELEGRAM_BOT_TOKEN: 'e2e-bot', TELEGRAM_CHAT_ID: '-100',
+        TELEGRAM_API_URL: `http://127.0.0.1:${telegramStub.port}`, ...env };
+    for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
+    return new Promise((resolve) => {
+        const proc = spawn(`${APP_DIR}/prv/commands/ai/ai`, ['audit', ...args], { env: e });
+        let stdout = '', stderr = '';
+        proc.stdout.on('data', c => (stdout += c));
+        proc.stderr.on('data', c => (stderr += c));
+        proc.on('close', status => resolve({ status, stdout, stderr }));
+    });
+}
+
+// A batch of ai items (judge lines, video 999001) with verdicts [code, reviewer, verdict, minutesAgo, comment].
+async function seedAuditBatch(batch, codes, verdicts, reviewsNeeded = 1) {
+    await dbQuery('INSERT INTO prv_review_batches (batch, reviews_needed) VALUES ($1, $2)', [batch, reviewsNeeded]);
+    const ids = {};
+    for (const [i, code] of codes.entries()) {
+        [{ id: ids[code] }] = await dbQuery(`INSERT INTO prv_review_items
+                (sheet, batch, item_code, position, native_id, start, "end", proposed, cues, link, flagged_by, kind, video_id)
+            VALUES ($1, $1, $2, $3, $4, 10, 40, 'sponsor', 'реклама', 'https://example.invalid/x', $5, 'ai', 999001) RETURNING id`,
+        [batch, code, i + 1, `-1_45699${i}`, JSON.stringify(['judge review by rules: duration: 1 videos rows of another cut', 'signals: x', 'keep: true'])]);
+    }
+    for (const [code, reviewer, verdict, minutesAgo, comment = null] of verdicts) {
+        await dbQuery(`INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, decided_at)
+            VALUES ($1, $2, $3, $4, 'page', NOW() - $5 * INTERVAL '1 minute')`, [ids[code], verdict, comment, reviewer, minutesAgo]);
+    }
+    return ids;
+}
+
+test('audit: the image\'s crontab runs ai audit hourly at minute 45 under its lock', () => {
+    const tab = fs.readFileSync('/etc/cron.d/my-crontab', 'utf8');
+    assert.match(tab, /^45 \* \* \* \* flock -n \/tmp\/ai-audit\.lock \/app\/prv\/commands\/ai\/ai audit >> \/proc\/1\/fd\/1 2>&1$/m);
+});
+
+const auditsOf = (batch) => dbQuery('SELECT * FROM prv_review_audits WHERE batch = $1 ORDER BY id', [batch]);
+const AUDIT_AUTH = process.env.AUTH_TOKEN || 'test_token';
+
+test('audit: a batch finished by an assessor 31+ min ago is audited once; one settling, one open, one finished by bayanovea only and one older than 7 days are not; the audit changes no review or AI row', async () => {
+    await startTelegramStub();
+    await seedAuditBatch('audit-e2e-due', ['A1', 'A2'], [['A1', 'gkshi', 'sponsor', 41, 'ссылка не открывается'], ['A2', 'gkshi', 'sponsor', 40]]);
+    await seedAuditBatch('audit-e2e-settling', ['A1'], [['A1', 'gkshi', 'sponsor', 10]]);
+    await seedAuditBatch('audit-e2e-open', ['A1', 'A2'], [['A1', 'gkshi', 'sponsor', 40]]);
+    await seedAuditBatch('audit-e2e-owner', ['A1'], [['A1', 'bayanovea', 'sponsor', 40]]);
+    await seedAuditBatch('audit-e2e-old', ['A1'], [['A1', 'gkshi', 'sponsor', 8 * 24 * 60]]);
+    const snapshot = () => Promise.all([
+        dbQuery('SELECT video_id, data, hidden, withdrawn_at FROM prv_ai_video_calculateds ORDER BY video_id'),
+        dbQuery('SELECT * FROM prv_review_items ORDER BY id'),
+        dbQuery('SELECT * FROM prv_review_verdicts ORDER BY id'),
+        dbQuery('SELECT * FROM prv_review_batches ORDER BY batch'),
+    ]);
+    const before = await snapshot();
+    assert.ok(before[0].length > 0, 'an AI row exists to compare');
+
+    const r = await runAudit();
+    assert.match(r.stderr, /ai audit: audit-e2e-due audited \(audit \d+\): \d+ findings, 2 new for the owner/, r.stderr);
+    assert.deepEqual(await snapshot(), before, 'no review or AI row changed');
+    for (const b of ['audit-e2e-settling', 'audit-e2e-open', 'audit-e2e-owner', 'audit-e2e-old']) {
+        assert.equal((await auditsOf(b)).length, 0, `${b} not audited`);
+    }
+    const [a] = await auditsOf('audit-e2e-due');
+    assert.equal(a.items, 2);
+    assert.equal(a.model, 'claude-sonnet-5-5');
+    assert.equal(a.summary, 'Оба сегмента подтверждены, в комментарии жалоба на ссылку.');
+    assert.equal(a.llm_error, null);
+    assert.equal(a.metrics.model_findings_dropped, 1, 'the finding with an unknown code is dropped');
+    assert.deepEqual(a.metrics.verdicts, { sponsor: 2 });
+    assert.ok(Math.abs(a.cost_usd - FIXTURE_COST) < 1e-12, `full price, got ${a.cost_usd}`);
+    const byKind = Object.fromEntries(a.findings.map(f => [f.kind, f]));
+    assert.equal(byKind.judge_false_alarm.severity, 'backlog');
+    assert.deepEqual(byKind.judge_false_alarm.items, ['A1', 'A2']);
+    assert.equal(byKind.judge_false_alarm.evidence.by, 'rules');
+    assert.deepEqual(byKind.comment.items, ['A1']);
+    assert.ok(a.findings.every(f => f.new), 'a first audit has only new findings');
+    assert.ok(!a.findings.some(f => f.items.includes('Z9')));
+    assert.ok(a.notified_at, 'the message went out');
+
+    const msgs = telegramStub.messages.filter(m => m.body.text.includes('audit-e2e-due'));
+    assert.equal(msgs.length, 1, 'one message');
+    assert.equal(msgs[0].path, '/bote2e-bot/sendMessage');
+    assert.equal(msgs[0].body.chat_id, '-100');
+    assert.ok(msgs[0].body.text.includes('[в бэклог] A1, A2:'), msgs[0].body.text);
+    assert.ok(msgs[0].body.text.includes('[нужен ты] A1: Асессор пишет'), msgs[0].body.text);
+    assert.ok(!msgs[0].body.text.includes(AUDIT_AUTH), 'no token in the message');
+    assert.ok(!msgs[0].body.text.includes('[info]') && !msgs[0].body.text.includes('Границы'), 'info findings are not sent');
+
+    await runAudit();
+    assert.equal((await auditsOf('audit-e2e-due')).length, 1, 'no new verdicts: not audited again');
+    assert.match(await fetchMetrics(), /^ai_cost_usd\{kind="audit"\} [0-9.e-]+$/m);
+    assert.ok(await heartbeat('ai_audit'), 'heartbeat written');
+});
+
+test('audit: the owner block lists the audit for bayanovea only (HTML and JSON); hide by another code is 403, an unknown id 404, hide by bayanovea removes it', async () => {
+    const list = (reviewer, fmt = '&format=json') => request('GET', `/admin/review?reviewer=${reviewer}${fmt}&verifyBearerToken=${AUDIT_AUTH}`, null);
+    const owner = (await list('bayanovea')).body;
+    const [a] = await auditsOf('audit-e2e-due');
+    const shown = owner.audits.find(x => x.batch === 'audit-e2e-due');
+    assert.ok(shown, 'the owner sees the audit');
+    assert.ok(shown.findings.every(f => f.new && ['owner', 'backlog'].includes(f.severity)), 'only new owner / backlog findings');
+    assert.ok(!('audits' in (await list('gkshi')).body), 'an assessor gets no audit data');
+    const html = (await list('bayanovea', '')).body;
+    assert.ok(html.includes('Выводы аудита') && html.includes(`/admin/review/audits/${a.id}/hide`), 'the block and its hide form');
+    assert.ok(!(await list('gkshi', '')).body.includes('Выводы аудита'));
+
+    const hide = (id, reviewer, form = false) => request('POST', `/admin/review/audits/${id}/hide?verifyBearerToken=${AUDIT_AUTH}`,
+        form ? `reviewer=${reviewer}` : { reviewer }, form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {});
+    assert.equal((await hide(a.id, 'gkshi')).status, 403);
+    assert.equal((await hide(987654, 'bayanovea')).status, 404);
+    assert.equal((await auditsOf('audit-e2e-due'))[0].hidden_at, null, 'nothing hidden by the refused requests');
+    const res = await hide(a.id, 'bayanovea', true);
+    assert.equal(res.status, 303);
+    assert.match(res.headers.location, /^\/admin\/review\?reviewer=bayanovea&verifyBearerToken=/);
+    const [hidden] = await auditsOf('audit-e2e-due');
+    assert.equal(hidden.hidden_by, 'bayanovea');
+    assert.ok(hidden.hidden_at);
+    assert.ok(!(await list('bayanovea')).body.audits.some(x => x.batch === 'audit-e2e-due'), 'hidden audits leave the block');
+    assert.equal((await hide(a.id, 'bayanovea')).status, 200, 'a second hide is a no-op');
+});
+
+test('audit: a changed verdict makes the batch due again and the new row marks unchanged findings not new (no message); switched off it writes nothing and clears the heartbeat; ai audit <batch> on an unfinished batch exits 1', async () => {
+    const [{ id }] = await dbQuery(`SELECT id FROM prv_review_items WHERE batch = 'audit-e2e-due' AND item_code = 'A2'`);
+    await dbQuery(`INSERT INTO prv_review_verdicts (item_id, verdict, comment, reviewer, source, decided_at)
+        VALUES ($1, 'sponsor', NULL, 'gkshi', 'page', NOW() - INTERVAL '35 minutes')`, [id]);
+    const sent = telegramStub.messages.length;
+    await runAudit();
+    const rows = await auditsOf('audit-e2e-due');
+    assert.equal(rows.length, 2, 're-audited as a new row');
+    assert.equal(rows[0].hidden_by, 'bayanovea', 'the earlier row stays as it was');
+    assert.ok(rows[1].findings.every(f => !f.new), 'same findings: none new');
+    assert.equal(rows[1].notified_at, null);
+    assert.equal(telegramStub.messages.filter(m => m.body.text.includes('audit-e2e-due')).length, 1, 'no second message');
+    assert.ok(telegramStub.messages.length >= sent);
+
+    const off = await runAudit([], { AI_AUDIT_ENABLED: undefined });
+    assert.equal(off.status, 0, off.stderr);
+    assert.equal(await heartbeat('ai_audit'), null, 'switched off clears the heartbeat');
+
+    const manual = await runAudit(['audit-e2e-open'], { AI_AUDIT_ENABLED: undefined });
+    assert.equal(manual.status, 1);
+    assert.match(manual.stderr, /not finished/);
+    assert.equal((await auditsOf('audit-e2e-open')).length, 0);
+    const old = await runAudit(['audit-e2e-old'], { AI_AUDIT_ENABLED: undefined });
+    assert.notEqual(old.stderr.indexOf('ai audit: audit-e2e-old audited'), -1, `the manual run ignores the 7-day window: ${old.stderr}`);
+    assert.equal((await auditsOf('audit-e2e-old')).length, 1);
+});
+
+test('audit: a failed Telegram send leaves the row unnotified and the next tick sends it once', async () => {
+    await seedAuditBatch('audit-e2e-ping', ['A1'], [['A1', 'gkshi', 'sponsor', 45]]);
+    telegramStub.status = 500;
+    const failed = await runAudit();
+    assert.equal(failed.status, 1, 'a failed send fails the tick');
+    let [row] = await auditsOf('audit-e2e-ping');
+    assert.equal(row.notified_at, null);
+    telegramStub.status = 200;
+    await runAudit();
+    await runAudit();
+    [row] = await auditsOf('audit-e2e-ping');
+    assert.ok(row.notified_at, 'sent on the next tick');
+    assert.equal((await auditsOf('audit-e2e-ping')).length, 1, 'the resend writes no new row');
+    const okMsgs = telegramStub.messages.filter(m => m.body.text.includes('audit-e2e-ping'));
+    assert.equal(okMsgs.length, 2, 'one failed attempt, one success, nothing after');
+});

@@ -7,11 +7,12 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"odedohbest/video-calculate/ai/audit"
 	"odedohbest/video-calculate/ai/judge"
 	"odedohbest/video-calculate/ai/pipeline"
 )
 
-const usage = "usage: ai detect [native_id] | ai judge | ai regate [--backfill]"
+const usage = "usage: ai detect [native_id] | ai judge | ai regate [--backfill] | ai audit [batch]"
 
 func main() {
 	godotenv.Load("/app/.env") // cron's only source of env; variables already set win
@@ -44,6 +45,14 @@ func main() {
 		}
 		if err := pipeline.Regate(cfg, len(args) == 2); err != nil {
 			log.Fatalf("ai regate: %v", err)
+		}
+	case len(args) >= 1 && len(args) <= 2 && args[0] == "audit":
+		batch := ""
+		if len(args) == 2 {
+			batch = args[1]
+		}
+		if err := audit.Run(audit.ConfigFromEnv(), batch); err != nil {
+			log.Fatalf("ai audit: %v", err)
 		}
 	default:
 		fmt.Fprintln(os.Stderr, usage)

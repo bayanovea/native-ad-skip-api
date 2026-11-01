@@ -15,6 +15,11 @@ const SIGNALS_WINDOW = 30;
 // The importer's --max-items default and the judge's batchMax (ai/judge/review.go): a batch one reviewer finishes in a sitting.
 const BATCH_MAX = 30;
 const LOCK_IDLE_HOURS = 12;
+// The owner's code: only they see audit findings (ai/audit's OWNER_REVIEWER); keeps them off the assessors' page,
+// not access control.
+const OWNER_REVIEWER = 'bayanovea';
+// Finding severities that reach the owner (the rest is `info`, kept in the row only).
+const OWNER_SEVERITIES = ['owner', 'backlog'];
 // Batch priorities, highest first: `urgent` is the judge's (prod videos people watch now),
 // `important` the default, `optional` a pass to do when there is time.
 const PRIORITIES = ['urgent', 'important', 'optional'];
@@ -341,6 +346,38 @@ module.exports = function createReviewRepository(models, sequelize) {
                 { replacements: { batch, reviewer }, type: QueryTypes.SELECT, transaction }
             );
             return row || null;
+        },
+
+        /**
+         * The owner's findings block: per batch its latest audit, when not hidden and holding a new
+         * `owner` / `backlog` finding; `findings` keeps only those. Newest first.
+         */
+        async ownerAudits() {
+            const rows = await sequelize.query(
+                `SELECT * FROM (
+                    SELECT DISTINCT ON (batch) id, batch, created_at, summary, findings, llm_error, hidden_at
+                      FROM prv_review_audits
+                     ORDER BY batch, id DESC) a
+                  WHERE hidden_at IS NULL
+                  ORDER BY id DESC`,
+                { type: QueryTypes.SELECT }
+            );
+            return rows
+                .map(({ hidden_at, ...a }) => ({ ...a, findings: a.findings.filter((f) => f.new && OWNER_SEVERITIES.includes(f.severity)) }))
+                .filter((a) => a.findings.length > 0);
+        },
+
+        /** Hide an audit from the owner's block; false for an unknown id. A second hide changes nothing. */
+        async hideAudit(id, reviewer) {
+            if (!validItemId(id)) return false;
+            const [row] = await sequelize.query(
+                `UPDATE prv_review_audits
+                    SET hidden_at = COALESCE(hidden_at, NOW()), hidden_by = COALESCE(hidden_by, :reviewer)
+                  WHERE id = :id
+                  RETURNING id`,
+                { replacements: { id, reviewer }, type: QueryTypes.SELECT }
+            );
+            return row != null;
         },
 
         /** Reviewer codes the page offers, alphabetical. */
@@ -886,3 +923,4 @@ module.exports.SIGNALS_WINDOW = SIGNALS_WINDOW;
 module.exports.LOCK_IDLE_HOURS = LOCK_IDLE_HOURS;
 module.exports.VIDEO_FLAGS = VIDEO_FLAGS;
 module.exports.PRIORITIES = PRIORITIES;
+module.exports.OWNER_REVIEWER = OWNER_REVIEWER;
