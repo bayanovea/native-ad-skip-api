@@ -138,6 +138,7 @@ jobs:
         AI_SECOND_MODEL: ${{ vars.AI_SECOND_MODEL }}
         AI_AUDIT_ENABLED: ${{ vars.AI_AUDIT_ENABLED }}
         AI_AUDIT_MODEL: ${{ vars.AI_AUDIT_MODEL }}
+        AI_AUDIT_TELEGRAM: ${{ vars.AI_AUDIT_TELEGRAM }}
         HOST_IP: ${{ secrets.HOST_IP }}
         # Deployment values (secrets): the public hosts, the video platform's URL templates, the earlier
         # prefix of the DB objects, the compose project name.
@@ -185,6 +186,7 @@ jobs:
             AI_SECOND_MODEL "$AI_SECOND_MODEL" \
             AI_AUDIT_ENABLED "$AI_AUDIT_ENABLED" \
             AI_AUDIT_MODEL "$AI_AUDIT_MODEL" \
+            AI_AUDIT_TELEGRAM "$AI_AUDIT_TELEGRAM" \
             HOST_IP "$HOST_IP" \
             API_HOST "$API_HOST" \
             LANDING_HOST "$LANDING_HOST" \

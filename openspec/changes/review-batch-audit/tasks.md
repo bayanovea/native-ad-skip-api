@@ -19,7 +19,7 @@
 ## 3. Wiring and dashboards
 
 - [x] 3.1 `crontab`: `45 * * * * flock -n /tmp/ai-audit.lock /app/prv/commands/ai/ai audit >> /proc/1/fd/1 2>&1` with the one-line comment of the other AI lines. Verify: the image's `crontab -l` in the e2e container shows it.
-- [x] 3.2 `docker-compose.yml` (`AI_AUDIT_ENABLED=${AI_AUDIT_ENABLED:-off}`, `AI_AUDIT_MODEL=${AI_AUDIT_MODEL:-}`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` on `app`), `.github/workflows/deploy.yml` (both lists: two `vars.*`; the Telegram secrets are already in both), `infrastructure/init/init_env.sh` (`TELEGRAM_[A-Z_]+` in the grep). Verify: `docker compose -f docker-compose.yml config` shows the four on `app`; `grep -c AI_AUDIT .github/workflows/deploy.yml` = 4.
+- [x] 3.2 `docker-compose.yml` (`AI_AUDIT_ENABLED=${AI_AUDIT_ENABLED:-off}`, `AI_AUDIT_TELEGRAM=${AI_AUDIT_TELEGRAM:-off}`, `AI_AUDIT_MODEL=${AI_AUDIT_MODEL:-}`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` on `app`), `.github/workflows/deploy.yml` (both lists: three `vars.*`; the Telegram secrets are already in both), `infrastructure/init/init_env.sh` (`TELEGRAM_[A-Z_]+` in the grep). Verify: `docker compose -f docker-compose.yml config` shows the four on `app`; `grep -c AI_AUDIT .github/workflows/deploy.yml` = 6.
 - [x] 3.3 `grafana/provisioning/alerting/rules.yml`: `CalculatorStale` selector `ai_audit` / 7200 and the summary's list of limits. `grafana/dashboards/infrastructure.json`: `ai_audit` override on the heartbeat stat (as `ai_judge`). `grafana/dashboards/ai-pipeline.json`: `prv_review_audits` in the two cost totals and an `audit` series in the cost-per-day panel. Verify: each changed SQL run against the local dump with a seeded `prv_review_audits` row; `python3 -m json.tool` on both JSON files; `yamllint`-free parse with `python3 -c 'import yaml…'`.
 
 ## 4. End-to-end tests (`test/e2e.js`, fixtures `test/fixtures/ai/`)
@@ -39,6 +39,6 @@
 
 - Deploy with `AI_AUDIT_ENABLED` unset; check the table exists and the cron line exits at once.
 - Owner runs `ai audit <batch>` inside the app container on one recent finished batch, checks the block on `/admin/review` and the Telegram message.
-- Owner sets the repository variable `AI_AUDIT_ENABLED=on` (Variables tab) and redeploys with `image_tag` = the running sha.
+- Owner sets the repository variable `AI_AUDIT_ENABLED=on` (Variables tab) and redeploys with `image_tag` = the running sha; `AI_AUDIT_TELEGRAM=on` only once `docs/backlog/telegram-blocked-from-prod-host.md` is fixed.
 - Day-after check: `ai_audit` heartbeat on the infrastructure dashboard, audit rows of the day's finished batches, `ai_cost_usd_24h{kind="audit"}`.
 - Archive after the prod check; the archive is the record.

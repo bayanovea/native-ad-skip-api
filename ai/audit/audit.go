@@ -19,7 +19,7 @@ type auditRun struct {
 	llm    llmClient
 	prompt detector.Prompt
 	price  detector.Price
-	tg     *telegram
+	tg     *telegram // nil: AI_AUDIT_TELEGRAM off, findings reach only the page block
 }
 
 // Run is one cron tick (batch "") or the manual run of one batch. The tick resends unsent
@@ -34,7 +34,10 @@ func Run(cfg Config, batch string) error {
 	if err := cfg.check(); err != nil {
 		return err
 	}
-	r := &auditRun{tg: newTelegram(cfg)}
+	r := &auditRun{}
+	if cfg.Telegram {
+		r.tg = newTelegram(cfg)
+	}
 	var err error
 	if r.llm, err = newLLMClient(cfg); err != nil {
 		return err
@@ -68,6 +71,9 @@ func Run(cfg Config, batch string) error {
 }
 
 func (r *auditRun) tick() (failed int, err error) {
+	if r.tg == nil {
+		return r.auditDue(0)
+	}
 	unsent, err := r.unsent()
 	if err != nil {
 		return 0, err
@@ -78,6 +84,10 @@ func (r *auditRun) tick() (failed int, err error) {
 			failed++
 		}
 	}
+	return r.auditDue(failed)
+}
+
+func (r *auditRun) auditDue(failed int) (int, error) {
 	batches, err := dueBatches(r.db)
 	if err != nil {
 		return failed, err
@@ -139,7 +149,7 @@ func (r *auditRun) audit(batch string) error {
 	}
 	log.Printf("ai audit: %s audited (audit %d): %d findings, %d new for the owner, $%.4f%s",
 		batch, id, len(findings), pings, row.cost, invalid)
-	if pings == 0 {
+	if pings == 0 || r.tg == nil {
 		return nil
 	}
 	if err := r.notify(id, batch, summary, findings); err != nil {
@@ -216,13 +226,14 @@ type unsentAudit struct {
 	findings       []Finding
 }
 
-// unsent is every audit with a new owner / backlog finding whose message has not gone out.
+// unsent is every audit of the last window with a new owner / backlog finding whose message has not gone
+// out, so switching the ping on sends only recent audits.
 func (r *auditRun) unsent() ([]unsentAudit, error) {
 	rows, err := r.db.Query(`SELECT id, batch, COALESCE(summary, ''), findings FROM prv_review_audits a
-		 WHERE notified_at IS NULL
+		 WHERE notified_at IS NULL AND created_at > NOW() - make_interval(secs => $1)
 		   AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.findings) f
 		                WHERE (f->>'new')::boolean AND f->>'severity' IN ('owner', 'backlog'))
-		 ORDER BY id`)
+		 ORDER BY id`, window.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("unsent audits: %w", err)
 	}

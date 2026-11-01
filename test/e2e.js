@@ -7319,7 +7319,7 @@ after(() => { if (telegramStub.server) telegramStub.server.close(); });
 
 // Async, so this process's stub can answer while the binary waits on it.
 function runAudit(args = [], env = {}) {
-    const e = { ...process.env, DB_NAME: TEST_DB, AI_AUDIT_ENABLED: 'on', TELEGRAM_BOT_TOKEN: 'e2e-bot', TELEGRAM_CHAT_ID: '-100',
+    const e = { ...process.env, DB_NAME: TEST_DB, AI_AUDIT_ENABLED: 'on', AI_AUDIT_TELEGRAM: 'on', TELEGRAM_BOT_TOKEN: 'e2e-bot', TELEGRAM_CHAT_ID: '-100',
         TELEGRAM_API_URL: `http://127.0.0.1:${telegramStub.port}`, ...env };
     for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
     return new Promise((resolve) => {
@@ -7462,6 +7462,20 @@ test('audit: a changed verdict makes the batch due again and the new row marks u
     const old = await runAudit(['audit-e2e-old'], { AI_AUDIT_ENABLED: undefined });
     assert.notEqual(old.stderr.indexOf('ai audit: audit-e2e-old audited'), -1, `the manual run ignores the 7-day window: ${old.stderr}`);
     assert.equal((await auditsOf('audit-e2e-old')).length, 1);
+});
+
+test('audit: with AI_AUDIT_TELEGRAM off a due batch is audited and shown, nothing is sent and the tick needs no Telegram variables', async () => {
+    await seedAuditBatch('audit-e2e-quiet', ['A1'], [['A1', 'gkshi', 'sponsor', 50]]);
+    const sent = telegramStub.messages.length;
+    await runAudit([], { AI_AUDIT_TELEGRAM: undefined, TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_CHAT_ID: undefined });
+    const [row] = await auditsOf('audit-e2e-quiet');
+    assert.ok(row, 'audited');
+    assert.equal(row.notified_at, null);
+    assert.ok(row.findings.some(f => f.new && f.severity === 'backlog'), 'a finding for the owner');
+    assert.equal(telegramStub.messages.length, sent, 'nothing sent');
+    const owner = (await request('GET', `/admin/review?reviewer=bayanovea&format=json&verifyBearerToken=${AUDIT_AUTH}`, null)).body;
+    assert.ok(owner.audits.some(a => a.batch === 'audit-e2e-quiet'), 'the page block shows it');
+    await dbQuery(`UPDATE prv_review_audits SET hidden_at = NOW(), hidden_by = 'bayanovea', notified_at = NOW() WHERE batch = 'audit-e2e-quiet'`);
 });
 
 test('audit: a failed Telegram send leaves the row unnotified and the next tick sends it once', async () => {

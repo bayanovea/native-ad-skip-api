@@ -14,6 +14,7 @@ import (
 // Config is the audit's environment. The switch defaults off.
 type Config struct {
 	Enabled     bool   // AI_AUDIT_ENABLED=on
+	Telegram    bool   // AI_AUDIT_TELEGRAM=on: ping the owner; off = the page block only
 	Model       string // AI_AUDIT_MODEL
 	PromptPath  string // AI_AUDIT_PROMPT
 	Client      string // AI_CLIENT: anthropic | messages (both the Messages API here) | fixture
@@ -26,6 +27,7 @@ type Config struct {
 func ConfigFromEnv() Config {
 	return Config{
 		Enabled:     os.Getenv("AI_AUDIT_ENABLED") == "on",
+		Telegram:    os.Getenv("AI_AUDIT_TELEGRAM") == "on",
 		Model:       env("AI_AUDIT_MODEL", "claude-sonnet-5-5"),
 		PromptPath:  env("AI_AUDIT_PROMPT", "/app/ai/prompts/audit-v1.md"),
 		Client:      env("AI_CLIENT", "anthropic"),
@@ -42,10 +44,10 @@ func (c Config) check() error {
 	if c.Client != "fixture" && strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) == "" {
 		missing = append(missing, "ANTHROPIC_API_KEY")
 	}
-	if c.BotToken == "" {
+	if c.Telegram && c.BotToken == "" {
 		missing = append(missing, "TELEGRAM_BOT_TOKEN")
 	}
-	if c.ChatID == "" {
+	if c.Telegram && c.ChatID == "" {
 		missing = append(missing, "TELEGRAM_CHAT_ID")
 	}
 	if len(missing) > 0 {

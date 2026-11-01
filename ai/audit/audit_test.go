@@ -122,7 +122,7 @@ func TestAuditInvalidAnswerKeepsRuleFindings(t *testing.T) {
 
 func TestTickCountsFailedSendAndBatch(t *testing.T) {
 	r, mock, sent := newRun(t, &fakeLLM{err: errors.New("down")}, http.StatusInternalServerError)
-	mock.ExpectQuery(`WHERE notified_at IS NULL`).
+	mock.ExpectQuery(`WHERE notified_at IS NULL`).WithArgs(window.Seconds()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "batch", "summary", "findings"}).
 			AddRow(3, "old", "", []byte(`[{"kind":"precision","severity":"owner","items":["S1"],"text":"x","new":true}]`)))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.batch FROM s`)).WithArgs(OwnerReviewer, window.Seconds(), settle.Seconds()).
@@ -145,6 +145,22 @@ func TestReadBatchRefusesUnfinished(t *testing.T) {
 	mock.ExpectRollback()
 	if err := r.audit("b"); !errors.Is(err, errNotFinished) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTelegramOffAuditsWithoutSending(t *testing.T) {
+	r, mock, sent := newRun(t, &fakeLLM{raw: `{"summary":"","findings":[]}`}, http.StatusInternalServerError)
+	r.tg = nil
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.batch FROM s`)).WillReturnRows(sqlmock.NewRows([]string{"batch"}).AddRow("b"))
+	expectRead(mock, "b")
+	mock.ExpectQuery(`SELECT findings FROM prv_review_audits`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO prv_review_audits`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+	failed, err := r.tick()
+	if err != nil || failed != 0 || *sent != 0 {
+		t.Fatalf("failed %d, err %v, sent %d", failed, err, *sent)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -13,7 +13,7 @@ The system SHALL audit no batch, write no audit row and send no message unless `
 - **THEN** it exits successfully without reading any batch, writes no audit row, sends no message and leaves no `ai_audit` heartbeat row
 
 #### Scenario: Switched on without its credentials
-- **WHEN** `AI_AUDIT_ENABLED` is `on` and `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` is unset (with a real LLM client)
+- **WHEN** `AI_AUDIT_ENABLED` is `on` and `ANTHROPIC_API_KEY` is unset (with a real LLM client), or `AI_AUDIT_TELEGRAM` is `on` and `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` is unset
 - **THEN** the tick exits with an error naming the missing variable before auditing any batch
 
 ### Requirement: A batch is audited once it is finished by others and quiet
@@ -142,7 +142,11 @@ With `reviewer=bayanovea`, `/admin/review` SHALL show a findings block: for each
 - **THEN** it is refused and nothing changes
 
 ### Requirement: The owner gets one message per new finding
-After an audit row with a new `owner` or `backlog` finding is written, the system SHALL send one plain-text message to `TELEGRAM_CHAT_ID` naming the batch and each such finding's severity, items and text, and SHALL mark the row as notified. The message SHALL NOT contain `AUTH_TOKEN`. A failed send SHALL be retried on later ticks until it succeeds; a sent row is never sent again.
+With `AI_AUDIT_TELEGRAM` `on`, after an audit row with a new `owner` or `backlog` finding is written, the system SHALL send one plain-text message to `TELEGRAM_CHAT_ID` naming the batch and each such finding's severity, items and text, and SHALL mark the row as notified. The message SHALL NOT contain `AUTH_TOKEN`. A failed send SHALL be retried on later ticks (rows of the last 7 days) until it succeeds; a sent row is never sent again.
+
+#### Scenario: Ping switched off
+- **WHEN** `AI_AUDIT_TELEGRAM` is unset or `off` and an audit has a new `owner` finding
+- **THEN** no message is sent, no Telegram variable is needed, the row stays unnotified, the tick counts no failure, and the page block shows the audit
 
 #### Scenario: Only info findings
 - **WHEN** an audit has only `info` findings or no new ones
