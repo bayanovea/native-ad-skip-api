@@ -63,6 +63,20 @@ def ts_last(title):
             if nn: out[k] = nn[-1]
     return out
 
+def ts_latest(title, label):
+    """timeseries → {label value: value at the newest timestamp}. A renamed scrape job leaves the old
+    series in the range next to the new one (2026-10-29), so the newest point wins, not the last frame."""
+    out = {}
+    for frame in query(by_title[title]):
+        tk = next((k for k in (frame[0].keys() if frame else []) if k.startswith('Time')), None)
+        for k in (frame[0].keys() if frame else []):
+            if k == tk or f'"{label}": "' not in k: continue
+            pts = [(r[tk], r[k]) for r in frame if r[k] is not None]
+            if not pts: continue
+            t, v = pts[-1]; name = k.split(f'"{label}": "')[1].split('"')[0]
+            if name not in out or t > out[name][0]: out[name] = (t, v)
+    return {k: v for k, (t, v) in out.items()}
+
 def bar(title, key, val):
     try: return {r[key]: r[val] for r in query(by_title[title])[0]}
     except Exception as e: return {'error': str(e)}
@@ -100,8 +114,7 @@ put('retry_wait', lambda: single('Ждут повторной попытки'))
 put('detecting', lambda: query(by_title['Ждём ответ модели (detecting)'])[0][-1])
 put('dropped', lambda: query(by_title['Отсеяно: по статусу'])[0][-1])
 put('dropped_pct', lambda: round(single('Доля отсеянных среди прошедших обкачку'), 1))
-put('status_hist', lambda: {k.split('"status": "')[1].rstrip('"}'): v for k, v in
-                           ts_last('Видео по статусу prv_ai_videos (история из Prometheus)').items()})
+put('status_hist', lambda: ts_latest('Видео по статусу prv_ai_videos (история из Prometheus)', 'status'))
 put('result_now', lambda: bar('Результат разметки сейчас (по видео)', 'исход', 'видео'))
 put('segments_by_conf', lambda: bar('Сегменты, готовые к отдаче: категория / уверенность', 'сегмент', 'шт.'))
 put('drop_reasons', lambda: bar('Причины отсева', 'причина', 'видео'))
