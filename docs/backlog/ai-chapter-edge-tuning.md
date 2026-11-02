@@ -22,11 +22,9 @@ Measure after 2–3 weeks with the check on:
 Possible outcomes: a narrower edge, an asymmetric one (the lead-in rule: an earlier start is
 usually right, a later end less so), or no change.
 
-Two small things to settle at the same time:
-
-- the dashboard's "ad chapters with no entry" panels match titles with `~*` on Cyrillic; check
-  prod's `SHOW lc_ctype` (a `C` locale does not fold Cyrillic case, so "РЕКЛАМА" would not match);
-- the judge prompt marks `(bounds by review)` but not chapter bounds (`ai/judge/llm.go`,
-  `judge-v1.md`); add `(bounds from a chapter)` if the judge starts withdrawing such entries.
+One small thing to settle at the same time: the judge prompt marks `(bounds by review)` but not
+chapter bounds (`ai/judge/llm.go`, `judge-v1.md`); add `(bounds from a chapter)` if the judge starts
+withdrawing such entries. (Prod folds Cyrillic case for the dashboard's `~*`: `'РЕКЛАМА' ~* 'реклам'`
+is true, checked 2026-11-02.)
 
 Settles it: the verdict counts above; the edge changes only by the owner's decision.
