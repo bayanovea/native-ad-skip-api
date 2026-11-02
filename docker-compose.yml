@@ -42,6 +42,8 @@ services:
       - AI_SECOND_ENABLED=${AI_SECOND_ENABLED:-off}
       - AI_SECOND_CLIENT=${AI_SECOND_CLIENT:-}
       - AI_SECOND_MODEL=${AI_SECOND_MODEL:-}
+      - AI_CHAPTERS_ENABLED=${AI_CHAPTERS_ENABLED:-off}
+      - AI_CHAPTER_EDGE_SECONDS=${AI_CHAPTER_EDGE_SECONDS:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # Review batch audit (ai audit): off unless the deploy env turns it on; AI_AUDIT_TELEGRAM=on pings the alerting bot's chat
       - AI_AUDIT_ENABLED=${AI_AUDIT_ENABLED:-off}

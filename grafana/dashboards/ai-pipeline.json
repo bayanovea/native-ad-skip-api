@@ -3662,12 +3662,541 @@
       "type": "row",
       "collapsed": false,
       "panels": [],
-      "title": "5. Сигналы, судья и асессоры (ai judge раз в час; вердикты на /admin/review)",
+      "title": "4в. Главы видео: сегмент отдаётся по границам главы (AI_CHAPTERS_ENABLED)",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 122
+      },
+      "id": 74
+    },
+    {
+      "id": 75,
+      "type": "stat",
+      "title": "Запуски модели с главами",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 123,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE jsonb_array_length(chapters) > 0) AS \"с главами\",\n       COUNT(*) FILTER (WHERE jsonb_array_length(chapters) = 0) AS \"без глав\",\n       ROUND(100.0 * COUNT(*) FILTER (WHERE jsonb_array_length(chapters) > 0) / NULLIF(COUNT(*), 0), 1) AS \"% с главами\"\nFROM prv_ai_runs WHERE chapters IS NOT NULL",
+          "refId": "A"
+        }
+      ],
+      "description": "Строки prv_ai_runs с записанными главами (chapters не NULL: запуски после изменения): у скольких видео есть свои главы (таймкоды в описании), у скольких нет. Пишется и при AI_CHAPTERS_ENABLED=off."
+    },
+    {
+      "id": 76,
+      "type": "stat",
+      "title": "Отдаётся по границам глав",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 123,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"сегментов\", COUNT(DISTINCT c.video_id) AS \"видео\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nWHERE c.withdrawn_at IS NULL AND e ->> 'source' = 'chapter'",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты data с source = chapter в неотозванных строках: оба края были рядом с краями главы, отдаются по границам главы. Ноль при AI_CHAPTERS_ENABLED=off."
+    },
+    {
+      "id": 77,
+      "type": "stat",
+      "title": "Вопросы по главам (T)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 123,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)) AS \"открытых T\",\n       COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)) AS \"решено\"\nFROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-chapter-%'",
+          "refId": "A"
+        }
+      ],
+      "description": "Вопросы T<n> в батчах ai-chapter-<дата>: рекламная по названию глава совпала с сегментом только одним краем. Открытые — без вердикта."
+    },
+    {
+      "id": 78,
+      "type": "stat",
+      "title": "Рекламные главы без сегмента",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 123,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH missed AS (\n  SELECT c.native_id, c.video_id, c.published_at, ch ->> 'title' AS title,\n         (ch ->> 'start')::float AS s, (ch ->> 'end')::float AS e\n  FROM prv_ai_video_calculateds c\n  JOIN prv_ai_runs r ON r.id = c.run_id\n  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.chapters, '[]'::jsonb)) ch\n  WHERE ch ->> 'title' ~* 'реклам|интеграц|спонсор|партн[её]р|промокод|скидк|erid|при поддержке|купон|розыгрыш' /* chapters.go adTitle */\n    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.data || c.hidden) x\n                    WHERE (ch ->> 'start')::float < (x ->> 'end')::float AND (ch ->> 'end')::float > (x ->> 'start')::float))\nSELECT COUNT(*) AS \"глав\", COUNT(DISTINCT video_id) AS \"видео\" FROM missed",
+          "refId": "A"
+        }
+      ],
+      "description": "Главы последнего запуска (run_id строки) с рекламным названием (тот же список слов, что adTitle в chapters.go), которые не пересекают ни одной записи data и hidden. Отозванные строки тоже. Вероятный пропуск модели — таблица ниже."
+    },
+    {
+      "id": 79,
+      "type": "bargauge",
+      "title": "Вердикты по вопросам T",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 128,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "namePlacement": "top",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH items AS (\n  SELECT i.id FROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-chapter-%'),\nlatest AS (\n  SELECT DISTINCT ON (v.item_id) v.verdict, v.bounds_source FROM prv_review_verdicts v JOIN items ON items.id = v.item_id\n  ORDER BY v.item_id, v.decided_at DESC, v.id DESC)\nSELECT verdict || CASE WHEN verdict IN ('sponsor', 'self_promotion')\n         THEN COALESCE(' · границы асессора (' || bounds_source || ')', ' · границы сегмента') ELSE '' END AS \"вердикт\",\n       COUNT(*) AS \"вопросов\" FROM latest GROUP BY 1\nUNION ALL\nSELECT 'без вердикта', COUNT(*) FROM items WHERE NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = items.id)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "Последний вердикт по каждому T<n>. Для keep — менял ли асессор границы (bounds_source последнего вердикта: cue — выделение в транскрипте, typed — ввёл руками) или оставил границы сегмента."
+    },
+    {
+      "id": 80,
+      "type": "timeseries",
+      "title": "Запуски модели по дням: главы",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 128,
+        "w": 16,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '1d'),\n       COUNT(*) FILTER (WHERE jsonb_array_length(chapters) > 0) AS \"с главами\",\n       COUNT(*) FILTER (WHERE jsonb_array_length(chapters) = 0) AS \"без глав\",\n       COUNT(*) FILTER (WHERE chapters IS NULL) AS \"главы не записаны\"\nFROM prv_ai_runs WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "prv_ai_runs по created_at: с главами, без глав ([]), главы не записаны (NULL: запуски до изменения или info JSON не разобрался)."
+    },
+    {
+      "id": 81,
+      "type": "table",
+      "title": "Рекламные главы без сегмента: какие видео",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 136,
+        "w": 24,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${PROVIDER_VIDEO_URL}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "опубликовано"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "WITH missed AS (\n  SELECT c.native_id, c.video_id, c.published_at, ch ->> 'title' AS title,\n         (ch ->> 'start')::float AS s, (ch ->> 'end')::float AS e\n  FROM prv_ai_video_calculateds c\n  JOIN prv_ai_runs r ON r.id = c.run_id\n  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.chapters, '[]'::jsonb)) ch\n  WHERE ch ->> 'title' ~* 'реклам|интеграц|спонсор|партн[её]р|промокод|скидк|erid|при поддержке|купон|розыгрыш' /* chapters.go adTitle */\n    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.data || c.hidden) x\n                    WHERE (ch ->> 'start')::float < (x ->> 'end')::float AND (ch ->> 'end')::float > (x ->> 'start')::float))\nSELECT native_id, video_id, title AS \"глава\",\n       to_char(make_interval(secs => floor(s)), 'FMHH24:MI:SS') || '–' || to_char(make_interval(secs => ceil(e)), 'FMHH24:MI:SS') AS \"начало–конец\",\n       published_at AS \"опубликовано\"\nFROM missed ORDER BY published_at DESC, video_id, s LIMIT 100"
+        }
+      ],
+      "description": "Те же главы: видео, название главы, её границы, когда опубликована строка. native_id ведёт на prv, video_id — на /admin/video (нужен токен в переменной вверху); оттуда можно отправить отрезок асессорам."
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "title": "5. Сигналы, судья и асессоры (ai judge раз в час; вердикты на /admin/review)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 145
       },
       "id": 46
     },
@@ -3681,7 +4210,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 123,
+        "y": 146,
         "w": 6,
         "h": 8
       },
@@ -3747,7 +4276,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 123,
+        "y": 146,
         "w": 6,
         "h": 8
       },
@@ -3813,7 +4342,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 123,
+        "y": 146,
         "w": 6,
         "h": 8
       },
@@ -3879,7 +4408,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 123,
+        "y": 146,
         "w": 6,
         "h": 8
       },
@@ -3945,7 +4474,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 131,
+        "y": 154,
         "w": 8,
         "h": 8
       },
@@ -4015,7 +4544,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 131,
+        "y": 154,
         "w": 4,
         "h": 8
       },
@@ -4082,7 +4611,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 131,
+        "y": 154,
         "w": 12,
         "h": 8
       },
@@ -4155,7 +4684,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 139,
+        "y": 162,
         "w": 24,
         "h": 10
       },
@@ -4326,7 +4855,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 149
+        "y": 172
       },
       "id": 55
     },
@@ -4340,7 +4869,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 150,
+        "y": 173,
         "w": 12,
         "h": 8
       },
@@ -4415,7 +4944,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 150,
+        "y": 173,
         "w": 4,
         "h": 8
       },
@@ -4480,7 +5009,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 150,
+        "y": 173,
         "w": 4,
         "h": 8
       },
@@ -4543,7 +5072,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 150,
+        "y": 173,
         "w": 4,
         "h": 8
       },
@@ -4606,7 +5135,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 158,
+        "y": 181,
         "w": 6,
         "h": 8
       },
@@ -4673,7 +5202,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 158,
+        "y": 181,
         "w": 18,
         "h": 8
       },

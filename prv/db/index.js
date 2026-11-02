@@ -241,6 +241,7 @@ module.exports = function(sequelize) {
         transcript: { type: DataTypes.JSONB, allowNull: false },
         track_overrun_s: { type: DataTypes.FLOAT, allowNull: false },
         yt_duration_s: { type: DataTypes.FLOAT, allowNull: false },
+        chapters: { type: DataTypes.JSONB, allowNull: true }, // [{start, end, title}] from yt-dlp's info, NULL = unknown
         raw_output: { type: DataTypes.JSONB, allowNull: true },
         usage: { type: DataTypes.JSONB, allowNull: true },
         cost_usd: { type: DataTypes.FLOAT, allowNull: true },

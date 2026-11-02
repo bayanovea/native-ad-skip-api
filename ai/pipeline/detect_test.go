@@ -27,7 +27,7 @@ var testPrv = func() provider.Provider {
 }()
 
 func TestConfigFromEnvDefaultsOff(t *testing.T) {
-	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN", "AI_SECOND_ENABLED", "AI_SECOND_CLIENT", "AI_SECOND_MODEL"} {
+	for _, k := range []string{"AI_DETECT_ENABLED", "AI_MIN_VIEWS", "AI_MIN_REQUESTS", "AI_DAILY_BUDGET_VIDEOS", "AI_BATCH_MAX", "AI_MIN_SEGMENT_SECONDS", "AI_FETCH_PAUSE", "AI_MODEL", "AI_CLIENT", "YTDLP_BIN", "AI_SECOND_ENABLED", "AI_SECOND_CLIENT", "AI_SECOND_MODEL", "AI_CHAPTERS_ENABLED", "AI_CHAPTER_EDGE_SECONDS"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
@@ -36,6 +36,9 @@ func TestConfigFromEnvDefaultsOff(t *testing.T) {
 	}
 	if c.SecondEnabled || c.SecondClient != "openai" || c.SecondModel != "gpt-6-luna" {
 		t.Fatalf("second opinion: got %v %q %q, want off, openai, gpt-6-luna", c.SecondEnabled, c.SecondClient, c.SecondModel)
+	}
+	if c.ChaptersEnabled || c.ChapterEdge != 10 {
+		t.Fatalf("chapters: got %v %d, want off, 10", c.ChaptersEnabled, c.ChapterEdge)
 	}
 	want := Config{MinViews: 500000, MinRequests: 20, DailyBudget: 300, BatchMax: 5, MinSegmentSeconds: 5, FetchPause: 40 * time.Second, Model: "claude-sonnet-5-5", Client: "anthropic",
 		YtdlpBin: "/usr/local/bin/yt-dlp"}
@@ -91,6 +94,20 @@ func TestConfigSecondClient(t *testing.T) {
 	t.Setenv("AI_SECOND_CLIENT", "off")
 	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "AI_SECOND_CLIENT") {
 		t.Fatalf("off: want an error naming AI_SECOND_CLIENT (the switch is AI_SECOND_ENABLED), got %v", err)
+	}
+}
+
+func TestConfigChapters(t *testing.T) {
+	t.Setenv("AI_CHAPTERS_ENABLED", "on")
+	t.Setenv("AI_CHAPTER_EDGE_SECONDS", "15")
+	if c, err := ConfigFromEnv(); err != nil || !c.ChaptersEnabled || c.ChapterEdge != 15 {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+	for _, bad := range []string{"0", "abc", "-1"} {
+		t.Setenv("AI_CHAPTER_EDGE_SECONDS", bad)
+		if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "AI_CHAPTER_EDGE_SECONDS") {
+			t.Fatalf("%s: want an error naming AI_CHAPTER_EDGE_SECONDS, got %v", bad, err)
+		}
 	}
 }
 
@@ -166,9 +183,9 @@ func batchRun(t *testing.T) (*detectRun, sqlmock.Sqlmock, *fakeBatch) {
 
 func expectWaiting(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL").WillReturnRows(
-		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "transcript"}).
-			AddRow("-1_456000001", "msgbatch_1", 11, 7, []byte(`{"meta":{},"cues":[]}`)).
-			AddRow("-1_456000002", "msgbatch_1", 12, 8, []byte(`{"meta":{},"cues":[]}`)))
+		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "transcript", "chapters"}).
+			AddRow("-1_456000001", "msgbatch_1", 11, 7, []byte(`{"meta":{},"cues":[]}`), nil).
+			AddRow("-1_456000002", "msgbatch_1", 12, 8, []byte(`{"meta":{},"cues":[]}`), nil))
 }
 
 func TestPollLeavesARunningBatchForALaterTick(t *testing.T) {

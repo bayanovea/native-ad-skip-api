@@ -48,6 +48,8 @@ type Config struct {
 	SecondEnabled     bool          // AI_SECOND_ENABLED=on: the second opinion before publish
 	SecondClient      string        // AI_SECOND_CLIENT: openai | fixture (<native_id>.second.json)
 	SecondModel       string        // AI_SECOND_MODEL
+	ChaptersEnabled   bool          // AI_CHAPTERS_ENABLED=on: the chapter check after the second opinion
+	ChapterEdge       int           // AI_CHAPTER_EDGE_SECONDS: how far a chapter's edge may be from the entry's
 }
 
 // ConfigFromEnv reads Config; an empty variable takes the default.
@@ -59,10 +61,11 @@ func ConfigFromEnv() (Config, error) {
 		FixtureDir:    env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:    env("AI_PROMPT", "/app/ai/prompts/v2.2.md"),
 		// Absolute: cron's PATH (/usr/bin:/bin) does not reach the image's /usr/local/bin.
-		YtdlpBin:      env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
-		SecondEnabled: os.Getenv("AI_SECOND_ENABLED") == "on",
-		SecondClient:  env("AI_SECOND_CLIENT", "openai"),
-		SecondModel:   env("AI_SECOND_MODEL", "gpt-6-luna"),
+		YtdlpBin:        env("YTDLP_BIN", "/usr/local/bin/yt-dlp"),
+		SecondEnabled:   os.Getenv("AI_SECOND_ENABLED") == "on",
+		SecondClient:    env("AI_SECOND_CLIENT", "openai"),
+		SecondModel:     env("AI_SECOND_MODEL", "gpt-6-luna"),
+		ChaptersEnabled: os.Getenv("AI_CHAPTERS_ENABLED") == "on",
 	}
 	switch c.SecondClient {
 	case "openai", "fixture":
@@ -79,6 +82,7 @@ func ConfigFromEnv() (Config, error) {
 		{"AI_DAILY_BUDGET_VIDEOS", 300, &c.DailyBudget},
 		{"AI_BATCH_MAX", 5, &c.BatchMax},
 		{"AI_MIN_SEGMENT_SECONDS", 5, &c.MinSegmentSeconds},
+		{"AI_CHAPTER_EDGE_SECONDS", 10, &c.ChapterEdge},
 	} {
 		*v.dst = v.def
 		if s := os.Getenv(v.name); s != "" {
@@ -91,6 +95,9 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if c.MinSegmentSeconds < 1 {
 		return c, fmt.Errorf("AI_MIN_SEGMENT_SECONDS must be at least 1, got %d", c.MinSegmentSeconds)
+	}
+	if c.ChapterEdge < 1 {
+		return c, fmt.Errorf("AI_CHAPTER_EDGE_SECONDS must be at least 1, got %d", c.ChapterEdge)
 	}
 	c.FetchPause = 40 * time.Second
 	if s := os.Getenv("AI_FETCH_PAUSE"); s != "" {
@@ -158,12 +165,13 @@ const blockedMin = 2
 
 // pending is a fetched video that passed the gate, waiting for its model call.
 type pending struct {
-	q       queued
-	videoID int
-	meta    transcript.Meta
-	cues    []vtt.Cue
-	overrun float64
-	req     detector.Request
+	q        queued
+	videoID  int
+	meta     transcript.Meta
+	cues     []vtt.Cue
+	chapters []chapter
+	overrun  float64
+	req      detector.Request
 }
 
 // Detect runs one cron tick: claim → fetch → gate → submit, then resolve the
@@ -387,7 +395,7 @@ func manualOutcome(db *sql.DB, nativeID string) error {
 // timeline), having recorded that on the row.
 func (r *detectRun) fetch(ctx context.Context, q queued) (*pending, error) {
 	url := r.prv.VideoURL(q.nativeID)
-	info, _, err := r.ytdlp.Info(ctx, url)
+	info, raw, err := r.ytdlp.Info(ctx, url)
 	if err != nil {
 		return nil, r.fetchError(q, err)
 	}
@@ -449,7 +457,7 @@ func (r *detectRun) fetch(ctx context.Context, q queued) (*pending, error) {
 	}
 	req := detector.NewRequestFormat(r.prompt, meta, requestFormat.Apply(cues), requestFormat)
 	req.Key = q.nativeID
-	return &pending{q: q, videoID: videoID, meta: meta, cues: cues, overrun: over, req: req}, nil
+	return &pending{q: q, videoID: videoID, meta: meta, cues: cues, chapters: parseChapters(q.nativeID, raw), overrun: over, req: req}, nil
 }
 
 // readVTT reads what WriteSubs wrote: the first "<base>.<lang>*.vtt" (yt-dlp may add a track suffix).
@@ -520,7 +528,7 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 		if r.batch == nil {
 			res, err := r.client.Detect(ctx, p.req)
 			c := r.confirm(ctx, p.q.nativeID, p.meta, p.cues, res, err)
-			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, res, err, c); err != nil {
+			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", p.q.nativeID, err)
 				failed++
 			}
@@ -566,15 +574,21 @@ func (r *detectRun) startRun(p pending) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	var chapters any
+	if p.chapters != nil {
+		if chapters, err = json.Marshal(p.chapters); err != nil {
+			return 0, err
+		}
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 	var runID int64
-	if err := tx.QueryRow(`INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		p.q.nativeID, p.videoID, r.prompt.SHA, r.prompt.Version, r.client.Model(), tr, p.overrun, p.meta.Duration).Scan(&runID); err != nil {
+	if err := tx.QueryRow(`INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s, chapters)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		p.q.nativeID, p.videoID, r.prompt.SHA, r.prompt.Version, r.client.Model(), tr, p.overrun, p.meta.Duration, chapters).Scan(&runID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'detecting', batch_id = NULL, last_error = NULL, updated_at = NOW()
@@ -600,10 +614,11 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		videoID  int
 		meta     transcript.Meta
 		cues     []vtt.Cue
+		chapters []chapter
 	}
-	rows, err := r.db.Query(`SELECT v.native_id, v.batch_id, run.id, run.video_id, run.transcript
+	rows, err := r.db.Query(`SELECT v.native_id, v.batch_id, run.id, run.video_id, run.transcript, run.chapters
 		FROM prv_ai_videos v
-		JOIN LATERAL (SELECT id, video_id, transcript FROM prv_ai_runs WHERE native_id = v.native_id ORDER BY id DESC LIMIT 1) run ON TRUE
+		JOIN LATERAL (SELECT id, video_id, transcript, chapters FROM prv_ai_runs WHERE native_id = v.native_id ORDER BY id DESC LIMIT 1) run ON TRUE
 		WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL`)
 	if err != nil {
 		return 0, err
@@ -612,8 +627,8 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 	for rows.Next() {
 		var w waiting
 		var batchID string
-		var tr []byte
-		if err := rows.Scan(&w.nativeID, &batchID, &w.runID, &w.videoID, &tr); err != nil {
+		var tr, chapters []byte
+		if err := rows.Scan(&w.nativeID, &batchID, &w.runID, &w.videoID, &tr, &chapters); err != nil {
 			rows.Close()
 			return failed, err
 		}
@@ -624,6 +639,11 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 			continue
 		}
 		w.meta, w.cues = st.Meta, st.Cues
+		if chapters != nil {
+			if err := json.Unmarshal(chapters, &w.chapters); err != nil {
+				log.Printf("ai detect: %s run %d chapters: %v", w.nativeID, w.runID, err)
+			}
+		}
 		batches[batchID] = append(batches[batchID], w)
 	}
 	rows.Close()
@@ -644,7 +664,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		for _, w := range videos {
 			res, err := r.client.Detect(ctx, detector.Request{Key: w.nativeID})
 			c := r.confirm(ctx, w.nativeID, w.meta, w.cues, res, err)
-			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, res, err, c); err != nil {
+			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, w.chapters, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", w.nativeID, err)
 				failed++
 			}
@@ -677,8 +697,8 @@ func (r *detectRun) expire() error {
 // skipped. A failed call or an invalid answer marks the video failed (the run row
 // keeps what came back); the error return is for the database only, and the caller logs it.
 // c is the second opinion (nil with the switch off): its row and the unconfirmed
-// entries' review items go into the same transaction.
-func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, res detector.Result, callErr error, c *confirmation) error {
+// entries' review items go into the same transaction, as do the chapter check's.
+func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, chapters []chapter, res detector.Result, callErr error, c *confirmation) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -718,13 +738,21 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	}
 
 	data, hidden := entries(detector.Resolve(units, res.Output), r.categories, r.cfg.MinSegmentSeconds, c.gate())
+	var toReview []chapterMatch
+	if r.cfg.ChaptersEnabled {
+		data, toReview = applyChapters(data, chapters, r.cfg.ChapterEdge, r.cfg.MinSegmentSeconds)
+	}
 	if err := publish(tx, videoID, nativeID, runID, data, hidden); err != nil {
 		return err
 	}
+	now := time.Now()
 	if c != nil {
-		if err := r.record(tx, c, runID, videoID, nativeID, data, hidden, cues, time.Now()); err != nil {
+		if err := r.record(tx, c, runID, videoID, nativeID, data, hidden, cues, now); err != nil {
 			return err
 		}
+	}
+	if err := r.sendChapterItems(tx, toReview, videoID, nativeID, cues, now); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`UPDATE prv_ai_videos SET status = 'published', batch_id = NULL, last_error = NULL, updated_at = NOW()
 		WHERE native_id = $1`, nativeID); err != nil {
@@ -745,8 +773,18 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		}
 		second = fmt.Sprintf(" (%d unconfirmed by %s, $%.4f)", n, c.model, c.cost)
 	}
-	log.Printf("ai detect: %s published: %d served, %d hidden%s of %d segments, video %d, run %d, $%.4f",
-		nativeID, len(data), len(hidden), second, len(res.Output.Segments), videoID, runID, cost)
+	onChapters := ""
+	if r.cfg.ChaptersEnabled {
+		n := 0
+		for _, e := range data {
+			if e.Source == sourceChapter {
+				n++
+			}
+		}
+		onChapters = fmt.Sprintf(", %d on chapters, %d to chapter review", n, len(toReview))
+	}
+	log.Printf("ai detect: %s published: %d served, %d hidden%s of %d segments%s, video %d, run %d, $%.4f",
+		nativeID, len(data), len(hidden), second, len(res.Output.Segments), onChapters, videoID, runID, cost)
 	return nil
 }
 

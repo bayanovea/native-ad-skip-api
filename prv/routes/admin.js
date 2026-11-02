@@ -3,6 +3,12 @@ const handler = require('../../middleware/handler');
 const { CATEGORY_COLORS, escapeHtml, urlToken, formatDate } = require('../../lib/admin-html');
 const { findAiCalculated } = require('../../lib/find-ai-calculated');
 
+// Entries whose bounds are not the detector's own.
+const SOURCE_BADGES = {
+    review: ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>',
+    chapter: ' <span class="badge chapter-badge" title="Bounds from the video\'s own chapter (ai detect, AI_CHAPTERS_ENABLED)" style="background:#7c3aed">chapter</span>',
+};
+
 // `videoId` is matched against native_id, which any client sets through
 // POST /markup, so every value goes through escapeHtml (URL parts through
 // encodeURIComponent first) and the token in <script> through scriptString():
@@ -49,8 +55,7 @@ async function aiBlock(models, video, token, reviewRepository) {
             return `
             <tr class="${cls}">
                 <td><span class="badge" style="background:${CATEGORY_COLORS[name] || '#64748b'}">${escapeHtml(name)}</span></td>
-                <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span>${e.source === 'review'
-        ? ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>' : ''}</td>
+                <td><span class="interval-val" data-start="${escapeHtml(e.start)}" data-end="${escapeHtml(e.end)}"></span>${SOURCE_BADGES[e.source] || ''}</td>
                 <td class="muted">${escapeHtml(e.confidence)}</td>
                 <td class="muted">${escapeHtml(last(e))}</td>
                 <td>${reviewCell(e)}</td>

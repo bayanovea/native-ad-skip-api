@@ -86,7 +86,7 @@ const TRANSCRIPT_CONTEXT_MAX = 600;
 const TRANSCRIPT_STEP = 60;
 
 // Bounds sources the page may send (`import` is scripts/import-verdict-bounds.js only).
-const PAGE_BOUNDS_SOURCES = ['cue', 'typed'];
+const PAGE_BOUNDS_SOURCES = ['cue', 'typed', 'chapter'];
 
 // `body.bounds` of a decide request → `{ start, end, source }` or null; times are
 // whole seconds or player times (`m:ss`, `h:mm:ss`). Throws ReviewInputError.
@@ -307,6 +307,8 @@ const STYLE = `
         .cue-time { color: #475569; font-size: 0.75rem; margin-right: 8px; user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
         .hl-item { background: #1e3a8a; color: #f1f5f9; }
         .hl-eff { box-shadow: inset 0 -3px 0 #22c55e; color: #f1f5f9; }
+        .chapters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; margin-top: 8px; font-size: 0.85rem; }
+        .chapters button { background: #1e293b; border: 1px solid #334155; color: #cbd5f5; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; margin-left: 4px; }
         .bounds-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 12px; }
         .bounds-row input { width: 90px; font-variant-numeric: tabular-nums; }
         .bounds-row .clear-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5f5; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; }
@@ -571,6 +573,9 @@ function renderTranscript(transcript, item, moreHref, t) {
             : words.map((w, i) => leaf(w.t, i + 1 < words.length ? words[i + 1].t : c.end, w.text)).join(' ');
         return `<span class="cue"><span class="cue-time">${formatPlayerTime(c.start)}</span>${body}</span>`;
     }).join('');
+    // The author's chapters (public timecodes, not detector output): shown before a verdict.
+    const chapters = (transcript.chapters || []).map(c => `<span class="chapter">«${escapeHtml(c.title)}» ${formatPlayerTime(c.start)} – ${formatPlayerTime(c.end)}`
+        + `<button type="button" data-start="${c.start}" data-end="${c.end}" onclick="useChapter(this)">${t('chapter_use')}</button></span>`).join('');
     return `
         <div class="transcript-head">
             <strong>${t('transcript_title')}</strong>
@@ -578,6 +583,7 @@ function renderTranscript(transcript, item, moreHref, t) {
             ${moreHref ? `<a href="${moreHref}" id="transcript-more">${t('transcript_more')}</a>` : ''}
             <span class="muted">${t('transcript_legend_html')}</span>
         </div>
+        ${chapters ? `<div class="chapters" id="chapters"><strong>${t('chapters_title')}</strong>${chapters}</div>` : ''}
         ${transcript.has_words ? '' : `<div class="warn" style="font-size:0.85rem">${t('transcript_no_words')}</div>`}
         <div class="transcript" id="transcript">${lines || `<span class="empty">—</span>`}</div>`;
 }
@@ -651,7 +657,7 @@ function renderItemPage(payload, token, t, langLink) {
         letters: Object.fromEntries(LETTER_HOTKEYS.map(h => [h.key, h.action])),
         verdict_labels: Object.fromEntries(CHOICES.map(v => [v, t.text(`verdict_${v}`)])),
         i18n: Object.fromEntries(['js_pick_first', 'js_no_change', 'js_saved', 'js_saved_track', 'js_close_by_hand', 'js_error_status', 'js_error',
-            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds', 'warn_bounds_short', 'warn_bounds_absorb',
+            'js_read_only', 'js_force_confirm', 'js_bounds_both', 'js_saved_bounds', 'warn_bounds_short', 'warn_bounds_absorb', 'js_chapter_keep_first',
             ...['format', 'range', 'order'].map(why => `error_bounds_${why}`)]
             .map(key => [key, t.text(key)])),
     };
@@ -743,8 +749,8 @@ function renderItemPage(payload, token, t, langLink) {
     const AUTO_ADVANCE_KEY = 'adminReview.autoAdvance';
     let picked = STATE.verdict;
     let saving = false;
-    // How the bounds in the inputs were set: 'cue' (a transcript selection) or 'typed'.
-    let boundsSource = STATE.own_bounds && STATE.own_bounds.source === 'cue' ? 'cue' : 'typed';
+    // How the bounds in the inputs were set: 'cue' (a transcript selection), 'chapter' (a chapter's button) or 'typed'.
+    let boundsSource = STATE.own_bounds && ['cue', 'chapter'].includes(STATE.own_bounds.source) ? STATE.own_bounds.source : 'typed';
 
     function tr(key, params) {
         return STATE.i18n[key].replace(/\\{(\\w+)\\}/g, function (m, name) {
@@ -899,6 +905,17 @@ function renderItemPage(payload, token, t, langLink) {
         setStatus('');
     }
     document.addEventListener('selectionchange', boundsFromSelection);
+    // A chapter's bounds, rounded inward as the detector rounds them.
+    function useChapter(btn) {
+        if (readOnly()) return;
+        const inputs = boundInputs();
+        if (inputs[0].disabled) { setStatus(tr('js_chapter_keep_first'), 'error'); return; }
+        inputs[0].value = formatPlayerTime(Math.ceil(Number(btn.dataset.start)));
+        inputs[1].value = formatPlayerTime(Math.floor(Number(btn.dataset.end)));
+        boundsSource = 'chapter';
+        showBoundsWarning();
+        setStatus('');
+    }
     boundInputs().forEach(function (el) {
         el.addEventListener('input', function () { boundsSource = 'typed'; showBoundsWarning(); setStatus(''); });
     });

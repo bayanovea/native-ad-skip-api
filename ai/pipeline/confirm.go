@@ -81,6 +81,14 @@ func agree(first, second []detector.Prediction) ([]bool, int) {
 	return confirmed, extra
 }
 
+func (r *detectRun) categoryNames() map[int]string {
+	names := map[int]string{}
+	for name, id := range r.categories {
+		names[id] = name
+	}
+	return names
+}
+
 func iou(aStart, aEnd, bStart, bEnd float64) float64 {
 	inter := min(aEnd, bEnd) - max(aStart, bStart)
 	union := max(aEnd, bEnd) - min(aStart, bStart)
@@ -127,10 +135,7 @@ func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int
 	if len(unconfirmed) == 0 {
 		return nil
 	}
-	names := map[int]string{}
-	for name, id := range r.categories {
-		names[id] = name
-	}
+	names := r.categoryNames()
 	items := make([]review.Item, len(unconfirmed))
 	for i, e := range unconfirmed {
 		items[i] = review.Item{NativeID: nativeID, VideoID: videoID, Start: e.Start, End: e.End, Proposed: names[e.CategoryID],

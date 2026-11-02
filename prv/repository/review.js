@@ -4,8 +4,8 @@ const { REVIEWER_MAX } = require('../../lib/reviewer-name');
 
 const VALID_VERDICTS = new Set(VERDICTS);
 const VALID_SOURCES = new Set(['page', 'import']);
-// How a verdict's bounds were set: a transcript selection, typed times, or scripts/import-verdict-bounds.js.
-const BOUNDS_SOURCES = ['cue', 'typed', 'import'];
+// How a verdict's bounds were set: a transcript selection, typed times, a chapter of the video, or scripts/import-verdict-bounds.js.
+const BOUNDS_SOURCES = ['cue', 'typed', 'chapter', 'import'];
 // Bounds come only with a verdict that keeps the segment.
 const KEEP_VERDICTS = new Set(['sponsor', 'self_promotion']);
 // Video-level flags a reviewer may set (prv_review_video_flags.flag).
@@ -796,8 +796,9 @@ module.exports = function createReviewRepository(models, sequelize) {
          * (prv_ai_runs.transcript via the AI row's run_id) overlapping
          * [lo − context, hi + context], where lo / hi span the item's own and
          * effective bounds, clamped at 0. Cues carry `words: [{t, text}]` when
-         * the run stored them (`has_words`: some cue in the window does).
-         * Returns `{ from, to, has_words, cues: [{start, end, text, words?}] }`,
+         * the run stored them (`has_words`: some cue in the window does);
+         * `chapters` = the run's chapters (prv_ai_runs.chapters) overlapping it.
+         * Returns `{ from, to, has_words, cues: [{start, end, text, words?}], chapters: [{start, end, title}] }`,
          * or null for a sheet item or a video without an AI row.
          */
         async getTranscript(item, contextSeconds) {
@@ -808,7 +809,10 @@ module.exports = function createReviewRepository(models, sequelize) {
             const [row] = await sequelize.query(
                 `SELECT (SELECT jsonb_agg(x.cue ORDER BY x.ord)
                            FROM jsonb_array_elements(r.transcript->'cues') WITH ORDINALITY AS x(cue, ord)
-                          WHERE (x.cue->>'end')::float >= :from AND (x.cue->>'start')::float <= :to) AS cues
+                          WHERE (x.cue->>'end')::float >= :from AND (x.cue->>'start')::float <= :to) AS cues,
+                        (SELECT jsonb_agg(ch ORDER BY (ch->>'start')::float)
+                           FROM jsonb_array_elements(COALESCE(r.chapters, '[]'::jsonb)) AS ch
+                          WHERE (ch->>'end')::float > :from AND (ch->>'start')::float < :to) AS chapters
                    FROM prv_ai_video_calculateds c
                    JOIN prv_ai_runs r ON r.id = c.run_id
                   WHERE c.video_id = :videoId`,
@@ -820,7 +824,8 @@ module.exports = function createReviewRepository(models, sequelize) {
                 text: cue.text,
                 ...(Array.isArray(cue.words) && cue.words.length > 0 && { words: cue.words.map((w) => ({ t: w.t, text: w.text })) }),
             }));
-            return { from, to, has_words: cues.some((c) => c.words), cues };
+            const chapters = (row.chapters || []).map((c) => ({ start: c.start, end: c.end, title: c.title }));
+            return { from, to, has_words: cues.some((c) => c.words), cues, chapters };
         },
 
         /**

@@ -1627,6 +1627,74 @@ test('ai second: a keep on an unconfirmed entry serves it, not_ad hides it as re
     assert.deepEqual((await aiCalculated(vid)).data.map(e => [e.start, e.end]), [[30, 70], [75, 90]], 'a kept entry stays served');
 });
 
+// The chapter check (AI_CHAPTERS_ENABLED=on): the fixture's chapters are Вступление 0–28, Обзор 28–72 (both edges of
+// the 30–70 entry near), «Реклама и ноутбук» 73–280 (only the 75–90 entry's start near) and Итоги 280–600.4 (no edge near 300–320).
+const CHAPTERS_ENV = { AI_CHAPTERS_ENABLED: 'on', AI_DETECT_ENABLED: undefined };
+const chapterSheet = () => `ai-chapter-${new Date().toISOString().slice(0, 10)}`;
+const FIXTURE_CHAPTERS = [
+    { start: 0, end: 28, title: 'Вступление' }, { start: 28, end: 72, title: 'Обзор' },
+    { start: 73, end: 280, title: 'Реклама и ноутбук' }, { start: 280, end: 600.4, title: 'Итоги' },
+];
+
+test('ai chapters: with AI_CHAPTERS_ENABLED=on an entry agreeing with a chapter at both edges is served at the chapter\'s bounds (source chapter, badge on /admin/video), an ad-titled one-edge chapter leaves the AI bounds and creates a T item in today\'s ai-chapter batch (important), a topic chapter changes nothing', async () => {
+    const vid = '-1_456001101';
+    const r = runAi(['detect', vid], CHAPTERS_ENV);
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /ai detect: -1_456001101 published: 3 served, 1 hidden of 4 segments, 1 on chapters, 1 to chapter review/);
+
+    const ai = await aiCalculated(vid);
+    const sp = cats.prv.sponsor;
+    assert.deepEqual(ai.data, [
+        { category_id: sp, start: 28, end: 72, confidence: 'high', source: 'chapter' },
+        { category_id: sp, start: 75, end: 90, confidence: 'high', source: 'ai' },
+        { category_id: cats.prv.self_promotion, start: 300, end: 320, confidence: 'high', source: 'ai' },
+    ]);
+    assert.deepEqual(ai.hidden.map(e => [e.start, e.end, e.source, e.reason]), [[480, 483, 'ai', 'short']], 'hidden entries are left alone');
+    const [run] = await dbQuery('SELECT chapters FROM prv_ai_runs WHERE id = $1', [ai.run_id]);
+    assert.deepEqual(run.chapters, FIXTURE_CHAPTERS);
+
+    const items = await dbQuery(`SELECT i.*, b.priority FROM prv_review_items i JOIN prv_review_batches b USING (batch)
+        WHERE i.native_id = $1 ORDER BY i.position`, [vid]);
+    assert.deepEqual(items.map(i => [i.sheet, i.item_code, i.kind, i.video_id, i.start, i.end, i.proposed, i.priority]),
+        [[chapterSheet(), 'T1', 'ai', ai.video_id, 75, 90, 'sponsor', 'important']]);
+    assert.deepEqual(items[0].flagged_by, ['chapter: «Реклама и ноутбук» 1:13–4:40 (start 2 s off, end 190 s off)', 'entry: sponsor high, 15 s']);
+    assert.equal(items[0].link, 'https://example.invalid/video-1_456001101?t=1m13s');
+
+    const page = (await request('GET', `/admin/video/${ai.video_id}?verifyBearerToken=${VOTE_AUTH}`)).body;
+    assert.match(page, /class="badge chapter-badge"/);
+});
+
+test('ai chapters: with the switch off the same video is published at the AI bounds with no item, and its run stores the chapters', async () => {
+    const vid = '-1_456001102';
+    const r = runAi(['detect', vid], { AI_DETECT_ENABLED: undefined });
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.doesNotMatch(out, /on chapters/);
+    const ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end, e.source]), [[30, 70, 'ai'], [75, 90, 'ai'], [300, 320, 'ai']]);
+    assert.deepEqual((await dbQuery('SELECT chapters FROM prv_ai_runs WHERE id = $1', [ai.run_id]))[0].chapters, FIXTURE_CHAPTERS);
+    assert.equal((await dbQuery('SELECT COUNT(*)::int AS n FROM prv_review_items WHERE native_id = $1', [vid]))[0].n, 0);
+});
+
+test('ai chapters: the T item page lists the chapter with a fill button; a keep with bounds source chapter moves the entry to the chapter\'s bounds (source review)', async () => {
+    const vid = '-1_456001101';
+    const [t1] = await dbQuery(`SELECT * FROM prv_review_items WHERE native_id = $1 AND item_code = 'T1'`, [vid]);
+    await takeReview(t1.batch);
+    const body = (await getReview(t1.batch, { item: 'T1', format: 'json' })).body;
+    assert.deepEqual(body.transcript.chapters, FIXTURE_CHAPTERS.slice(0, 3), 'the chapters overlapping the 15–150 window');
+    const html = (await getReview(t1.batch, { item: 'T1' })).body;
+    assert.ok(html.includes('id="chapters"') && html.includes('«Реклама и ноутбук» 1:13 – 4:40'), 'chapter list before a verdict');
+    assert.ok(html.includes('data-start="73" data-end="280" onclick="useChapter(this)"'), 'the fill button');
+
+    const res = await decideBounds(t1, 'sponsor', { start: 73, end: 280, source: 'chapter' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(res.body.ai_applied, true);
+    const [v] = await dbQuery('SELECT start, "end", bounds_source FROM prv_review_verdicts WHERE item_id = $1', [t1.id]);
+    assert.deepEqual([v.start, v.end, v.bounds_source], [73, 280, 'chapter']);
+    assert.deepEqual((await aiCalculated(vid)).data.map(e => [e.start, e.end, e.source]), [[28, 72, 'chapter'], [73, 280, 'review'], [300, 320, 'ai']]);
+});
+
 test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed tick); a yt-dlp that cannot start is the tick’s', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000207', 600000, 1)`);
     let r = runAi(['detect']);
@@ -2582,7 +2650,7 @@ test('ai review bounds: the item page carries the transcript window (words when 
     await takeReview(batch);
 
     let body = (await getReview(batch, { item: 'A1', format: 'json' })).body;
-    assert.deepEqual([body.context, body.transcript], [60, { from: 0, to: 130, has_words: true, cues: transcript.cues.slice(0, 2) }]);
+    assert.deepEqual([body.context, body.transcript], [60, { from: 0, to: 130, has_words: true, cues: transcript.cues.slice(0, 2), chapters: [] }]);
     assert.deepEqual(body.item.ai_entries, [], 'the only served entry is the item\'s own');
     body = (await getReview(batch, { item: 'A1', format: 'json', context: '600' })).body;
     assert.deepEqual([body.transcript.to, body.transcript.cues.length], [670, 3]);

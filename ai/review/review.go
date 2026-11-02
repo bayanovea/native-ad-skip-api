@@ -1,5 +1,5 @@
 // Package review writes kind='ai' items into the assessor review tables for the
-// Go callers (ai judge, the second opinion of ai detect). It mirrors
+// Go callers (ai judge, the second opinion and the chapter check of ai detect). It mirrors
 // reviewRepository.insertItems, createBatch and openPart (prv/repository/review.js):
 // a review-schema change updates both.
 package review
