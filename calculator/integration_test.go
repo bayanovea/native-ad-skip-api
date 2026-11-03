@@ -12,8 +12,8 @@ import (
 	"odedohbest/video-calculate/calculator"
 )
 
-// Run: go test ./calculator -run TestIntegration -v
-// Requires DB running with schema synced. Uses .env from project root.
+// Run: make test-calculator (sets TEST_DB_NAME; without it TestIntegration skips).
+// Requires DB running with schema synced. Uses .env from project root for DB_USER / DB_PASSWORD.
 
 type segment struct {
 	CategoryID int `json:"category_id"`
@@ -26,20 +26,17 @@ type segment struct {
 
 func connectTestDB(t *testing.T) *sql.DB {
 	t.Helper()
+	// Checked before .env is loaded: the local .env sets TEST_DB_NAME too, so a plain
+	// `go test ./calculator` would run against its unreachable DB_HOST.
+	dbName := os.Getenv("TEST_DB_NAME")
+	if dbName == "" {
+		t.Skip("no test DB (set TEST_DB_NAME or run make test-calculator)")
+	}
 	for _, p := range []string{".env", "../.env"} {
 		if _, err := os.Stat(p); err == nil {
 			godotenv.Load(p)
 			break
 		}
-	}
-	dbName := os.Getenv("TEST_DB_NAME")
-	// Plain `go test ./calculator` (CI, no .env) has no DB; `make test-calculator`
-	// always sets TEST_DB_NAME, so a missing DB_USER still fails there.
-	if dbName == "" && os.Getenv("DB_USER") == "" {
-		t.Skip("no DB configured (set TEST_DB_NAME or DB_USER, or run make test-calculator)")
-	}
-	if dbName == "" {
-		dbName = os.Getenv("DB_NAME") + "_test"
 	}
 	dbHost := os.Getenv("TEST_DB_HOST")
 	if dbHost == "" {
