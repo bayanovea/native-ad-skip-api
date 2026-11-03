@@ -41,4 +41,4 @@
 - Deploy with `AI_CHAPTERS_ENABLED` unset; check that new runs store chapters (dashboard row 4в) and nothing served changed; republish both overview artifacts from the repo files.
 - The owner sets the repository variable `AI_CHAPTERS_ENABLED=on` and redeploys with `image_tag` = the running sha.
 - Day-after check: entries served at chapter bounds, open `T` items, the publish log lines (`ai detect: … on chapters`); a few chapter-bound entries checked in the player.
-- Archive after the owner confirms the prod check; the archive is the record; delete `docs/backlog/ai-chapters-from-video-timeline.md` in the archive commit.
+- Archive after the owner confirms the prod check; the archive is the record (`docs/backlog/ai-chapters-from-video-timeline.md` is already deleted, 2026-11-04: its open parts are `ai-chapters-in-detector-prompt.md` and `ai-ad-chapters-without-ai-entry.md`).

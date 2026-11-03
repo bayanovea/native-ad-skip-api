@@ -1,6 +1,6 @@
 # Proposal
 
-From the backlog item `docs/backlog/ai-chapters-from-video-timeline.md`, in the shape the owner chose on 2026-11-02 after checking three chapter / AI disagreements in the player, not the item's earlier "a chapter becomes an entry by itself".
+From the backlog item `ai-chapters-from-video-timeline` (deleted 2026-11-04; its open parts are `docs/backlog/ai-chapters-in-detector-prompt.md` and `docs/backlog/ai-ad-chapters-without-ai-entry.md`), in the shape the owner chose on 2026-11-02 after checking three chapter / AI disagreements in the player, not the item's earlier "a chapter becomes an entry by itself".
 
 ## Why
 
