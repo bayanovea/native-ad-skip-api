@@ -16,4 +16,4 @@ A one-off command (`ai confirm [--dry-run]`, shaped like `ai regate`) could run 
 
 Cost and load: ~$0.006 per row on `gpt-6-luna`; on the held-out set 31 of 311 served segments went unconfirmed at IoU 0.3, so roughly one `D` item per seven segments, all at once unless the pass is spread over days.
 
-Unknown that settles it: whether the old rows' wrong cuts are worth the review burst. The judge already acts on bad signals for served rows; look at how many old served rows drew judge `review` / `withdraw` and what share of their items assessors marked `not_ad` before building this. Related: `ai-second-opinion-switch-on.md`.
+Unknown that settles it: whether the old rows' wrong cuts are worth the review burst. The judge already acts on bad signals for served rows; look at how many old served rows drew judge `review` / `withdraw` and what share of their items assessors marked `not_ad` before building this. Related: `ai-second-model-revisit.md`.

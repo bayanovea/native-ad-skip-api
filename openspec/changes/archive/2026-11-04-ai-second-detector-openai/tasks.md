@@ -47,7 +47,7 @@
 - [x] 7.2 `docs/ai-first-overview/{ru,en}.html`: the serving rule (two models must agree), what a `D` item is for the assessor, the "updated" date; republish both artifacts (`6NZNwDcYKbLV5MUgKPwc8n`, `SQhQy8xEPoY8XaxvKL4d6o`) with `style.css` inlined. Verify: both pages open from the artifact links with the new date.
 - [x] 7.3 `docs/backlog/`: one item each for the deferred paths (second-only segments as hidden entries with items; lower `self_promotion` threshold on agreement; an alert on second-opinion failures). Verify: files exist with the backlog skill's format.
 
-- [ ] 7.4 Cleanup pass before archive: no leftover `AI_SECOND_CLIENT=off` / `gpt-5` default / IoU 0.5 wording outside the measurement tables (`grep -rn` over the repo without `vendor/`), no transient state in the artifacts, open questions moved to `docs/backlog/`. Verify: the grep is empty, `openspec validate ai-second-detector-openai --strict` passes.
+- [x] 7.4 Cleanup pass before archive: no leftover `AI_SECOND_CLIENT=off` / `gpt-5` default / IoU 0.5 wording outside the measurement tables (`grep -rn` over the repo without `vendor/`), no transient state in the artifacts, open questions moved to `docs/backlog/`. Verify: the grep is empty, `openspec validate ai-second-detector-openai --strict` passes.
 
 ## Workflow follow-up
 
