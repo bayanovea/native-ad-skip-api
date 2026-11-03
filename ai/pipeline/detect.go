@@ -527,6 +527,13 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 		}
 		if r.batch == nil {
 			res, err := r.client.Detect(ctx, p.req)
+			if err != nil && res.Usage == (detector.Usage{}) {
+				// No answer came back (quota, 429, 5xx): as a rejected batch submit. An answer that came
+				// back unusable has usage set and fails the video in finish, or it would be paid for hourly.
+				r.unsent(p.q.nativeID, runID, "detect call: "+strings.ReplaceAll(err.Error(), "\n", ": "))
+				failed++
+				continue
+			}
 			c := r.confirm(ctx, p.q.nativeID, p.meta, p.cues, res, err)
 			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", p.q.nativeID, err)
@@ -549,14 +556,9 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 	if err != nil {
 		// Nothing was sent, so a rejection (quota, billing, an API outage) is the account's, not
 		// the videos': the run rows go and the videos are queued again in an hour, no attempt spent.
+		msg := "batch submit: " + strings.ReplaceAll(err.Error(), "\n", ": ")
 		for i, p := range started {
-			msg := "batch submit: " + strings.ReplaceAll(err.Error(), "\n", ": ")
-			_, derr := r.db.Exec(`DELETE FROM prv_ai_runs WHERE id = $1`, runIDs[i])
-			qerr := requeue(r.db, p.q.nativeID, msg, time.Hour)
-			if err := errors.Join(derr, qerr); err != nil {
-				log.Printf("ai detect: %s: %v", p.q.nativeID, err)
-			}
-			log.Printf("ai detect: %s queued after %s (no attempt spent)", p.q.nativeID, msg)
+			r.unsent(p.q.nativeID, runIDs[i], msg)
 		}
 		return failed + len(started)
 	}
@@ -567,6 +569,15 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 	}
 	log.Printf("ai detect: batch %s submitted: %d videos", batchID, len(started))
 	return failed
+}
+
+// unsent drops the run row of a request that got no answer and queues the video again in an hour, no attempt spent.
+func (r *detectRun) unsent(nativeID string, runID int64, msg string) {
+	_, derr := r.db.Exec(`DELETE FROM prv_ai_runs WHERE id = $1`, runID)
+	if err := errors.Join(derr, requeue(r.db, nativeID, msg, time.Hour)); err != nil {
+		log.Printf("ai detect: %s: %v", nativeID, err)
+	}
+	log.Printf("ai detect: %s queued after %s (no attempt spent)", nativeID, msg)
 }
 
 func (r *detectRun) startRun(p pending) (int64, error) {

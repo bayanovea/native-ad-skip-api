@@ -1486,15 +1486,18 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     assert.deepEqual([u.status, u.attempts, u.queued_by], ['queued', 1, 'manual']);
     assert.match(u.last_error, /This video is unavailable/);
 
-    // No model answer (the fixture is missing): failed, the run row kept, exit 1 with the reason.
+    // No model answer (the fixture is missing, as a quota error or a 5xx): queued again in an hour, the run row
+    // dropped, no attempt spent, exit 1 with the reason.
+    const queuedCall = async () => (await dbQuery(`SELECT status, attempts, last_error,
+        EXTRACT(EPOCH FROM next_attempt_at - NOW())::int AS wait_s FROM prv_ai_videos WHERE native_id = '-1_456000209'`))[0];
     const failed = runAi(['detect', '-1_456000209']);
     assert.equal(failed.status, 1);
-    assert.match(failed.stderr, /-1_456000209 failed: fixture: .*no such file/);
-    const f = await aiVideo('-1_456000209');
-    assert.equal(f.status, 'failed');
-    assert.match(f.last_error, /fixture: .*-1_456000209\.detect\.json/);
-    const [frun] = await dbQuery(`SELECT raw_output FROM prv_ai_runs WHERE native_id = '-1_456000209'`);
-    assert.equal(frun.raw_output, null);
+    assert.match(failed.stderr, /-1_456000209 queued after detect call: fixture: .*no such file.*\(no attempt spent\)/);
+    const f = await queuedCall();
+    assert.deepEqual([f.status, f.attempts], ['queued', 0]);
+    assert.ok(f.wait_s > 3500 && f.wait_s <= 3600, `next attempt in about an hour, got ${f.wait_s} s`);
+    assert.match(f.last_error, /^detect call: fixture: .*-1_456000209\.detect\.json/);
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs WHERE native_id = '-1_456000209'`))[0].n, 0);
     assert.equal(await aiCalculated('-1_456000209'), null);
 
     // An interrupted run left `fetching`: refused while fresh, claimed again after an hour (the cron may be off).
@@ -1503,8 +1506,8 @@ test('ai detect <native_id>: the manual run ignores views and the switch, calls 
     await dbQuery(`UPDATE prv_ai_videos SET updated_at = NOW() - INTERVAL '61 minutes' WHERE native_id = '-1_456000209'`);
     const stale = runAi(['detect', '-1_456000209']);
     assert.equal(stale.status, 1);
-    assert.match(stale.stderr, /-1_456000209 failed: fixture: .*no such file/);
-    assert.equal((await aiVideo('-1_456000209')).status, 'failed');
+    assert.match(stale.stderr, /-1_456000209 queued after detect call: fixture: .*no such file/);
+    assert.deepEqual([(await queuedCall()).status, (await queuedCall()).attempts], ['queued', 0]);
 });
 
 // The second opinion (AI_SECOND_ENABLED=on, AI_SECOND_CLIENT=fixture: <native_id>.second.json, <native_id>.second-error), gpt-6-luna at its price.

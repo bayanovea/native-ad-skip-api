@@ -289,6 +289,47 @@ func TestSubmitErrorDropsTheRunsAndSpendsNoAttempt(t *testing.T) {
 	}
 }
 
+// syncClient is a synchronous transport (AI_CLIENT=messages, the manual run) with a canned answer.
+type syncClient struct {
+	res detector.Result
+	err error
+}
+
+func (c syncClient) Model() string { return "claude-sonnet-5-5" }
+func (c syncClient) Detect(context.Context, detector.Request) (detector.Result, error) {
+	return c.res, c.err
+}
+
+func TestSyncCallErrorDropsTheRunAndSpendsNoAttempt(t *testing.T) {
+	r, mock, _ := batchRun(t)
+	r.batch, r.client = nil, syncClient{err: errors.New("429 rate limited\nretry later")}
+	expectStartRun(mock, "-1_456000001", 11)
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM prv_ai_runs WHERE id = $1")).WithArgs(11).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, next_attempt_at = $3, last_error = $4, batch_id = NULL")).
+		WithArgs("-1_456000001", "queued", sqlmock.AnyArg(), "detect call: 429 rate limited: retry later").WillReturnResult(sqlmock.NewResult(0, 1))
+	if failed := r.submit(context.Background(), []pending{readyVideo("-1_456000001")}); failed != 1 {
+		t.Fatalf("failed %d", failed)
+	}
+}
+
+// An answer that came back unusable was paid for: the video fails, as before, or it would be bought again every hour.
+func TestSyncUnusableAnswerFailsTheVideo(t *testing.T) {
+	r, mock, _ := batchRun(t)
+	r.batch, r.client = nil, syncClient{res: detector.Result{Usage: detector.Usage{InputTokens: 10000, OutputTokens: 64000}},
+		err: errors.New("stop_reason max_tokens")}
+	expectStartRun(mock, "-1_456000001", 11)
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).WithArgs("-1_456000001").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
+	mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET status = $2, last_error = $3")).
+		WithArgs("-1_456000001", "failed", "stop_reason max_tokens").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if failed := r.submit(context.Background(), []pending{readyVideo("-1_456000001")}); failed != 0 {
+		t.Fatalf("failed %d", failed)
+	}
+}
+
 // stubYtdlp is a yt-dlp whose -j prints a video with a ru track and whose subtitle
 // download writes vtt to <-o>.ru.vtt, or nothing when vtt is "".
 func stubYtdlp(t *testing.T, vtt string) *ytdlp.Runner {
