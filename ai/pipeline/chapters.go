@@ -61,7 +61,8 @@ type chapterMatch struct {
 // an entry an ad-titled chapter agrees with at one edge only keeps its bounds and
 // is returned for review (owner, 2026-11-02).
 func applyChapters(served []Entry, chapters []chapter, edge, minSeconds int) ([]Entry, []chapterMatch) {
-	out := append([]Entry(nil), served...)
+	// Not append([]Entry(nil), …): an empty served list must stay [] in data, never JSON null.
+	out := append([]Entry{}, served...)
 	var toReview []chapterMatch
 	near := float64(edge)
 	for i, e := range out {

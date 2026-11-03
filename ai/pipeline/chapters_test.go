@@ -61,6 +61,9 @@ func TestApplyChapters(t *testing.T) {
 			}
 		})
 	}
+	if got, _ := applyChapters([]Entry{}, []chapter{{0, 60, "Реклама"}}, 10, 5); got == nil {
+		t.Fatal("nothing served came back nil: data would be JSON null")
+	}
 	served := []Entry{ai(311, 431)}
 	applyChapters(served, []chapter{{307, 437, "x"}}, 10, 5)
 	if served[0].Source != "ai" {
