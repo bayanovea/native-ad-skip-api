@@ -14,9 +14,11 @@ the native_id. ai-dashboard-check counts ("длительность yt-dlp не 
 | 2026-10-29 05:24 | 9       | 921           |
 | 2026-10-29 17:15 | 16      | 1022          |
 | 2026-10-30 16:28 | 31      | 1222          |
+| 2026-10-31 20:45 | 38      | 1447          |
+| 2026-11-02 04:38 | 44      | 1747          |
 
-So 15 of the last 200 runs were refused, 7.5 %, against 0.5 % before 2026-10-28. That is when the views
-trigger started bringing in popular videos. The human path still serves them, but none gets AI segments.
+Up to 2026-10-30, 15 of the last 200 runs were refused, 7.5 %, against 0.5 % before 2026-10-28. That is when the views
+trigger started bringing in popular videos. Since then the growth slowed: +13 against +525 runs (~2.5 %) by 2026-11-02. The human path still serves them, but none gets AI segments.
 
 Unknown that decides the worth: are these real re-cuts (the platform serves yt-dlp another cut than the
 players saw; the gate is right and nothing is to be done), or wrong player durations (the extension's

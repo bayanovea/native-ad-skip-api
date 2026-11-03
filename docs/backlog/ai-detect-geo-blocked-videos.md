@@ -13,3 +13,5 @@ Options:
 2. **Fetch through another country.** A proxy for yt-dlp only (`ytdlp.Runner` already takes args). Brings back the hosting question the move to Timeweb settled; worth it only if the share is large.
 
 Unknown that settles it: how many videos it hits. On prod: `SELECT COUNT(*) FROM prv_ai_videos WHERE last_error LIKE '%not available in your country%'`, against the claims of the same period. The "every fetch of the tick failed" check (`hostFetches`) already treats such errors as the videos', not the host's, as long as the control video still fetches.
+
+**2026-11-02 dashboard reading:** "yt-dlp: 3 неудачных попытки" went 87 → 143 in 24 h (+56, against +225 runs); in the newest 50 rows, 18 of the dropped and 17 of the pending retries are "not available in your country". `dropped_pct` 12.3 → 15.6. The share looks large enough for option 1; the SQL count above confirms it.

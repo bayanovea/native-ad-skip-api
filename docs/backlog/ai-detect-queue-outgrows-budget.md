@@ -49,3 +49,5 @@ Rule for the re-check: if `queue_now` is still above ~300 and growing while `bud
 If the queue has drained (below ~150 and falling), close this item: the burst was the whole story.
 
 **2026-11-01 (owner):** `AI_DAILY_BUDGET_VIDEOS` 200 → 230 together with the second opinion going on (`AiCostDaily` 15 → 20, the dashboard literal moved). Re-check the queue against the 230 drain rate on the next dashboard checks; close this item once `queue_now` falls.
+
+**2026-11-02 check:** `queue_now` 457 (517 on 11-01 04:59 UTC), `runs_24h` 229, `budget_pct` 99.6: above ~300 but falling by ~60/day at the 230 drain, so no limit moves. Close once it is below ~150.

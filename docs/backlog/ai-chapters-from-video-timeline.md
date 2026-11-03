@@ -16,13 +16,28 @@ obvious (a brand, "промокод", "партнёр"). The owner calls it an i
 - **precision**: a chapter called "Реклама" is close to certain, which fits the precision-first
   rule better than a `medium`-confidence detection.
 
-Unknowns to check first:
+Checked on the eval corpus (2026-11-02, the 609 cached `<native_id>.info.json` of
+`~/Web/data/transcripts/prv/`, fetched 2026-10-10…24; these are videos with human markups, so
+biased toward ones that have ads):
 
-- whether prv exposes chapters at all: `yt-dlp -j` on a few prv videos with timecodes in the
-  description: is `chapters` filled, or only `description`, from which the timecodes would be
-  parsed (`m:ss Title` lines)? prv's info already lacks `view_count`, so do not assume;
-- how many videos the detector takes have chapters, and how many of those name an ad
-  (sample of `prv_ai_videos` published rows), so the gain is measured, not guessed.
+- **prv exposes chapters**: yt-dlp fills `chapters` (`start_time`, `end_time`, `title`) on 189
+  videos (31 %), exactly those whose `description` has timecode lines, so no parsing is needed;
+- **ad chapters**: a keyword match on the title (реклама, интеграция, спонсор, партнёр,
+  промокод, скидка, …) finds 85 chapters; after dropping the obvious false hits by hand, 79 on 54
+  videos (9 %), mean 87 s, none under 5 s. Skewed: 37 of the 54 videos are one channel that titles
+  every ad "Нативная интеграция: <brand>"; the rest spread over ~12 channels;
+- **bounds against the gold** (`labels`, sponsor / self_promotion): 55 of the 79 overlap a human
+  label, 53 of them at IoU ≥ 0.8 (mean best IoU 0.94), so where both exist the chapter is the
+  human's interval; of the 24 with no label, most are real ads nobody marked ("Рекламная пауза",
+  "Нативная интеграция: …", a title with `erid`), i.e. recall the corpus lacks;
+- **a keyword match is not enough**: the false hits are news titles about ads ("Законопроект о
+  запрете рекламы", "Стратегический партнёр России", "спонсоров войны"), so the title needs the
+  model (or the transcript under it), not a regexp.
+
+Still open: the share on what the detector actually takes (prod `prv_ai_videos`, community
+videos over the thresholds): the eval corpus over-represents the one channel and videos with
+ads. Fetch the info of ~100 recent published rows (the yt-dlp info call the tick already makes;
+its raw JSON is not stored today, `prv_ai_runs` keeps only the transcript) and count again.
 
 Shape, if the data is there: `ytdlp.Info` gets `chapters` / `description` (eval repo first, then
 `scripts/sync-detector.sh`: `ai/ytdlp` is a synced copy); the chapter list goes to the model next
