@@ -3,7 +3,8 @@
 /*
  * Tests the rename one-off of lib/schema.js (renameLegacyObjects): a DB created under an
  * earlier prefix (here `old`) gets every table, index, sequence, constraint, user id
- * column and the calculator_heartbeats row under the `prv` form, once.
+ * column and the calculator_heartbeats row under the `prv` form, once; and its way back
+ * (renameToLegacy, scripts/rename-to-legacy.js).
  *
  * Harness as in test/review-export.test.js: a dedicated DB (`${DB_NAME}_unit_legacy_rename`),
  * raw DDL, dropped on teardown. Runs under `make test-e2e`; standalone:
@@ -14,7 +15,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('pg');
 const { Sequelize } = require('sequelize');
-const { renameLegacyObjects } = require('../lib/schema');
+const { renameLegacyObjects, renameToLegacy } = require('../lib/schema');
 
 const DB_HOST = process.env.DB_HOST || 'localhost';
 const DB_PORT = parseInt(process.env.DB_PORT || '5432');
@@ -85,33 +86,36 @@ after(async () => {
     await c.end();
 });
 
+const original = [
+    'S:old_markups_id_seq', 'S:old_videos_id_seq', 'S:users_like_id_seq',
+    'col:old_markups.deleted_by_old_user_id', 'col:old_markups.old_user_id', 'col:users_like.generated_user_id',
+    'col:users_like.old_user_id',
+    'con:calculator_heartbeats.calculator_heartbeats_pkey', 'con:old_markups.old_markups_pkey', 'con:old_markups.old_markups_video_id_fkey', 'con:old_videos.old_videos_pkey',
+    'con:users_like.users_like_pkey',
+    'i:calculator_heartbeats_pkey', 'i:old_markups_pkey', 'i:old_markups_video_id', 'i:old_videos_pkey',
+    'i:users_generated_user_id_old_user_id', 'i:users_like_pkey',
+    'r:calculator_heartbeats', 'r:old_markups', 'r:old_videos', 'r:users_like',
+];
+const renamed = [
+    'S:prv_markups_id_seq', 'S:prv_videos_id_seq', 'S:users_like_id_seq',
+    'col:prv_markups.deleted_by_prv_user_id', 'col:prv_markups.prv_user_id', 'col:users_like.generated_user_id',
+    'col:users_like.prv_user_id',
+    'con:calculator_heartbeats.calculator_heartbeats_pkey', 'con:prv_markups.prv_markups_pkey', 'con:prv_markups.prv_markups_video_id_fkey', 'con:prv_videos.prv_videos_pkey',
+    'con:users_like.users_like_pkey',
+    'i:calculator_heartbeats_pkey', 'i:prv_markups_pkey', 'i:prv_markups_video_id', 'i:prv_videos_pkey',
+    'i:users_generated_user_id_prv_user_id', 'i:users_like_pkey',
+    'r:calculator_heartbeats', 'r:prv_markups', 'r:prv_videos', 'r:users_like',
+];
+const providers = async () => (await q(`SELECT provider FROM calculator_heartbeats ORDER BY provider`)).map((r) => r.provider);
+
 test('legacy rename: every old_* object, the inner _old_user_id index and the user id columns take the prv form; the heartbeat row follows; a second run finds nothing', async () => {
-    assert.deepEqual(await catalog(), [
-        'S:old_markups_id_seq', 'S:old_videos_id_seq', 'S:users_like_id_seq',
-        'col:old_markups.deleted_by_old_user_id', 'col:old_markups.old_user_id', 'col:users_like.generated_user_id',
-        'col:users_like.old_user_id',
-        'con:calculator_heartbeats.calculator_heartbeats_pkey', 'con:old_markups.old_markups_pkey', 'con:old_markups.old_markups_video_id_fkey', 'con:old_videos.old_videos_pkey',
-        'con:users_like.users_like_pkey',
-        'i:calculator_heartbeats_pkey', 'i:old_markups_pkey', 'i:old_markups_video_id', 'i:old_videos_pkey',
-        'i:users_generated_user_id_old_user_id', 'i:users_like_pkey',
-        'r:calculator_heartbeats', 'r:old_markups', 'r:old_videos', 'r:users_like',
-    ]);
+    assert.deepEqual(await catalog(), original);
 
     const lines = await logged(() => renameLegacyObjects(sequelize, 'old'));
     // 3 constraints (the PK indexes follow them) + 6 relations (2 tables, 2 indexes, 2 sequences) + 3 columns + 1 heartbeat row.
     assert.deepEqual(lines, ['Legacy rename: 13 objects']);
-    const renamed = [
-        'S:prv_markups_id_seq', 'S:prv_videos_id_seq', 'S:users_like_id_seq',
-        'col:prv_markups.deleted_by_prv_user_id', 'col:prv_markups.prv_user_id', 'col:users_like.generated_user_id',
-        'col:users_like.prv_user_id',
-        'con:calculator_heartbeats.calculator_heartbeats_pkey', 'con:prv_markups.prv_markups_pkey', 'con:prv_markups.prv_markups_video_id_fkey', 'con:prv_videos.prv_videos_pkey',
-        'con:users_like.users_like_pkey',
-        'i:calculator_heartbeats_pkey', 'i:prv_markups_pkey', 'i:prv_markups_video_id', 'i:prv_videos_pkey',
-        'i:users_generated_user_id_prv_user_id', 'i:users_like_pkey',
-        'r:calculator_heartbeats', 'r:prv_markups', 'r:prv_videos', 'r:users_like',
-    ];
     assert.deepEqual(await catalog(), renamed);
-    assert.deepEqual((await q(`SELECT provider FROM calculator_heartbeats ORDER BY provider`)).map((r) => r.provider), ['prv', 'rt']);
+    assert.deepEqual(await providers(), ['prv', 'rt']);
     // The row type follows the table; the serial default and the FK still work.
     assert.equal((await q(`SELECT typname FROM pg_type WHERE typname IN ('old_videos', 'prv_videos')`))[0].typname, 'prv_videos');
     await q(`INSERT INTO prv_markups (video_id, prv_user_id, deleted_by_prv_user_id) VALUES (1, 8, 9)`);
@@ -120,4 +124,29 @@ test('legacy rename: every old_* object, the inner _old_user_id index and the us
 
     assert.deepEqual(await logged(() => renameLegacyObjects(sequelize, 'old')), []);
     assert.deepEqual(await catalog(), renamed);
+});
+
+test('rename to legacy: a renamed DB gets every name and the heartbeat row back under old_*; a second run finds nothing; the forward rename then gives the prv form again', async () => {
+    await renameLegacyObjects(sequelize, 'old'); // a no-op after the test above, the start state when run alone
+    assert.deepEqual(await catalog(), renamed);
+
+    assert.deepEqual(await logged(() => renameToLegacy(sequelize, 'old')), ['Rename to legacy: 13 objects']);
+    assert.deepEqual(await catalog(), original);
+    assert.deepEqual(await providers(), ['old', 'rt']);
+    assert.ok((await q(`SELECT old_user_id FROM old_markups`)).length > 0);
+
+    assert.deepEqual(await logged(() => renameToLegacy(sequelize, 'old')), []);
+    assert.deepEqual(await catalog(), original);
+
+    assert.deepEqual(await logged(() => renameLegacyObjects(sequelize, 'old')), ['Legacy rename: 13 objects']);
+    assert.deepEqual(await catalog(), renamed);
+    assert.deepEqual(await providers(), ['prv', 'rt']);
+});
+
+test('legacy prefix: an empty, prv or uppercase value throws before any DB call', async () => {
+    const untouchable = new Proxy({}, { get: (_, prop) => { throw new Error(`DB touched: ${String(prop)}`); } });
+    for (const legacy of ['', 'prv', 'Old', undefined]) {
+        await assert.rejects(renameLegacyObjects(untouchable, legacy), /invalid legacy prefix/);
+        await assert.rejects(renameToLegacy(untouchable, legacy), /invalid legacy prefix/);
+    }
 });
