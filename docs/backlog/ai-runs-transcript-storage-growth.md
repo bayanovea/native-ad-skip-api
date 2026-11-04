@@ -21,5 +21,8 @@ Prod disk (2026-10-28): 48 GB, 13 GB used, 35 GB free; the DB is 183 MB, `prv_ai
 compresses to ~0.28 MB/run, ~40 MB/day at 150 runs, ~80 at the 300 budget), so the disk lasts 1–2 years:
 not the constraint. Most of the 13 GB is Docker (9.5 GB images, one per deploy, 4.6 GB build cache).
 
+2026-11-04: the dump is 304 MB gzipped (127 MB on 10-28); `prv_ai_runs` is 547 MB of the DB (2323 runs since
+10-24, `transcript` 524 MB of it), ~45 MB/day at the 230 budget, i.e. ~16 GB/year: the disk still lasts ~2 years.
+
 Unknown that settles it: the size budget of the S3 nightly job (`offhost-pg-backup-s3.md`), and the 1-year
 horizon at full budget. If S3 cost is negligible, this is a `no`.
