@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/lib/pq"
@@ -41,14 +42,40 @@ const communityIDRegex = `^-[0-9]+_[0-9]+$`
 // A crashed run leaves its row in `fetching`; after an hour the queue and a manual run take it again.
 const staleFetching = `status = 'fetching' AND updated_at < NOW() - INTERVAL '1 hour'`
 
-const queueRule = `native_id ~ '` + communityIDRegex + `' AND (
-	(status = 'seen' AND (views_max >= $1 OR requests >= $2))
+// A `seen` video the budget has not reached in queueMaxAge is given up: the
+// dashboard's "Не дождались" counts by the same cut (`/* queue.go queueMaxAge */`).
+const queueMaxAge = 14 * 24 * time.Hour
+
+var queueRule = `native_id ~ '` + communityIDRegex + `' AND (
+	(status = 'seen' AND (views_max >= $1 OR requests >= $2) AND first_seen_at > NOW() - INTERVAL '` +
+	strconv.Itoa(int(queueMaxAge.Hours()/24)) + ` days')
 	OR (status = 'queued' AND next_attempt_at <= NOW())
 	OR (` + staleFetching + `))`
 
+// queueScore orders the claim: the value of a detection (the admission terms
+// themselves, so 20 requests weigh as much as AI_MIN_VIEWS views and the requests
+// path needs no reserved share), divided by the days since the video was first
+// requested (the views it would have served are already watched), × 1.5 when the
+// channel's latest AI row served an ad, × 0.5 when ≥ 2 of its rows served none,
+// × 0.3 when a live human sponsor / self_promotion markup already serves the video.
+const queueScore = `ln(COALESCE(views_max, 0)::float / $1 + requests::float / $2 + 1)
+	/ (1 + EXTRACT(epoch FROM NOW() - first_seen_at) / 86400)
+	* COALESCE((SELECT factor FROM ch WHERE ch.owner = split_part(a.native_id, '_', 1)), 1)
+	* CASE WHEN EXISTS (SELECT 1 FROM markups m JOIN videos v ON v.id = m.video_id
+		JOIN markup_categories mc ON mc.id = m.category_id
+		WHERE v.native_id = a.native_id AND m.deleted_at IS NULL
+		AND mc.category IN ('sponsor', 'self_promotion')) THEN 0.3 ELSE 1 END`
+
+const channelHistory = `WITH ch AS (
+	SELECT split_part(native_id, '_', 1) AS owner,
+		CASE WHEN (array_agg(COALESCE(jsonb_array_length(data), 0) > 0 ORDER BY published_at DESC))[1] THEN 1.5
+			WHEN COUNT(*) >= 2 AND COUNT(*) FILTER (WHERE COALESCE(jsonb_array_length(data), 0) > 0) = 0 THEN 0.5
+			ELSE 1 END AS factor
+	FROM prv_ai_video_calculateds GROUP BY 1)`
+
 // claimQueued moves up to the tick's share of the daily budget from the queue to
-// `fetching`, oldest first. The row lock is held only for the claim, so the read
-// path's views upsert never waits on a yt-dlp call.
+// `fetching`, highest queueScore first. The row lock is held only for the claim, so
+// the read path's views upsert never waits on a yt-dlp call.
 func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 	var runs int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'`).Scan(&runs); err != nil {
@@ -64,8 +91,9 @@ func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT native_id, views_max, attempts FROM prv_ai_videos WHERE `+queueRule+`
-		ORDER BY first_seen_at, native_id LIMIT $3 FOR UPDATE SKIP LOCKED`,
+	rows, err := tx.Query(channelHistory+`
+		SELECT native_id, views_max, attempts FROM prv_ai_videos a WHERE `+queueRule+`
+		ORDER BY `+queueScore+` DESC, first_seen_at, native_id LIMIT $3 FOR UPDATE OF a SKIP LOCKED`,
 		cfg.MinViews, cfg.MinRequests, limit)
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)

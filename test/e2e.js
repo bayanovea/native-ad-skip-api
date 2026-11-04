@@ -1140,6 +1140,63 @@ test('ai detect: queue → fetch → gate → batch → publish; heartbeat on /m
     assert.match(await fetchMetrics(), /^calculator_last_success_timestamp_seconds\{provider="ai_detect"\} \d/m);
 });
 
+test('ai detect: the queue takes the highest score first (views, requests, freshness, channel history, human markup) and leaves a video older than 14 days', async (t) => {
+    await dbQuery('DELETE FROM prv_ai_videos');
+    t.after(async () => { // later tests count AI rows and markups across the DB
+        const mine = `native_id LIKE '-2\\_4560002%' OR native_id LIKE '-2\\_4560003%' OR native_id LIKE '-3\\_4560002%' OR native_id LIKE '-3\\_4560003%' OR native_id LIKE '-4\\_4560003%'`;
+        await dbQuery(`DELETE FROM prv_ai_video_calculateds WHERE ${mine}`);
+        await dbQuery(`DELETE FROM prv_ai_runs WHERE ${mine}`);
+        await dbQuery(`DELETE FROM prv_ai_videos WHERE ${mine}`);
+        await dbQuery(`DELETE FROM markup_time_intervals WHERE markup_id IN (SELECT id FROM markups WHERE video_id IN (SELECT id FROM videos WHERE ${mine}))`);
+        await dbQuery(`DELETE FROM markups WHERE video_id IN (SELECT id FROM videos WHERE ${mine})`);
+        await dbQuery(`DELETE FROM videos WHERE ${mine}`);
+    });
+    // Channel history from prv_ai_video_calculateds (the owner part of native_id): -2 served an ad in its latest row,
+    // -3 has two rows that served nothing, -4 is unknown.
+    const seedRow = async (nativeId, data) => {
+        const [{ id: videoId }] = await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 600, NOW(), NOW()) RETURNING id`, [nativeId]);
+        const [run] = await dbQuery(`INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, track_overrun_s, yt_duration_s)
+            VALUES ($1, $2, 'sha', 'v2.2', 'claude-sonnet-5-5', '{}', 0, 600) RETURNING id`, [nativeId, videoId]);
+        await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data) VALUES ($1, $2, $3, $4)`,
+            [videoId, nativeId, run.id, JSON.stringify(data)]);
+    };
+    await seedRow('-2_456000298', []);
+    await seedRow('-2_456000299', [{ category_id: cats.prv.sponsor, start: 30, end: 70, confidence: 'high', source: 'ai' }]);
+    await seedRow('-3_456000298', []);
+    await seedRow('-3_456000299', []);
+    // Scores against the default thresholds (500000 views, 20 requests), value = ln(views / 500000 + requests / 20 + 1):
+    // 301 ln(11) × 1.5 = 3.6 (channel with an ad), 302 ln(11) × 0.5 = 1.2 (channel with two empty rows), 304 ln(3) = 1.1,
+    // 305 ln(2) = 0.69 (20 requests, no views), 303 ln(5) × 0.3 = 0.48 (a live sponsor markup), 306 ln(5) / 4 = 0.40 (3 days old);
+    // 307 is past the threshold but first requested 15 days ago: never claimed by the tick.
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests, first_seen_at) VALUES
+        ('-2_456000301', 5000000, 1, NOW()), ('-3_456000302', 5000000, 1, NOW()), ('-4_456000303', 2000000, 1, NOW()),
+        ('-4_456000304', 1000000, 1, NOW()), ('-4_456000305', NULL, 20, NOW()), ('-4_456000306', 2000000, 1, NOW() - INTERVAL '3 days'),
+        ('-4_456000307', 5000000, 1, NOW() - INTERVAL '15 days')`);
+    await postMarkup('', { video_id: '-4_456000303', v: '1', user_id: 'queue-marker', category_id: cats.prv.sponsor, data: { intervals: [{ start: 10, end: 40 }] } });
+    // A deleted sponsor markup and an intro markup change nothing.
+    await postMarkup('', { video_id: '-4_456000304', v: '1', user_id: 'queue-marker', category_id: cats.prv.sponsor, data: { intervals: [{ start: 10, end: 40 }] } });
+    await dbQuery(`UPDATE markups SET deleted_at = NOW() WHERE video_id IN (SELECT id FROM videos WHERE native_id = '-4_456000304')`);
+    await postMarkup('', { video_id: '-2_456000301', v: '1', user_id: 'queue-marker', category_id: cats.prv.intro, data: { intervals: [{ start: 0, end: 10 }] } });
+
+    const expected = ['-2_456000301', '-3_456000302', '-4_456000304', '-4_456000305', '-4_456000303', '-4_456000306'];
+    for (const id of expected) {
+        const r = runAi(['detect'], { AI_BATCH_MAX: '1' });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        const taken = await dbQuery(`SELECT native_id FROM prv_ai_videos WHERE status <> 'seen' ORDER BY updated_at DESC, native_id LIMIT 1`);
+        assert.equal(taken[0].native_id, id, `claimed in order: ${expected.join(' ')}`);
+        assert.equal((await aiVideo(id)).status, 'published');
+    }
+    const r = runAi(['detect'], { AI_BATCH_MAX: '1' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.deepEqual([(await aiVideo('-4_456000307')).status, (await aiVideo('-4_456000307')).queued_by], ['seen', null], 'older than 14 days: the tick never takes it');
+    await dbQuery(`UPDATE prv_ai_videos SET requests = requests + 1 WHERE native_id = '-4_456000307'`);
+    assert.equal(runAi(['detect'], { AI_BATCH_MAX: '1' }).status, 0);
+    assert.equal((await aiVideo('-4_456000307')).status, 'seen', 'a later request does not revive it');
+    const manual = runAi(['detect', '-4_456000307']);
+    assert.equal(manual.status, 0, manual.stdout + manual.stderr);
+    assert.deepEqual([(await aiVideo('-4_456000307')).status, (await aiVideo('-4_456000307')).queued_by], ['published', 'manual'], 'the manual run still takes it');
+});
+
 const runScript = (script, ...args) => spawnSync('node', [`${APP_DIR}/scripts/${script}`, ...args],
     { env: { ...process.env, DB_NAME: TEST_DB }, encoding: 'utf8', timeout: 30000 });
 

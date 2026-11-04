@@ -51,3 +51,17 @@ If the queue has drained (below ~150 and falling), close this item: the burst wa
 **2026-11-01 (owner):** `AI_DAILY_BUDGET_VIDEOS` 200 → 230 together with the second opinion going on (`AiCostDaily` 15 → 20, the dashboard literal moved). Re-check the queue against the 230 drain rate on the next dashboard checks; close this item once `queue_now` falls.
 
 **2026-11-02 check:** `queue_now` 457 (517 on 11-01 04:59 UTC), `runs_24h` 229, `budget_pct` 99.6: above ~300 but falling by ~60/day at the 230 drain, so no limit moves. Close once it is below ~150.
+
+**2026-11-04 check:** `queue_now` 524 (11-02 18:11 UTC) → 477 (11-04 08:20) → 521 (11-04 14:07), runs 230/day
+on 11-01…11-03 (ICT days, `prv_ai_runs`). Since the 230 budget the queue has stopped growing but not
+fallen: it swings 457–589 with the daily traffic cycle around ~500, so inflow ≈ drain ≈ 230/day and a
+new eligible video waits ~2 days. It will not reach ~150 at this budget; the 2026-10-29 rule (a limit
+has to move) now applies if waiting ~2 days is not acceptable.
+
+**2026-11-04 (decision):** the 2026-11-04 line is answered by an order change, not a limit:
+`openspec/changes/ai-detect-queue-priority` claims the highest score first (views, requests, freshness, channel
+history, human markup) instead of oldest first, and a `seen` video first requested more than 14 days ago expires
+unprocessed. The ~2-day wait now falls on the low band (500k–1M views, channels without ads) and the big videos get
+their segments the same day. This item closes when that change is archived. The new watch is the "Не дождались
+(старше 14 дней)" stat on the ai-pipeline dashboard against the 500k–1M inflow (~110–135/day): if most of that band
+expires, the owner moves `AI_DAILY_BUDGET_VIDEOS` or `AI_MIN_VIEWS` by the numbers above.

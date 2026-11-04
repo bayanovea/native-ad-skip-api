@@ -21,9 +21,11 @@ func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'")).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(198))
 	mock.ExpectBegin()
-	// views from the extension or enough GETs, each on its own, or a retry that is due
-	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-[0-9]+_[0-9]+$' AND (")+`\s*`+regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR requests >= $2))")+
-		`(?s).*status = 'queued' AND next_attempt_at <= NOW\(\).*ORDER BY first_seen_at.*LIMIT \$3 FOR UPDATE SKIP LOCKED`).
+	// views from the extension or enough GETs, each on its own, within 14 days of the first request, or a retry that is
+	// due; the highest score first: value (the admission terms), over age, × channel history, × a human ad markup
+	mock.ExpectQuery(regexp.QuoteMeta("native_id ~ '^-[0-9]+_[0-9]+$' AND (")+`\s*`+
+		regexp.QuoteMeta("(status = 'seen' AND (views_max >= $1 OR requests >= $2) AND first_seen_at > NOW() - INTERVAL '14 days')")+
+		`(?s).*status = 'queued' AND next_attempt_at <= NOW\(\).*ORDER BY ln\(.*/ \(1 \+ .*factor.*0\.3 ELSE 1 END DESC, first_seen_at, native_id LIMIT \$3 FOR UPDATE OF a SKIP LOCKED`).
 		WithArgs(10000, 3, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}).
 			AddRow("-1_456000001", 25000, 0).
@@ -72,7 +74,7 @@ func TestClaimQueuedBatchMax(t *testing.T) {
 
 	mock.ExpectQuery("FROM prv_ai_runs").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectBegin()
-	mock.ExpectQuery("FOR UPDATE SKIP LOCKED").WithArgs(10000, 3, 100).
+	mock.ExpectQuery("FOR UPDATE OF a SKIP LOCKED").WithArgs(10000, 3, 100).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}))
 	mock.ExpectRollback()
 	got, err := claimQueued(db, testCfg)

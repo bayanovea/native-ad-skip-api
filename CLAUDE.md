@@ -178,8 +178,9 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   never a code default or a migration. Human markups keep being accepted on AI-first videos (the judge's strongest
   signal, the fallback after a withdraw).
 - Flow: `GET /video-calculated` with `v` upserts `prv_ai_videos` → `ai detect` (community videos at `AI_MIN_VIEWS` or
-  `AI_MIN_REQUESTS`, daily budget) fetches the ru auto track with yt-dlp, gates the timeline, calls Claude (Batches API),
-  then the second model (`AI_SECOND_ENABLED`) and the chapter check (`AI_CHAPTERS_ENABLED`), publishes
+  `AI_MIN_REQUESTS`, daily budget, highest score first: views, requests, freshness, channel history, human markup; a
+  `seen` video older than 14 days is dropped) fetches the ru auto track with yt-dlp, gates the timeline, calls Claude
+  (Batches API), then the second model (`AI_SECOND_ENABLED`) and the chapter check (`AI_CHAPTERS_ENABLED`), publishes
   `prv_ai_video_calculateds` → served instead of `video_calculateds` with `AI_FIRST=on` on a `match` / `backfilled`
   lookup → `ai judge` reads new user signals and sends review items or withdraws.
 - An AI row keeps every detected segment: `data` = exactly what is served, `hidden` = the rest with a `reason`
@@ -195,8 +196,9 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   the same change, then republishes both artifacts (ru `6NZNwDcYKbLV5MUgKPwc8n`, en `SQhQy8xEPoY8XaxvKL4d6o`; one file
   each, `style.css` inlined, the cross-language link pointing at the other artifact).
 - Every AI panel lives on `grafana/dashboards/ai-pipeline.json`. Its thresholds are literals tagged with their variable
-  (`500000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `200 /* AI_DAILY_BUDGET_VIDEOS */`) and the ad-chapter SQL
-  with `/* chapters.go adTitle */`: changing the variable or the regexp updates every tagged literal in the same change.
+  (`500000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `200 /* AI_DAILY_BUDGET_VIDEOS */`,
+  `INTERVAL '14 days' /* queue.go queueMaxAge */`) and the ad-chapter SQL with `/* chapters.go adTitle */`: changing the
+  variable, the constant or the regexp updates every tagged literal in the same change.
 
 ### Routes
 
