@@ -15,3 +15,7 @@ Options:
 Unknown that settles it: how many videos it hits. On prod: `SELECT COUNT(*) FROM prv_ai_videos WHERE last_error LIKE '%not available in your country%'`, against the claims of the same period. The "every fetch of the tick failed" check (`hostFetches`) already treats such errors as the videos', not the host's, as long as the control video still fetches.
 
 **2026-11-02 dashboard reading:** "yt-dlp: 3 неудачных попытки" went 87 → 143 in 24 h (+56, against +225 runs); in the newest 50 rows, 18 of the dropped and 17 of the pending retries are "not available in your country". `dropped_pct` 12.3 → 15.6. The share looks large enough for option 1; the SQL count above confirms it.
+
+**2026-11-04 count (prod SQL above):** 210 rows carry the geo error (160 `failed`, 50 waiting for a retry) of 2972 claimed so far, about 7 %; 160 of the 279 `failed` rows. 19 channels, one of them 124 rows. `dropped_pct` 9.2 (10-29) → 19.3, mostly this. Option 1 saves the retries but recovers nothing; option 2 brings back ~7 % of claimed videos, more than half of it one channel.
+
+**Open (owner, 2026-11-04):** the share is known; what is left is the owner's call whether ~7 %, mostly one channel, is worth a yt-dlp proxy in another country. Declined → option 1. Re-count with the SQL above before deciding: if the big channel stops posting, the share drops.
