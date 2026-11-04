@@ -253,7 +253,7 @@ jobs:
         docker compose -p "$COMPOSE_PROJECT" -f /home/skipper-admin/tmp/src/docker-compose.yml up -d --no-build --force-recreate --remove-orphans app prometheus grafana node-exporter blackbox-exporter < /dev/null
 
         # Old app images: keep the KEEP_IMAGES newest and the running one; a failed rm never fails the deploy.
-        # The by-hand rollback (CLAUDE.md → Rollback) needs the image in the local cache; older shas go
+        # The by-hand rollback (docs/reference/deployment.md → Rollback) needs the image in the local cache; older shas go
         # through the workflow rollback, which pulls.
         KEEP_IMAGES=5
         kept=; removed=; failed=; n=0

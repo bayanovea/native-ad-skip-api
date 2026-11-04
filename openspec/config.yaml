@@ -26,7 +26,7 @@ rules:
     - "Cite owner decisions as (owner, YYYY-MM-DD) with the reason"
   tasks:
     - Each task names the files it touches and the test that proves it
-    - "A Docs group: the CLAUDE.md sections by name; when AI-first behaviour changes at the concept level, docs/ai-first-overview/{ru,en}.html with the header date and both artifacts republished"
+    - "A Docs group: the CLAUDE.md and docs/reference/ sections by name; when AI-first behaviour changes at the concept level, docs/ai-first-overview/{ru,en}.html with the header date and both artifacts republished"
     - "Dashboard tasks: each changed SQL run against the local dump (localhost:5433) with seeded rows, the JSON parses, env-tagged literals (/* AI_MIN_VIEWS */ …) updated"
     - "A new env flag: docker-compose.yml and both lists in .github/workflows/deploy.yml"
     - "Last task: cleanup pass (leftover names via grep, transient state, open questions)"

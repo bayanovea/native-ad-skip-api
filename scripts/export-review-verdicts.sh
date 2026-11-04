@@ -2,7 +2,7 @@
 # Export the assessor verdicts of one review sheet, all its parts, or of one batch
 # (prv_review_items / prv_review_verdicts) into the private data root, as input for
 # `adskip review -file`. Defaults to the local restored dump; for prod set PG* to the
-# SSH tunnel (see CLAUDE.md, Ops).
+# SSH tunnel (see docs/reference/ops.md).
 # Usage: scripts/export-review-verdicts.sh <sheet|batch> [reviewer]   (e.g. 2026-10-14-clean gkshi)
 # With a reviewer: only their verdicts, into <name>.<reviewer>.verdicts.tsv.
 set -eu

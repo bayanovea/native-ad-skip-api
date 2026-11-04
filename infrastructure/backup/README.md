@@ -36,4 +36,4 @@ sudo -u postgres psql -d restore_test -c "select (select count(*) from markups),
 sudo -u postgres dropdb restore_test && rm /tmp/<DB_NAME>-<date>.sql.gz
 ```
 
-Restoring prod for real: stop the app first (`docker compose -p <project> stop app`, the stack's `COMPOSE_PROJECT`, see CLAUDE.md → Deployment), restore into an empty DB owned by the app role, then start it — the app's `sequelize.sync()` must not run before the restore (the dump has `CREATE TABLE`).
+Restoring prod for real: stop the app first (`docker compose -p <project> stop app`, the stack's `COMPOSE_PROJECT`, see docs/reference/deployment.md), restore into an empty DB owned by the app role, then start it — the app's `sequelize.sync()` must not run before the restore (the dump has `CREATE TABLE`).

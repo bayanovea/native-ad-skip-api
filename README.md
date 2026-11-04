@@ -30,6 +30,8 @@ viewers safely.
 
 - [CLAUDE.md](CLAUDE.md): architecture, commands, environment, operations. It is the developer
   guide, and the agent's instructions for this repo.
+- [docs/reference/](docs/reference/): the full reference that CLAUDE.md summarises (ops, AI-first, routes,
+  models, metrics, deployment).
 - [docs/plans/completed/](docs/plans/completed/): decisions and trade-offs, one plan per change.
   The AI-first design is in
   [20261022-ai-first-segments.md](docs/plans/completed/20261022-ai-first-segments.md) and

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Export the latest reviewer video flags (prv_review_video_flags) into the private
 # data root. Defaults to the local restored dump; for prod set PG* to the SSH
-# tunnel (see CLAUDE.md, Ops).
+# tunnel (see docs/reference/ops.md).
 # Usage: scripts/export-video-flags.sh
 set -eu
 OUT="${ADSKIP_DATA:-$HOME/Web/data}/review/video-flags.tsv"

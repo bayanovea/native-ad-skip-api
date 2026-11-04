@@ -6,7 +6,7 @@ added: 2026-10-18
 # alert on the monitoring itself (needs an external check)
 
 Since 2026-10-28 the stack also watches the host and the public path: node-exporter and blackbox-exporter in
-`docker-compose.yml`, rules `HostDiskLow`, `HostMemoryLow`, `ProbeFailed`, `TlsCertExpiry` (CLAUDE.md → Alerting).
+`docker-compose.yml`, rules `HostDiskLow`, `HostMemoryLow`, `ProbeFailed`, `TlsCertExpiry` (docs/reference/metrics.md → Alerting).
 What is still blind:
 
 - **Prometheus / Grafana themselves down, or the whole host.** Nothing in the stack can report that the stack is
