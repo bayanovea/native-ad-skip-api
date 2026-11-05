@@ -29,12 +29,20 @@ func NewOpenAI(model, effort string, opts ...option.RequestOption) (*OpenAI, err
 	if model == "" {
 		return nil, errors.New("model is required")
 	}
+	client, err := newOpenAIClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &OpenAI{client: client, model: model, effort: effort}, nil
+}
+
+func newOpenAIClient(opts ...option.RequestOption) (openai.Client, error) {
 	key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if key == "" {
-		return nil, errors.New("OPENAI_API_KEY is not set")
+		return openai.Client{}, errors.New("OPENAI_API_KEY is not set")
 	}
 	opts = append([]option.RequestOption{option.WithAPIKey(key)}, opts...)
-	return &OpenAI{client: openai.NewClient(opts...), model: model, effort: effort}, nil
+	return openai.NewClient(opts...), nil
 }
 
 // Model implements Client.
@@ -42,20 +50,9 @@ func (o *OpenAI) Model() string { return o.model }
 
 // Detect implements Client.
 func (o *OpenAI) Detect(ctx context.Context, req Request) (Result, error) {
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(req.Schema), &schema); err != nil {
-		return Result{}, fmt.Errorf("schema: %w", err)
-	}
-	params := openai.ChatCompletionNewParams{
-		Model:               o.model,
-		MaxCompletionTokens: openai.Int(maxTokens),
-		Messages:            []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(req.System), openai.UserMessage(req.User)},
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-			JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{Name: "segments", Schema: schema, Strict: openai.Bool(true)},
-		}},
-	}
-	if o.effort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(o.effort)
+	params, err := chatParams(o.model, o.effort, req)
+	if err != nil {
+		return Result{}, err
 	}
 	start := time.Now()
 	resp, err := o.client.Chat.Completions.New(ctx, params)
@@ -64,6 +61,26 @@ func (o *OpenAI) Detect(ctx context.Context, req Request) (Result, error) {
 		return res, err
 	}
 	return resultFromCompletion(resp, res)
+}
+
+// chatParams is the request of one call, shared by OpenAI and OpenAIBatch.
+func chatParams(model, effort string, req Request) (openai.ChatCompletionNewParams, error) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(req.Schema), &schema); err != nil {
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("schema: %w", err)
+	}
+	params := openai.ChatCompletionNewParams{
+		Model:               model,
+		MaxCompletionTokens: openai.Int(maxTokens),
+		Messages:            []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(req.System), openai.UserMessage(req.User)},
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{Name: "segments", Schema: schema, Strict: openai.Bool(true)},
+		}},
+	}
+	if effort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(effort)
+	}
+	return params, nil
 }
 
 // resultFromCompletion maps the response the way resultFromMessage does. The

@@ -13,6 +13,7 @@ var Prices = map[string]Price{
 	"claude-opus-5-5":   {Input: 4, Output: 20, CacheRead: 0.20, CacheWrite: 5},
 	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheRead: 0.20, CacheWrite: 2.5},
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheRead: 0.10, CacheWrite: 1.25},
+	"claude-haiku-5-5":  {Input: 0.10, Output: 0.50, CacheRead: 0.01, CacheWrite: 0.125}, // x5 above 100K input tokens: not modelled
 	// OpenAI, as published on 2026-10-30 (developers.openai.com/api/docs/pricing): cache
 	// reads are automatic and writes free; reasoning tokens bill as output.
 	"gpt-5":         {Input: 1.25, Output: 10, CacheRead: 0.125},

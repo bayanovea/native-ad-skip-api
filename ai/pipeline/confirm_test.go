@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
@@ -121,12 +123,12 @@ func TestPollConfirmsBeforeTheLockAndRecordsInThePublish(t *testing.T) {
 	var events []string
 	first := &validFirst{fakeBatch{ended: true}}
 	second := &fakeSecond{res: segs(seg("sponsor", 1, 1), seg("self_promotion", 2, 2)), events: &events}
-	r := &detectRun{db: db, client: first, batch: first, second: second, secondPrice: detector.Prices["gpt-5"],
+	r := &detectRun{db: db, client: first, batch: first, batches: map[string]batchClient{vendorAnthropic: first}, second: second, secondPrice: detector.Prices["gpt-5"],
 		categories: map[string]int{"sponsor": 2, "self_promotion": 3}, prv: testPrv}
 	r.cfg.MinSegmentSeconds = 5
 
 	mock.ExpectQuery("WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL").WillReturnRows(
-		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "transcript", "chapters"}).AddRow("-1_456000001", "msgbatch_1", 11, 7,
+		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "model", "transcript", "chapters"}).AddRow("-1_456000001", "msgbatch_1", 11, 7, "claude-sonnet-5-5",
 			[]byte(`{"meta":{},"cues":[{"start":0,"end":10,"text":"a"},{"start":10,"end":40,"text":"b"},{"start":40,"end":60,"text":"c"},{"start":60,"end":90,"text":"d"}]}`), nil))
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).WithArgs(lockSpy{&events}).
@@ -141,6 +143,7 @@ func TestPollConfirmsBeforeTheLockAndRecordsInThePublish(t *testing.T) {
 	mock.ExpectExec("INSERT INTO prv_ai_confirmations").
 		WithArgs(int64(11), 7, "-1_456000001", "gpt-5", "", nil, sqlmock.AnyArg(), 0.0, nil, 1, 1, 1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1")).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("SELECT b.batch FROM prv_review_batches").WillReturnRows(sqlmock.NewRows([]string{"batch"}))
 	mock.ExpectQuery("SELECT COUNT\\(DISTINCT batch\\)").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectExec("INSERT INTO prv_review_batches").WithArgs(sqlmock.AnyArg(), "important").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -160,5 +163,53 @@ func TestPollConfirmsBeforeTheLockAndRecordsInThePublish(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The day's sheet takes secondReviewDaily items: past it the entries stay hidden with no item,
+// and the confirmation row still counts every unconfirmed entry.
+func TestRecordCapsTheDaysReviewItems(t *testing.T) {
+	unconfirmed := []Entry{
+		{CategoryID: 2, Start: 10, End: 40, Confidence: "high", Source: "ai", Reason: reasonUnconfirmed},
+		{CategoryID: 2, Start: 40, End: 60, Confidence: "high", Source: "ai", Reason: reasonUnconfirmed},
+		{CategoryID: 2, Start: 60, End: 90, Confidence: "high", Source: "ai", Reason: reasonUnconfirmed},
+	}
+	for _, c := range []struct {
+		today, items int
+	}{{28, 2}, {30, 0}, {31, 0}} {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &detectRun{db: db, categories: map[string]int{"sponsor": 2}, prv: testPrv}
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO prv_ai_confirmations").
+			WithArgs(int64(11), 7, "-1_456000001", "claude-haiku-5-5", "", nil, sqlmock.AnyArg(), 0.0, nil, 0, 3, 0).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1")).
+			WithArgs("ai-second-2026-11-05").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(c.today))
+		if c.items > 0 {
+			mock.ExpectQuery("SELECT b.batch FROM prv_review_batches").WillReturnRows(sqlmock.NewRows([]string{"batch"}).AddRow("ai-second-2026-11-05"))
+			mock.ExpectQuery("COALESCE\\(MAX\\(position\\), 0\\)").WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(c.today))
+			for i := range c.items {
+				mock.ExpectExec("INSERT INTO prv_review_items").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), fmt.Sprintf("D%d", c.today+i+1), c.today+i+1, "-1_456000001",
+						unconfirmed[i].Start, unconfirmed[i].End, "sponsor", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 7).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+			}
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		conf := &confirmation{model: "claude-haiku-5-5", confirmed: []bool{false, false, false}}
+		now := time.Date(2026, 11, 5, 23, 30, 0, 0, time.UTC)
+		if err := r.record(tx, conf, 11, 7, "-1_456000001", nil, unconfirmed, confirmCues, now); err != nil {
+			t.Fatalf("today %d: %v", c.today, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("today %d: %v", c.today, err)
+		}
+		db.Close()
 	}
 }

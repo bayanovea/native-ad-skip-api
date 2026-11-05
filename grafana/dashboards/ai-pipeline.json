@@ -3781,7 +3781,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT CASE\n  WHEN error ILIKE '%insufficient_quota%' OR error ILIKE '%billing%' THEN 'кончился бюджет аккаунта'\n  WHEN error LIKE '%429%' THEN 'лимит запросов (429)'\n  WHEN error LIKE 'segment %' THEN 'невалидный ответ: индексы реплик'\n  WHEN error LIKE 'finish_reason length%' THEN 'ответ обрезан (max tokens)'\n  WHEN error LIKE 'refusal%' THEN 'модель отказалась'\n  WHEN error ~ ' 5[0-9][0-9] ' OR error ILIKE '%timeout%' THEN 'сбой API / таймаут'\n  ELSE 'другое'\nEND AS \"причина\", COUNT(*) AS \"видео\" FROM prv_ai_confirmations WHERE error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC",
+          "rawSql": "SELECT CASE\n  WHEN error ILIKE '%insufficient_quota%' OR error ILIKE '%billing%' OR error ILIKE '%credit balance%' THEN 'кончился бюджет аккаунта'\n  WHEN error LIKE '%429%' THEN 'лимит запросов (429)'\n  WHEN error LIKE 'segment %' THEN 'невалидный ответ: индексы реплик'\n  WHEN error LIKE 'finish_reason length%' THEN 'ответ обрезан (max tokens)'\n  WHEN error LIKE 'refusal%' THEN 'модель отказалась'\n  WHEN error ~ ' 5[0-9][0-9] ' OR error ILIKE '%timeout%' OR error ILIKE '%overloaded%' THEN 'сбой API / таймаут'\n  ELSE 'другое'\nEND AS \"причина\", COUNT(*) AS \"видео\" FROM prv_ai_confirmations WHERE error IS NOT NULL GROUP BY 1 ORDER BY 2 DESC",
           "refId": "A"
         }
       ],

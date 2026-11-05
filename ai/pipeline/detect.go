@@ -41,23 +41,25 @@ type Config struct {
 	MinSegmentSeconds int           // AI_MIN_SEGMENT_SECONDS: shorter entries are hidden, not served (lib/ai-rules.js reads it too)
 	FetchPause        time.Duration // AI_FETCH_PAUSE: mean pause before each video's fetch on a cron tick
 	Model             string        // AI_MODEL
-	Client            string        // AI_CLIENT: anthropic (Batches API) | messages (one call per video) | fixture
+	Client            string        // AI_DETECT_CLIENT, else AI_CLIENT: anthropic (Batches API) | messages (one call per video) | openai-batch | openai | fixture
 	FixtureDir        string        // AI_FIXTURE_DIR: <native_id>.detect.json for AI_CLIENT=fixture
 	PromptPath        string        // AI_PROMPT
 	YtdlpBin          string        // YTDLP_BIN
 	SecondEnabled     bool          // AI_SECOND_ENABLED=on: the second opinion before publish
-	SecondClient      string        // AI_SECOND_CLIENT: openai | fixture (<native_id>.second.json)
+	SecondClient      string        // AI_SECOND_CLIENT: openai | anthropic | fixture (<native_id>.second.json)
 	SecondModel       string        // AI_SECOND_MODEL
 	ChaptersEnabled   bool          // AI_CHAPTERS_ENABLED=on: the chapter check after the second opinion
 	ChapterEdge       int           // AI_CHAPTER_EDGE_SECONDS: how far a chapter's edge may be from the entry's
 }
 
-// ConfigFromEnv reads Config; an empty variable takes the default.
+// ConfigFromEnv reads Config; an empty variable takes the default. AI_CLIENT is the judge's and
+// the audit's too (Anthropic only): the detector falls back to it so that AI_CLIENT=fixture alone
+// never reaches a paid API.
 func ConfigFromEnv() (Config, error) {
 	c := Config{
 		DetectEnabled: os.Getenv("AI_DETECT_ENABLED") == "on",
 		Model:         env("AI_MODEL", "claude-sonnet-5-5"),
-		Client:        env("AI_CLIENT", "anthropic"),
+		Client:        env("AI_DETECT_CLIENT", env("AI_CLIENT", "anthropic")),
 		FixtureDir:    env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:    env("AI_PROMPT", "/app/ai/prompts/v2.2.md"),
 		// Absolute: cron's PATH (/usr/bin:/bin) does not reach the image's /usr/local/bin.
@@ -68,9 +70,9 @@ func ConfigFromEnv() (Config, error) {
 		ChaptersEnabled: os.Getenv("AI_CHAPTERS_ENABLED") == "on",
 	}
 	switch c.SecondClient {
-	case "openai", "fixture":
+	case "openai", "anthropic", "fixture":
 	default:
-		return c, fmt.Errorf("AI_SECOND_CLIENT must be openai or fixture, got %q", c.SecondClient)
+		return c, fmt.Errorf("AI_SECOND_CLIENT must be openai, anthropic or fixture, got %q", c.SecondClient)
 	}
 	for _, v := range []struct {
 		name string
@@ -125,8 +127,10 @@ const (
 
 var requestFormat = detector.Format{NoTimes: true}
 
-// batchClient is the batch transport: detector.AnthropicBatch in production, detector.FixtureClient in tests.
+// batchClient is the batch transport: detector.AnthropicBatch or detector.OpenAIBatch in production,
+// detector.FixtureClient in tests. Detect reads a loaded result by its key.
 type batchClient interface {
+	detector.Client
 	Submit(ctx context.Context, reqs []detector.Request) (string, error)
 	// Poll checks once; true when the batch has ended and its results are loaded.
 	Poll(ctx context.Context, batchID string) (bool, error)
@@ -134,14 +138,19 @@ type batchClient interface {
 
 var (
 	_ batchClient = (*detector.AnthropicBatch)(nil)
+	_ batchClient = (*detector.OpenAIBatch)(nil)
 	_ batchClient = (*detector.FixtureClient)(nil)
 )
 
 type detectRun struct {
-	cfg         Config
-	db          *sql.DB
-	client      detector.Client
-	batch       batchClient // nil for the synchronous client
+	cfg    Config
+	db     *sql.DB
+	client detector.Client
+	batch  batchClient // nil for the synchronous client
+	// batches resolves a waiting batch by the vendor of its run's model (vendorOf), whatever
+	// the transport is now; openBatch builds a missing vendor's client on first use.
+	batches     map[string]batchClient
+	openBatch   func(vendor, model string) (batchClient, error)
 	prompt      detector.Prompt
 	price       detector.Price
 	priceFactor float64
@@ -228,9 +237,45 @@ func Detect(cfg Config, nativeID string) error {
 	return nil
 }
 
+const (
+	vendorAnthropic = "anthropic"
+	vendorOpenAI    = "openai"
+)
+
+// vendorOf is the one rule for which API serves a model id.
+func vendorOf(model string) string {
+	if strings.HasPrefix(model, "claude-") {
+		return vendorAnthropic
+	}
+	return vendorOpenAI
+}
+
+// checkVendor refuses a model that its transport's vendor does not serve (fixture takes any).
+func checkVendor(modelVar, model, clientVar, client, vendor string) error {
+	if client == "fixture" || vendorOf(model) == vendor {
+		return nil
+	}
+	return fmt.Errorf("%s=%s is not a model of %s=%s (%s)", modelVar, model, clientVar, client, vendor)
+}
+
+func openBatch(vendor, model string) (batchClient, error) {
+	if vendor == vendorAnthropic {
+		b, err := detector.NewAnthropicBatch(model, effort)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+	b, err := detector.NewOpenAIBatch(model, effort)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 // newDetectRun loads the prompt and picks the model client: a manual run always
-// calls the model synchronously, a cron tick uses the Batches API unless
-// AI_CLIENT=messages.
+// calls the model synchronously, a cron tick uses its vendor's batch API on
+// anthropic and openai-batch.
 func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	prompt, err := detector.LoadPrompt(cfg.PromptPath)
 	if err != nil {
@@ -244,28 +289,47 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	if r.prv, err = platform.FromEnv(); err != nil {
 		return nil, err
 	}
+	vendor := vendorAnthropic
+	switch cfg.Client {
+	case "anthropic", "messages":
+	case "openai-batch", "openai":
+		vendor = vendorOpenAI
+	case "fixture":
+	default:
+		return nil, fmt.Errorf("AI_DETECT_CLIENT (else AI_CLIENT) must be anthropic, messages, openai-batch, openai or fixture, got %q", cfg.Client)
+	}
+	if err := checkVendor("AI_MODEL", cfg.Model, "AI_DETECT_CLIENT", cfg.Client, vendor); err != nil {
+		return nil, err
+	}
+	if cfg.SecondEnabled {
+		if err := checkVendor("AI_SECOND_MODEL", cfg.SecondModel, "AI_SECOND_CLIENT", cfg.SecondClient, cfg.SecondClient); err != nil {
+			return nil, err
+		}
+	}
 	switch {
 	case cfg.Client == "fixture":
 		f := detector.NewFixtureClient(cfg.FixtureDir, cfg.Model)
 		r.client = f
 		if !manual {
 			r.batch = f
+			r.batches = map[string]batchClient{vendorAnthropic: f, vendorOpenAI: f}
 		}
-	case cfg.Client == "anthropic" && !manual:
-		b, err := detector.NewAnthropicBatch(cfg.Model, effort)
-		if err != nil {
+	case (cfg.Client == "anthropic" || cfg.Client == "openai-batch") && !manual:
+		if r.batch, err = openBatch(vendor, cfg.Model); err != nil {
 			return nil, err
 		}
-		r.client, r.batch = b, b
-	case cfg.Client == "anthropic" || cfg.Client == "messages":
+		r.client, r.batches, r.openBatch = r.batch, map[string]batchClient{vendor: r.batch}, openBatch
+	case vendor == vendorAnthropic:
 		if r.client, err = detector.NewAnthropic(cfg.Model, effort); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("AI_CLIENT must be anthropic, messages or fixture, got %q", cfg.Client)
+		if r.client, err = detector.NewOpenAI(cfg.Model, effort); err != nil {
+			return nil, err
+		}
 	}
 	if r.batch != nil {
-		r.priceFactor = 0.5 // the Batches API's discount; the fixture batch stands in for it
+		r.priceFactor = 0.5 // both batch APIs' discount; the fixture batch stands in for it
 	}
 	var priced bool
 	if r.price, priced = detector.Prices[cfg.Model]; !priced {
@@ -276,6 +340,10 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 	case cfg.SecondClient == "openai":
 		if r.second, err = detector.NewOpenAI(cfg.SecondModel, effort); err != nil {
 			return nil, fmt.Errorf("AI_SECOND_CLIENT=openai: %w", err)
+		}
+	case cfg.SecondClient == "anthropic":
+		if r.second, err = detector.NewAnthropic(cfg.SecondModel, effort); err != nil {
+			return nil, fmt.Errorf("AI_SECOND_CLIENT=anthropic: %w", err)
 		}
 	default:
 		r.second = detector.NewFixtureClientSuffix(cfg.FixtureDir, cfg.SecondModel, ".second.json")
@@ -535,7 +603,7 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 				continue
 			}
 			c := r.confirm(ctx, p.q.nativeID, p.meta, p.cues, res, err)
-			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, res, err, c); err != nil {
+			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, r.price, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", p.q.nativeID, err)
 				failed++
 			}
@@ -623,13 +691,14 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		nativeID string
 		runID    int64
 		videoID  int
+		model    string
 		meta     transcript.Meta
 		cues     []vtt.Cue
 		chapters []chapter
 	}
-	rows, err := r.db.Query(`SELECT v.native_id, v.batch_id, run.id, run.video_id, run.transcript, run.chapters
+	rows, err := r.db.Query(`SELECT v.native_id, v.batch_id, run.id, run.video_id, run.model, run.transcript, run.chapters
 		FROM prv_ai_videos v
-		JOIN LATERAL (SELECT id, video_id, transcript, chapters FROM prv_ai_runs WHERE native_id = v.native_id ORDER BY id DESC LIMIT 1) run ON TRUE
+		JOIN LATERAL (SELECT id, video_id, model, transcript, chapters FROM prv_ai_runs WHERE native_id = v.native_id ORDER BY id DESC LIMIT 1) run ON TRUE
 		WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL`)
 	if err != nil {
 		return 0, err
@@ -639,7 +708,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 		var w waiting
 		var batchID string
 		var tr, chapters []byte
-		if err := rows.Scan(&w.nativeID, &batchID, &w.runID, &w.videoID, &tr, &chapters); err != nil {
+		if err := rows.Scan(&w.nativeID, &batchID, &w.runID, &w.videoID, &w.model, &tr, &chapters); err != nil {
 			rows.Close()
 			return failed, err
 		}
@@ -663,25 +732,57 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 	}
 
 	for batchID, videos := range batches {
-		ended, err := r.batch.Poll(ctx, batchID)
+		// One batch, one submit, one model: its first video's run names it.
+		model := videos[0].model
+		b, err := r.batchFor(model)
+		if err == nil {
+			var ended bool
+			if ended, err = b.Poll(ctx, batchID); err == nil && !ended {
+				continue
+			}
+		}
 		if err != nil {
 			log.Printf("ai detect: batch %s poll: %v", batchID, err)
 			failed += len(videos)
 			continue
 		}
-		if !ended {
-			continue
+		price, priced := detector.Prices[model]
+		if !priced {
+			log.Printf("ai detect: no price for %s, batch %s cost recorded as 0", model, batchID)
 		}
 		for _, w := range videos {
-			res, err := r.client.Detect(ctx, detector.Request{Key: w.nativeID})
+			res, err := b.Detect(ctx, detector.Request{Key: w.nativeID})
+			if errors.Is(err, detector.ErrBatchFailed) {
+				// Rejected as a whole (the enqueued-token limit), reported only on the poll: as a rejected submit.
+				r.unsent(w.nativeID, w.runID, strings.ReplaceAll(err.Error(), "\n", ": "))
+				failed++
+				continue
+			}
 			c := r.confirm(ctx, w.nativeID, w.meta, w.cues, res, err)
-			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, w.chapters, res, err, c); err != nil {
+			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, w.chapters, price, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", w.nativeID, err)
 				failed++
 			}
 		}
 	}
 	return failed, nil
+}
+
+// batchFor is the batch client of the model's vendor, built once per tick on first use.
+func (r *detectRun) batchFor(model string) (batchClient, error) {
+	vendor := vendorOf(model)
+	if b, ok := r.batches[vendor]; ok {
+		return b, nil
+	}
+	if r.openBatch == nil {
+		return nil, fmt.Errorf("no batch client for %s", model)
+	}
+	b, err := r.openBatch(vendor, model)
+	if err != nil {
+		return nil, fmt.Errorf("%s batch client: %w", vendor, err)
+	}
+	r.batches[vendor] = b
+	return b, nil
 }
 
 // expire fails videos whose model call has not come back within 24 h (a batch
@@ -709,7 +810,7 @@ func (r *detectRun) expire() error {
 // keeps what came back); the error return is for the database only, and the caller logs it.
 // c is the second opinion (nil with the switch off): its row and the unconfirmed
 // entries' review items go into the same transaction, as do the chapter check's.
-func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, chapters []chapter, res detector.Result, callErr error, c *confirmation) error {
+func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, chapters []chapter, price detector.Price, res detector.Result, callErr error, c *confirmation) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -727,7 +828,7 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	if err != nil {
 		return fmt.Errorf("run %d usage: %w", runID, err)
 	}
-	cost := r.price.Cost(res.Usage) * r.priceFactor
+	cost := price.Cost(res.Usage) * r.priceFactor
 	if _, err := tx.Exec(`UPDATE prv_ai_runs SET raw_output = $2, usage = $3, cost_usd = $4 WHERE id = $1`,
 		runID, rawJSON(res.Raw), usage, cost); err != nil {
 		return fmt.Errorf("run %d: %w", runID, err)

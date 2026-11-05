@@ -113,3 +113,10 @@ func TestOpenAICost(t *testing.T) {
 		t.Fatalf("gpt-5 cost %v, want %v", c, want)
 	}
 }
+
+func TestHaikuCost(t *testing.T) {
+	c := Prices["claude-haiku-5-5"].Cost(Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000})
+	if want := 0.10 + 0.05 + 0.01 + 0.125; c < want-1e-9 || c > want+1e-9 {
+		t.Fatalf("claude-haiku-5-5 cost %v, want %v", c, want)
+	}
+}

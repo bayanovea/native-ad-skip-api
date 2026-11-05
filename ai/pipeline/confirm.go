@@ -106,8 +106,12 @@ func (c *confirmation) gate() []bool {
 	return c.confirmed
 }
 
-// record writes the confirmation row and sends every unconfirmed entry to
-// review, in finish's transaction (lock order: queue row, video_calculateds,
+// secondReviewDaily is how many D items one day's sheet takes: the assessors' capacity
+// (owner, 2026-11-05). An entry past it stays hidden as unconfirmed with no item.
+const secondReviewDaily = 30
+
+// record writes the confirmation row and sends the unconfirmed entries to
+// review up to the day's cap, in finish's transaction (lock order: queue row, video_calculateds,
 // then a batch row, as the judge's AI row before its batch row).
 func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int, nativeID string, data, hidden []Entry, cues []vtt.Cue, now time.Time) error {
 	usage, err := json.Marshal(usageRow{c.res.Usage.InputTokens, c.res.Usage.OutputTokens, c.res.Usage.CacheReadTokens, c.res.Usage.CacheWriteTokens})
@@ -135,6 +139,19 @@ func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int
 	if len(unconfirmed) == 0 {
 		return nil
 	}
+	// Ticks never overlap (flock), so no other transaction adds to the day's sheet meanwhile.
+	sheet := "ai-second-" + now.UTC().Format("2006-01-02")
+	var today int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, sheet).Scan(&today); err != nil {
+		return fmt.Errorf("unconfirmed items today: %w", err)
+	}
+	if room := max(secondReviewDaily-today, 0); room < len(unconfirmed) {
+		log.Printf("ai detect: %s: %d unconfirmed past the day's %d review items, hidden without one", nativeID, len(unconfirmed)-room, secondReviewDaily)
+		unconfirmed = unconfirmed[:room]
+	}
+	if len(unconfirmed) == 0 {
+		return nil
+	}
 	names := r.categoryNames()
 	items := make([]review.Item, len(unconfirmed))
 	for i, e := range unconfirmed {
@@ -144,7 +161,7 @@ func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int
 				fmt.Sprintf("entry: %s %s, %d s", names[e.CategoryID], e.Confidence, e.End-e.Start)}}
 	}
 	// important: above the below-threshold passes (optional), below the judge's served-row questions (urgent).
-	if _, err := review.Add(tx, "ai-second-"+now.UTC().Format("2006-01-02"), "D", "important", items); err != nil {
+	if _, err := review.Add(tx, sheet, "D", "important", items); err != nil {
 		return fmt.Errorf("unconfirmed items: %w", err)
 	}
 	return nil

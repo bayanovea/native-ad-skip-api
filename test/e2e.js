@@ -1030,7 +1030,7 @@ async function aiCalculated(nativeId) {
     return (await dbQuery('SELECT * FROM prv_ai_video_calculateds WHERE native_id = $1', [nativeId]))[0] || null;
 }
 
-test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic without a key or a missing PROVIDER_* template is a startup error', async () => {
+test('ai detect: off by default (clears a stale heartbeat); a transport without its key, a model of the other vendor or a missing PROVIDER_* template is a startup error', async () => {
     await dbQuery('DELETE FROM prv_ai_videos'); // rows from earlier tests' GETs would join this queue
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000201', 600000, 1)`);
     // A command switched off after it ran must not leave a last success that ages into CalculatorStale.
@@ -1046,6 +1046,22 @@ test('ai detect: off by default (clears a stale heartbeat); AI_CLIENT=anthropic 
     r = runAi(['detect'], { AI_CLIENT: 'anthropic', ANTHROPIC_API_KEY: undefined });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /ANTHROPIC_API_KEY is not set/);
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+
+    r = runAi(['detect'], { AI_DETECT_CLIENT: 'openai-batch', AI_MODEL: 'gpt-6.1-terra', OPENAI_API_KEY: undefined });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /OPENAI_API_KEY/);
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+
+    // Half-applied variables: the default AI_MODEL is a Claude model, the default AI_SECOND_MODEL an OpenAI one.
+    r = runAi(['detect'], { AI_DETECT_CLIENT: 'openai-batch', OPENAI_API_KEY: 'test' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /AI_MODEL=claude-sonnet-5-5 is not a model of AI_DETECT_CLIENT=openai-batch/);
+    assert.equal((await aiVideo('-1_456000201')).status, 'seen');
+
+    r = runAi(['detect'], { AI_SECOND_ENABLED: 'on', AI_SECOND_CLIENT: 'anthropic' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /AI_SECOND_MODEL=gpt-6-luna is not a model of AI_SECOND_CLIENT=anthropic/);
     assert.equal((await aiVideo('-1_456000201')).status, 'seen');
 
     // The platform's URL templates come from the env (ai/platform); a tick that would fetch needs both.

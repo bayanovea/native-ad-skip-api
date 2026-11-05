@@ -118,7 +118,7 @@ func TestFinishAppliesChaptersOnlyWhenSwitchedOn(t *testing.T) {
 		mock.ExpectCommit()
 
 		res := segs(seg("sponsor", 1, 1), seg("sponsor", 3, 3))
-		if err := r.finish("-1_456000001", 11, 7, confirmCues, chapters, res, nil, nil); err != nil {
+		if err := r.finish("-1_456000001", 11, 7, confirmCues, chapters, r.price, res, nil, nil); err != nil {
 			t.Fatalf("on=%v: %v", on, err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {

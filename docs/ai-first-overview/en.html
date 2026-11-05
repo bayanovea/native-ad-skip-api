@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-11-04 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-11-05 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -41,7 +41,7 @@
     <div class="arrow">→</div>
     <div class="node warn"><b>Track check</b><span>do the subtitles match the video length? if not, stop</span></div>
     <div class="arrow">→</div>
-    <div class="node ai"><b>Claude reads the text</b><span>finds sponsor ads and self-promotion</span></div>
+    <div class="node ai"><b>The first model reads the text</b><span>finds sponsor ads and self-promotion</span></div>
     <div class="arrow">→</div>
     <div class="node"><b>Into the drawer</b><span>stored but <u>not served</u>; every finding is kept, the doubtful and the too short ones set aside ↓</span></div>
   </div>
@@ -55,10 +55,10 @@
   <p class="caption">Nothing is deleted: the rest is set aside with its reason, "not sure", "too short", "the second model did not find it" or "an assessor said no". When the owner changes a rule (say, the minimum length), every AI markup is recomputed once; assessors' verdicts stay the last word.</p>
 
   <h3>Second opinion: two models must agree</h3>
-  <p>On since 2026-11-01 (a switch of its own). A second model from another vendor (OpenAI) reads the same subtitle text on its own. A segment that passed both steps above is ready to serve only when the second model found an ad of the same category in about the same place.</p>
+  <p>On since 2026-11-01 (a switch of its own). A second model from another vendor reads the same subtitle text on its own: the two come from Anthropic (Claude) and OpenAI, and which one goes first is the owner's setting. A segment that passed both steps above is ready to serve only when the second model found an ad of the same category in about the same place.</p>
   <div class="branch">
     <div class="node ok"><b>Both found it</b><span>the segment is ready to serve, with the first model's edges.</span></div>
-    <div class="node warn"><b>Only the first found it</b><span>the segment is set aside ("the second model did not find it") and goes to an assessor; an "ad" verdict puts it on the air, "not an ad" sets it aside for good.</span></div>
+    <div class="node warn"><b>Only the first found it</b><span>the segment is set aside ("the second model did not find it") and goes to an assessor, at most 30 of them a day (the rest simply stay set aside); an "ad" verdict puts it on the air, "not an ad" sets it aside for good.</span></div>
   </div>
   <p class="caption">What only the second model found is never served and never sent to an assessor: we only count it. If the second model does not answer, the video is published from the first model, as without the switch.</p>
 
