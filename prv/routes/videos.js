@@ -25,19 +25,21 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
         const duration = req.query.duration;
         const nativeFullVideoId = req.query.video_id;
 
-        if (!req.query.v) prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', provider);
-        if (!req.query.v && legacyUnversioned) {
-            let video = await models.Video.findOne({ where: { native_id: '-' + nativeFullVideoId } });
-            if (!video) {
-                video = await models.Video.findOne({ where: { native_id: nativeFullVideoId } });
+        if (!req.query.v) {
+            prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', provider);
+            if (legacyUnversioned) {
+                let video = await models.Video.findOne({ where: { native_id: '-' + nativeFullVideoId } });
+                if (!video) {
+                    video = await models.Video.findOne({ where: { native_id: nativeFullVideoId } });
+                }
+                if (!video) { res.status(204).send(); return; }
+
+                const videoCalculated = await models.VideoCalculated.findOne({ where: { video_id: String(video.id) } });
+                if (!videoCalculated) { res.status(204).send(); return; }
+
+                res.status(200).send(videoCalculated.data);
+                return;
             }
-            if (!video) { res.status(204).send(); return; }
-
-            const videoCalculated = await models.VideoCalculated.findOne({ where: { video_id: String(video.id) } });
-            if (!videoCalculated) { res.status(204).send(); return; }
-
-            res.status(200).send(videoCalculated.data);
-            return;
         }
 
         // The page's view counter as text; never a 400, an unreadable one only keeps the raw string for a look.

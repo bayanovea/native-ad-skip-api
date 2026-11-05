@@ -124,17 +124,18 @@ Each provider directory has the same internal layout:
 <provider>/
   commands/main.go       # Go CLI entry point (passes table prefix to calculator)
   db/index.js            # Sequelize models scoped to this provider's table prefix
-  routes/index.js        # Express router (rt/yt: prv/routes/provider-router.js over its models, see below)
+  routes/index.js        # Express router: prv/routes/provider-router.js over its models (prv adds its deps and admin pages, see below)
   repository/            # Raw Sequelize queries (prv/ only)
   routes/*.js            # Express route handlers (prv/ only)
   locales/review/        # Review page strings ru/en (prv/ only; loaded by lib/i18n.js, parity checked in test/i18n.test.js)
   service/               # Business logic (prv/ only; rt and yt reuse prv/service/user.js)
 ```
 
-`rt` and `yt` have no route or repository code of their own: their `routes/index.js` calls
-`prv/routes/provider-router.js`, which mounts the prv routes (`markups`, `videos`, `votes`, `users`, `events`) with their
-own `models` and the prv repositories, and gives `markups` / `videos` (the routes with metrics) `provider: 'rt'` / `'yt'`
-(the metric label). prv's legacy no-`v` branch (`'-' + video_id`) is prv's alone (`legacyUnversioned`); on rt/yt a
+`rt` and `yt` have no route or repository code of their own. Every provider's `routes/index.js` calls
+`prv/routes/provider-router.js` (`createProviderRouter(models, provider, prvDeps)`), which mounts the public prv routes
+(`markups`, `videos`, `votes`, `users`, `events`) with its own `models` and the prv repositories, and gives `markups` /
+`videos` (the routes with metrics) `provider` (the metric label); prv passes its prv-only deps (`aiRepository`,
+`moderationRepository`, `durationLogRepository`, `legacyUnversioned`) and adds only the admin pages. prv's legacy no-`v` branch (`'-' + video_id`) is prv's alone (`legacyUnversioned`); on rt/yt a
 request without `v` is only counted. Category ids are the same on all three: intro 3, sponsor 4, self_promotion 5,
 credits 6, the ids the extension sends (`lib/schema.js` `CATEGORY_IDS`). A prv-only feature is skipped by what the provider lacks, never by a provider check: no
 `models.AiVideoCalculated` (AI row lock and lookup), no `aiRepository` (AI queue, `views_text`), no `banned_at` on its
