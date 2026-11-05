@@ -19,3 +19,5 @@ Unknown that settles it: how many videos it hits. On prod: `SELECT COUNT(*) FROM
 **2026-11-04 count (prod SQL above):** 210 rows carry the geo error (160 `failed`, 50 waiting for a retry) of 2972 claimed so far, about 7 %; 160 of the 279 `failed` rows. 19 channels, one of them 124 rows. `dropped_pct` 9.2 (10-29) → 19.3, mostly this. Option 1 saves the retries but recovers nothing; option 2 brings back ~7 % of claimed videos, more than half of it one channel.
 
 **Open (owner, 2026-11-04):** the share is known; what is left is the owner's call whether ~7 %, mostly one channel, is worth a yt-dlp proxy in another country. Declined → option 1. Re-count with the SQL above before deciding: if the big channel stops posting, the share drops.
+
+**2026-11-05 re-count:** 228 rows (195 `failed`, 33 waiting for a retry) of 3283 claimed, 6.9 %; `dropped_pct` 20.2. The share holds, the owner's call stays open.

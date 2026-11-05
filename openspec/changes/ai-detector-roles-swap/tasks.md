@@ -29,7 +29,7 @@
 
 ## 5. Overview and backlog
 
-- [ ] 5.1 `docs/ai-first-overview/{ru,en}.html`: the reading step names the detector by vendor as configured (OpenAI reads the text first, Claude confirms) with the switch date left to the owner's flip, the "updated" date in both headers; republish both artifacts (ru `6NZNwDcYKbLV5MUgKPwc8n`, en `SQhQy8xEPoY8XaxvKL4d6o`, `style.css` inlined, cross-links kept). Verify: both artifact links open with the new date and wording.
+- [x] 5.1 `docs/ai-first-overview/{ru,en}.html`: the reading step names the detector by vendor as configured (OpenAI reads the text first, Claude confirms) with the switch date left to the owner's flip, the "updated" date in both headers; republish both artifacts (ru `6NZNwDcYKbLV5MUgKPwc8n`, en `SQhQy8xEPoY8XaxvKL4d6o`, `style.css` inlined, cross-links kept). Verify: both artifact links open with the new date and wording.
 - [x] 5.2 `docs/backlog/`: delete `ai-detector-roles-swap.md` (this change is its record); `ai-second-model-revisit.md` updated to the Haiku pair; one item for parallel pairs (second budget variable + routing rule, after both pairs are proven) unless an existing one covers it; one for a longer batch expiry only if 1.3's latency comes within an hour of 24 h. Verify: `ls docs/backlog | grep -i 'roles-swap'` is empty, new items follow the backlog skill's format.
 
 ## 6. Integration and cleanup

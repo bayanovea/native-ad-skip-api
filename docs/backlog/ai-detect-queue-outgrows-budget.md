@@ -65,3 +65,5 @@ unprocessed. The ~2-day wait now falls on the low band (500k–1M views, channel
 their segments the same day. This item closes when that change is archived. The new watch is the "Не дождались
 (старше 14 дней)" stat on the ai-pipeline dashboard against the 500k–1M inflow (~110–135/day): if most of that band
 expires, the owner moves `AI_DAILY_BUDGET_VIDEOS` or `AI_MIN_VIEWS` by the numbers above.
+
+**2026-11-05 check:** `queue_now` 438 (07:52 UTC), lowest reading yet; 477 at the same hour on 11-04, 521 on 11-04 14:07. `runs_24h` 229, "Не дождались" 0. Priority order is live only since the 06:54 UTC deploy, and from 07:09 terra detects at ~$0.010/video (Sonnet ~$0.040), so the budget now costs less than the numbers above.
