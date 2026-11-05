@@ -84,7 +84,7 @@ async function hiddenItems(sequelize, review, categories, opts) {
     const candidates = [];
     for (const row of rows) {
         for (const e of row.hidden) {
-            if (!reasons.includes(e.reason) || e.end - e.start < opts.minSeconds) continue;
+            if (e.source === 'review' || !reasons.includes(e.reason) || e.end - e.start < opts.minSeconds) continue;
             const category = categories.get(e.category_id);
             candidates.push({
                 native_id: row.native_id, video_id: row.video_id, kind: 'ai', start: e.start, end: e.end, proposed: category,

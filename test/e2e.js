@@ -1281,6 +1281,14 @@ test('import-below-threshold: the hidden entries become ai items on their AI row
     r = run('--dry-run');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /^2 segments below the threshold and at least 5 s, 1 not yet in review \(1 videos\)\nB1\t-1_456000201\t300\t320\t/);
+
+    // An assessor set these bounds (a short keep moved the entry off its item's bounds): no second round.
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET hidden = hidden || $2::jsonb WHERE video_id = $1`,
+        [videoId, JSON.stringify([{ category_id: cats.prv.sponsor, start: 305, end: 308, confidence: 'high', source: 'review', reason: 'short' }])]);
+    r = run('--dry-run', '--min-seconds', '0');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^3 segments below the threshold and at least 0 s, 2 not yet in review \(1 videos\)\n/);
+    assert.doesNotMatch(r.stdout, /\t305\t308\t/);
 });
 
 test('import-below-threshold --served: a seeded blind sample of served entries, one per video, as urgent ai items; a re-run skips what is in review', async (t) => {
