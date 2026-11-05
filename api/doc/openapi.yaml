@@ -112,15 +112,19 @@ components:
         vote:        { type: integer, minimum: -1, maximum: 1, example: 1 }
         duration:    { type: integer, minimum: 1, nullable: true }
 
-    # ── RT/YT schemas (duration required, prv_user_id required in vote) ───────
+    # ── RT/YT schemas (the prv routes mounted per provider: duration and prv_user_id optional) ──
     RTMarkupBody:
       type: object
-      required: [video_id, user_id, category_id, data, duration]
+      required: [video_id, user_id, category_id, data]
       properties:
         video_id:    { type: string }
         user_id:     { type: string }
         prv_user_id:  { type: integer, minimum: 1, nullable: true }
         category_id: { type: integer, minimum: 1 }
+        v:
+          type: string
+          example: "1"
+          description: "Version string. If omitted, legacy mode activates and `-` is prepended to video_id."
         data:
           type: object
           required: [intervals]
@@ -130,11 +134,11 @@ components:
               minItems: 1
               maxItems: 20
               items: { $ref: '#/components/schemas/Interval' }
-        duration: { type: integer, minimum: 1, example: 300 }
+        duration: { type: integer, minimum: 1, nullable: true, example: 300 }
 
     RTUpdateMarkupBody:
       type: object
-      required: [video_id, user_id, category_id, start, end, duration]
+      required: [video_id, user_id, category_id, start, end]
       properties:
         video_id:       { type: string }
         user_id:        { type: string }
@@ -145,20 +149,20 @@ components:
         new_category_id: { type: integer, minimum: 1 }
         new_start:       { type: integer, minimum: 0 }
         new_end:         { type: integer, minimum: 0 }
-        duration:        { type: integer, minimum: 1 }
+        duration:        { type: integer, minimum: 1, nullable: true }
 
     RTVoteBody:
       type: object
-      required: [video_id, user_id, prv_user_id, category_id, start, end, vote, duration]
+      required: [video_id, user_id, category_id, start, end, vote]
       properties:
         video_id:    { type: string }
         user_id:     { type: string }
-        prv_user_id:  { type: integer, minimum: 1 }
+        prv_user_id:  { type: integer, minimum: 1, nullable: true }
         category_id: { type: integer, minimum: 1 }
         start:       { type: integer, minimum: 0 }
         end:         { type: integer, minimum: 0 }
         vote:        { type: integer, minimum: -1, maximum: 1 }
-        duration:    { type: integer, minimum: 1 }
+        duration:    { type: integer, minimum: 1, nullable: true }
 
     EventIntervalUndo:
       type: object
@@ -722,9 +726,11 @@ paths:
     get:
       tags: [RT]
       summary: Get calculated segments
+      description: "The prv lookup (`duration` ± 2, then a null duration, then any row); `views_text` is accepted and ignored."
       parameters:
         - { name: video_id,  in: query, required: true,  schema: { type: string } }
-        - { name: duration,  in: query, required: true,  schema: { type: integer } }
+        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. Required for correct lookup; omit only for legacy clients." }
+        - { name: duration,  in: query, required: false, schema: { type: integer } }
         - { name: user_id,   in: query, required: false, schema: { type: string } }
         - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
       responses:
@@ -825,8 +831,8 @@ paths:
       tags: [RT]
       summary: Submit a vote on a calculated segment
       description: |
-        Replaces the user's previous vote on the segment (the same value again changes nothing)
-        and recomputes the segment's
+        Replaces the user's previous vote on the segment; the same value again keeps the row
+        (and its time) and moves no author rating. Recomputes the segment's
         `rating` (in `rt_calculated_segments` and the matching `rt_video_calculateds.data` entry,
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. Also adjusts by the diff between the new and the
@@ -906,9 +912,11 @@ paths:
     get:
       tags: [YT]
       summary: Get calculated segments
+      description: "The prv lookup (`duration` ± 2, then a null duration, then any row); `views_text` is accepted and ignored."
       parameters:
         - { name: video_id,  in: query, required: true,  schema: { type: string } }
-        - { name: duration,  in: query, required: true,  schema: { type: integer } }
+        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. Required for correct lookup; omit only for legacy clients." }
+        - { name: duration,  in: query, required: false, schema: { type: integer } }
         - { name: user_id,   in: query, required: false, schema: { type: string } }
         - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
       responses:
@@ -1009,8 +1017,8 @@ paths:
       tags: [YT]
       summary: Submit a vote on a calculated segment
       description: |
-        Replaces the user's previous vote on the segment (the same value again changes nothing)
-        and recomputes the segment's
+        Replaces the user's previous vote on the segment; the same value again keeps the row
+        (and its time) and moves no author rating. Recomputes the segment's
         `rating` (in `yt_calculated_segments` and the matching `yt_video_calculateds.data` entry,
         omitted there when 0) from the votes table: the sum of each user's latest vote on the
         exact `(category_id, start, end)`. Also adjusts by the diff between the new and the

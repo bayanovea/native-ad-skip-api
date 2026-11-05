@@ -8,7 +8,7 @@ const { validateIntervals } = require('../../lib/validate-intervals');
 
 const IGNORE_MARKUPS_USER_RATING_VAL = -2;
 
-module.exports = function createMarkupRoutes(models, { markupRepository, markupTimeIntervalRepository, videoRepository }) {
+module.exports = function createMarkupRoutes(models, { markupRepository, markupTimeIntervalRepository, videoRepository, provider = 'prv' }) {
     const router = express.Router();
     const sequelize = models.Markup.sequelize;
 
@@ -30,7 +30,7 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
         const generatedUserId = req.body.user_id;
 
         if (!req.body.v) {
-            prometheusWrapper.incrementRequestWithoutVersion('POST /markup', 'prv');
+            prometheusWrapper.incrementRequestWithoutVersion('POST /markup', provider);
             videoId = '-' + videoId;
         }
 

@@ -67,5 +67,3 @@ their segments the same day. This item closes when that change is archived. The 
 expires, the owner moves `AI_DAILY_BUDGET_VIDEOS` or `AI_MIN_VIEWS` by the numbers above.
 
 **2026-11-05 check:** `queue_now` 438 (07:52 UTC), lowest reading yet; 477 at the same hour on 11-04, 521 on 11-04 14:07. `runs_24h` 229, "Не дождались" 0. Priority order is live only since the 06:54 UTC deploy, and from 07:09 terra detects at ~$0.010/video (Sonnet ~$0.040), so the budget now costs less than the numbers above.
-
-**2026-11-06 (owner):** `AI_DAILY_BUDGET_VIDEOS` 230 → 700, to drain the queue on the cheaper pair and spend the OpenAI allowance before 2026-11-09. Before it: `queue_now` 527, 85 retries due, `runs_24h` 230 (88 terra). `AI_MIN_VIEWS` stays 500000; the owner looks at spend and queue on 2026-11-06 before moving it (200000 needs a budget near 1400 and a higher `AiCostDaily`).

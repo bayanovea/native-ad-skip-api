@@ -420,17 +420,17 @@ test('prv: five markups — true middle median', async () => {
 
 // ── RT Tests ──────────────────────────────────────────────────────────────────
 
-// RT: duration is required, no v param, endpoints at /rt/*
-test('RT: basic median with required duration', async () => {
+// RT: endpoints at /rt/*, the prv routes mounted with provider rt
+test('RT: basic median', async () => {
     const vid = '__e2e__rt_basic';
-    const base = { video_id: vid, user_id: 'test-user', category_id: cats.rt.intro, duration: 300, data: {} };
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cats.rt.intro, duration: 300, data: {} };
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
 
     runCalc('rt');
 
-    const { status, body } = await getCalculated('rt', vid, { duration: 300 });
+    const { status, body } = await getCalculated('rt', vid, { v: '1', duration: 300 });
     assert.equal(status, 200);
     assert.ok(findSeg(body, cats.rt.intro, 1, 11), `expected {start:1 end:11}, got ${JSON.stringify(body)}`);
 });
@@ -438,7 +438,7 @@ test('RT: basic median with required duration', async () => {
 // RT: two buckets + two categories
 test('RT: two buckets and two categories', async () => {
     const vid = '__e2e__rt_full';
-    const base = { video_id: vid, user_id: 'test-user', duration: 300, data: {} };
+    const base = { video_id: vid, v: '1', user_id: 'test-user', duration: 300, data: {} };
     // intro bucket 0: avg=1, median=11
     await postMarkup('rt', { ...base, category_id: cats.rt.intro,   data: { intervals: [{ start: 0, end: 10 }] } });
     await postMarkup('rt', { ...base, category_id: cats.rt.intro,   data: { intervals: [{ start: 2, end: 11 }] } });
@@ -448,7 +448,7 @@ test('RT: two buckets and two categories', async () => {
 
     runCalc('rt');
 
-    const { status, body } = await getCalculated('rt', vid, { duration: 300 });
+    const { status, body } = await getCalculated('rt', vid, { v: '1', duration: 300 });
     assert.equal(status, 200);
     assert.equal(body.length, 2, `expected 2 segments, got ${JSON.stringify(body)}`);
     assert.ok(findSeg(body, cats.rt.intro,   1, 11), `RT intro missing`);
@@ -460,7 +460,7 @@ test('RT: two buckets and two categories', async () => {
 // YT: outlier end + three different buckets
 test('YT: outlier end and three buckets', async () => {
     const vid = '__e2e__yt_full';
-    const base = { video_id: vid, user_id: 'test-user', category_id: cats.yt.intro, duration: 600, data: {} };
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cats.yt.intro, duration: 600, data: {} };
     // Bucket 0: ends=[5,6,999] sorted→[5,6,999][1]=6
     await postMarkup('yt', { ...base, data: { intervals: [{ start: 0, end: 5   }] } });
     await postMarkup('yt', { ...base, data: { intervals: [{ start: 1, end: 999 }] } });
@@ -473,7 +473,7 @@ test('YT: outlier end and three buckets', async () => {
 
     runCalc('yt');
 
-    const { status, body } = await getCalculated('yt', vid, { duration: 600 });
+    const { status, body } = await getCalculated('yt', vid, { v: '1', duration: 600 });
     assert.equal(status, 200);
     assert.equal(body.length, 3, `expected 3 segments, got ${JSON.stringify(body)}`);
     assert.ok(findSeg(body, cats.yt.intro, 1,  6),  `bucket 0 (outlier excluded) missing`);
@@ -722,8 +722,8 @@ function runRecomputeRatings(provider) {
 }
 
 // Video with one intro segment {start:1, end:11} (bucket 0: starts 0,1,2; ends 10,12,11).
-async function seedRatedVideo(prefix, vid, cat, extra = {}) {
-    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, ...extra };
+async function seedRatedVideo(prefix, vid, cat) {
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat };
     await postMarkup(prefix, { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
     await postMarkup(prefix, { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
     await postMarkup(prefix, { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
@@ -733,17 +733,14 @@ async function seedRatedVideo(prefix, vid, cat, extra = {}) {
 async function assertVoteSurvivesRecalc(prefix) {
     const provider = prefix || 'prv';
     const vid = `__e2e__${provider}_vote_survives_recalc`;
-    const duration = 300;
-    const extra = prefix ? { duration } : {};
-    const voterExtra = prefix ? { prv_user_id: 1, duration } : {};
-    await seedRatedVideo(prefix, vid, cats[provider].intro, extra);
+    await seedRatedVideo(prefix, vid, cats[provider].intro);
     await postVote(prefix, {
-        video_id: vid, user_id: 'voter-1', category_id: cats[provider].intro, start: 1, end: 11, vote: 1, ...voterExtra,
+        video_id: vid, user_id: 'voter-1', category_id: cats[provider].intro, start: 1, end: 11, vote: 1,
     });
 
     // A markup in another category and bucket makes the next run recalculate the video.
     await postMarkup(prefix, {
-        video_id: vid, v: '1', user_id: 'test-user', category_id: cats[provider].sponsor, ...extra,
+        video_id: vid, v: '1', user_id: 'test-user', category_id: cats[provider].sponsor,
         data: { intervals: [{ start: 60, end: 70 }] },
     });
     runCalc(provider);
@@ -3231,7 +3228,7 @@ test('ai metrics: /metrics exposes the AI gauges from the tables', async () => {
 // RT: GET must not create a Video row when the video doesn't exist
 test('RT GET /video-calculated: unknown video returns 204 and creates no Video row', async () => {
     const vid = '__e2e__rt_no_orphan';
-    const res = await getCalculated('rt', vid, { duration: 300 });
+    const res = await getCalculated('rt', vid, { v: '1', duration: 300 });
     assert.equal(res.status, 204);
     assert.equal(await countVideos('rt', vid), 0, 'no Video row should be created');
 });
@@ -3321,7 +3318,7 @@ test('RT lookup metric: match outcome carries provider=rt', async () => {
     runCalc('rt');
 
     const before = await getLookupCount('match', 'rt');
-    const res = await getCalculated('rt', vid, { duration: 300 });
+    const res = await getCalculated('rt', vid, { v: '1', duration: 300 });
     assert.equal(res.status, 200);
     const after = await getLookupCount('match', 'rt');
     assert.equal(after - before, 1, 'match counter for rt should increment by 1');
@@ -3334,7 +3331,7 @@ test('YT lookup metric: match outcome carries provider=yt', async () => {
     runCalc('yt');
 
     const before = await getLookupCount('match', 'yt');
-    const res = await getCalculated('yt', vid, { duration: 300 });
+    const res = await getCalculated('yt', vid, { v: '1', duration: 300 });
     assert.equal(res.status, 200);
     const after = await getLookupCount('match', 'yt');
     assert.equal(after - before, 1, 'match counter for yt should increment by 1');
@@ -3494,12 +3491,11 @@ test('prv vote: 404 for non-matching start/end leaves rating untouched', async (
     assert.equal(await getJsonRating('', vid, cat, 1, 11), 0, 'JSON rating unchanged');
 });
 
-// RT: vote requires duration and prv_user_id
-test('RT vote: +1 increments rating with duration check', async () => {
+test('RT vote: +1 with duration and prv_user_id increments rating', async () => {
     const vid = '__e2e__rt_vote';
     const cat = cats.rt.intro;
     const duration = 300;
-    const base = { video_id: vid, user_id: 'test-user', category_id: cat, duration, data: {} };
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, duration, data: {} };
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
     await postMarkup('rt', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
@@ -3514,12 +3510,11 @@ test('RT vote: +1 increments rating with duration check', async () => {
     assert.equal(await getJsonRating('rt', vid, cat, 1, 11), 1, 'JSON rating');
 });
 
-// YT: vote requires duration and prv_user_id
-test('YT vote: +1 increments rating with duration check', async () => {
+test('YT vote: +1 with duration and prv_user_id increments rating', async () => {
     const vid = '__e2e__yt_vote';
     const cat = cats.yt.intro;
     const duration = 600;
-    const base = { video_id: vid, user_id: 'test-user', category_id: cat, duration, data: {} };
+    const base = { video_id: vid, v: '1', user_id: 'test-user', category_id: cat, duration, data: {} };
     await postMarkup('yt', { ...base, data: { intervals: [{ start: 0, end: 10 }] } });
     await postMarkup('yt', { ...base, data: { intervals: [{ start: 1, end: 12 }] } });
     await postMarkup('yt', { ...base, data: { intervals: [{ start: 2, end: 11 }] } });
@@ -3564,17 +3559,14 @@ async function assertVoteDeleteUndoesVote(prefix) {
     const vid = `__e2e__${provider}_vote_delete`;
     const author = `${provider}-del-author`;
     const voter = `${provider}-del-voter`;
-    const extra = prefix ? { duration: 300 } : { v: '1' };
-    const voteExtra = prefix ? { prv_user_id: 1, duration: 300 } : {};
-    const voterUser = prefix ? { prv_user_id: 1 } : {};
 
-    await postMarkup(prefix, { video_id: vid, user_id: author, category_id: cat, ...extra, data: { intervals: [{ start: 1, end: 11 }] } });
+    await postMarkup(prefix, { video_id: vid, v: '1', user_id: author, category_id: cat, data: { intervals: [{ start: 1, end: 11 }] } });
     await postMarkup(prefix, {
-        video_id: `${vid}_other`, user_id: voter, category_id: cat, ...extra, ...voterUser, data: { intervals: [{ start: 5, end: 9 }] },
+        video_id: `${vid}_other`, v: '1', user_id: voter, category_id: cat, data: { intervals: [{ start: 5, end: 9 }] },
     });
     runCalc(provider);
 
-    const voteBase = { video_id: vid, category_id: cat, start: 1, end: 11, ...voteExtra };
+    const voteBase = { video_id: vid, category_id: cat, start: 1, end: 11 };
     await postVote(prefix, { ...voteBase, user_id: `${provider}-del-other`, vote: 1 });
     const authorBefore = await userRating(prefix, author);
     const voterBefore = await userRating(prefix, voter);
@@ -3602,6 +3594,89 @@ test('prv vote delete: segment rating and author rating are reversed, the voter 
 test('RT/YT vote delete: segment rating and author rating are reversed', async () => {
     await assertVoteDeleteUndoesVote('rt');
     await assertVoteDeleteUndoesVote('yt');
+});
+
+// ── rt/yt on the shared routes ────────────────────────────────────────────────
+
+test('rt/yt: POST /vote without prv_user_id and duration → 204, the rating is recomputed', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_vote_minimal`;
+        const cat = cats[p].intro;
+        await seedRatedVideo(p, vid, cat);
+        await postVote(p, { video_id: vid, user_id: `${p}-minimal-voter`, category_id: cat, start: 1, end: 11, vote: 1 });
+        assert.equal((await getSegmentRow(p, vid, cat, 1, 11)).rating, 1, `${p}: segment table rating`);
+        assert.equal(await getJsonRating(p, vid, cat, 1, 11), 1, `${p}: JSON rating`);
+    }
+});
+
+test('rt/yt: GET /video-calculated without duration serves the row, outcome no_duration under the provider', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_no_duration`;
+        await postMarkup(p, { video_id: vid, v: '1', user_id: 'u1', category_id: cats[p].intro, duration: 300, data: { intervals: [{ start: 0, end: 10 }, { start: 1, end: 11 }] } });
+        runCalc(p);
+
+        const before = await getLookupCount('no_duration', p);
+        const res = await getCalculated(p, vid, { v: '1' });
+        assert.equal(res.status, 200, `${p}: ${JSON.stringify(res.body)}`);
+        assert.equal(res.body.length, 1, `${p}: ${JSON.stringify(res.body)}`);
+        assert.equal(await getLookupCount('no_duration', p) - before, 1, `${p}: no_duration counter`);
+    }
+});
+
+test('rt/yt: the same vote again keeps its row, a changed vote replaces it', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_vote_repeat`;
+        const cat = cats[p].intro;
+        const voter = `${p}-repeat-voter`;
+        await seedRatedVideo(p, vid, cat);
+        const vote = { video_id: vid, user_id: voter, category_id: cat, start: 1, end: 11 };
+
+        await postVote(p, { ...vote, vote: 1 });
+        const first = await voteIdOf(p, voter, vid);
+        await postVote(p, { ...vote, vote: 1 });
+        assert.equal(await voteIdOf(p, voter, vid), first, `${p}: a repeat keeps the row`);
+        assert.equal(await getJsonRating(p, vid, cat, 1, 11), 1, `${p}: rating after the repeat`);
+
+        await postVote(p, { ...vote, vote: -1 });
+        assert.notEqual(await voteIdOf(p, voter, vid), first, `${p}: a changed vote is a new row`);
+        assert.equal((await getSegmentRow(p, vid, cat, 1, 11)).rating, -1, `${p}: segment table rating`);
+        assert.equal(await getJsonRating(p, vid, cat, 1, 11), -1, `${p}: JSON rating`);
+    }
+});
+
+test('rt/yt: DELETE /markups/:id sets is_new on the live markups of the video only', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_markup_delete`;
+        const ids = [];
+        for (const [i, user] of ['live', 'gone', 'target'].entries()) {
+            const userId = `${p}-markup-del-${user}`;
+            await postMarkup(p, { video_id: vid, v: '1', user_id: userId, category_id: cats[p].intro, data: { intervals: [{ start: i, end: 10 + i }] } });
+            ids.push((await markupRowsByUser(p, userId)).markups[0].id);
+        }
+        runCalc(p);
+        const [live, gone, target] = ids;
+        await dbQuery(`UPDATE ${p}_markups SET deleted_at = now() WHERE id = $1`, [gone]);
+
+        const res = await request('DELETE', `/${p}/markups/${target}`, null, { Authorization: `Bearer ${VOTE_AUTH}` });
+        assert.equal(res.status, 201, `${p}: ${JSON.stringify(res.body)}`);
+
+        const rows = await dbQuery(`SELECT id, is_new, deleted_at IS NOT NULL AS deleted FROM ${p}_markups WHERE id = ANY($1) ORDER BY id`, [ids]);
+        assert.deepEqual(rows, [
+            { id: live, is_new: true, deleted: false },
+            { id: gone, is_new: false, deleted: true },
+            { id: target, is_new: false, deleted: true },
+        ], p);
+    }
+});
+
+test('rt/yt: views_text is ignored, never a 400, and queues nothing', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_views_text`;
+        const res = await getCalculated(p, vid, { v: '1', duration: 300, views_text: '1.2M views' });
+        assert.equal(res.status, 204, `${p}: ${JSON.stringify(res.body)}`);
+        await sleep(200);
+        assert.equal((await dbQuery('SELECT 1 FROM prv_ai_videos WHERE native_id = $1', [vid])).length, 0, `${p}: no AI queue row`);
+    }
 });
 
 test('prv vote delete: unknown vote id → 404, wrong token → 401 and the vote stays', async () => {
@@ -4815,13 +4890,13 @@ async function putMarkup(prefix, body) {
     return request('PUT', prefix ? `/${prefix}/markups` : '/markups', body);
 }
 
-async function seedForPut(prefix, vid, userId, catId, extra = {}) {
-    await postMarkup(prefix, { video_id: vid, v: '1', user_id: userId, category_id: catId, ...extra,
+async function seedForPut(prefix, vid, userId, catId) {
+    await postMarkup(prefix, { video_id: vid, v: '1', user_id: userId, category_id: catId,
         data: { intervals: [{ start: 100, end: 130 }] } });
     runCalc(prefix || 'prv'); // is_new → false, so the edit's is_new = true is observable
     const rows = await markupRowsByUser(prefix, userId);
     assert.deepEqual(rows.intervals.map(r => [r.start, r.end]), [[100, 130]]);
-    return { video_id: vid, user_id: userId, category_id: catId, start: 100, end: 130, ...extra };
+    return { video_id: vid, user_id: userId, category_id: catId, start: 100, end: 130 };
 }
 
 async function isNewByUser(prefix, userId) {
@@ -4862,12 +4937,12 @@ test('PUT /markups: a valid edit → 200, the interval and is_new = true are sto
 });
 
 test('PUT /markups: rt and yt reject new_end <= start with 400', async () => {
-    const rt = await seedForPut('rt', '__e2e__put_markup_rt', 'put-markup-rt', cats.rt.intro, { duration: 300 });
+    const rt = await seedForPut('rt', '__e2e__put_markup_rt', 'put-markup-rt', cats.rt.intro);
     const resRt = await putMarkup('rt', { ...rt, new_end: 100 });
     assert.equal(resRt.status, 400, `rt: expected 400, got ${resRt.status} ${JSON.stringify(resRt.body)}`);
     assert.deepEqual((await markupRowsByUser('rt', 'put-markup-rt')).intervals.map(r => [r.start, r.end]), [[100, 130]]);
 
-    const yt = await seedForPut('yt', '__e2e__put_markup_yt', 'put-markup-yt', cats.yt.intro, { duration: 300 });
+    const yt = await seedForPut('yt', '__e2e__put_markup_yt', 'put-markup-yt', cats.yt.intro);
     const resYt = await putMarkup('yt', { ...yt, new_start: 0, new_end: 0 });
     assert.equal(resYt.status, 400, `yt: expected 400, got ${resYt.status} ${JSON.stringify(resYt.body)}`);
     assert.deepEqual((await markupRowsByUser('yt', 'put-markup-yt')).intervals.map(r => [r.start, r.end]), [[100, 130]]);
