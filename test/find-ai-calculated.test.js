@@ -88,3 +88,10 @@ test('servesAi: AI_FIRST on, not withdrawn, something published', () => {
         assert.equal(servesAi(row), false, JSON.stringify(row));
     }
 });
+
+test('a provider without AiVideoCalculated (rt/yt): both helpers return null', async () => {
+    load('on');
+    const { findAiCalculated, lockAiCalculated } = require('../lib/find-ai-calculated');
+    assert.equal(await findAiCalculated({}, 1), null);
+    assert.equal(await lockAiCalculated({}, 1, { transaction: {} }), null);
+});

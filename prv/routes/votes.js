@@ -9,8 +9,6 @@ const { lockAiCalculated, servesAi } = require('../../lib/find-ai-calculated');
 module.exports = function createVoteRoutes(models, { videoRepository, userService }) {
     const router = express.Router();
     const sequelize = models.Vote.sequelize;
-    // AI rows exist only for the main provider; rt/yt mount these routes without the model.
-    const lockAi = (videoId, options) => (models.AiVideoCalculated ? lockAiCalculated(models, videoId, options) : null);
 
     router.post('/vote', [
         body('video_id').isString(),
@@ -41,7 +39,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // VideoCalculated: hence VideoCalculated first, then the AI row.
         const found = await sequelize.transaction(async (transaction) => {
             const calculatedVideo = await lockVideoCalculated(models, video.id, { transaction });
-            const aiRow = await lockAi(video.id, { transaction });
+            const aiRow = await lockAiCalculated(models, video.id, { transaction });
             const served = duration != null && servesAi(aiRow) ? aiRow : calculatedVideo;
             if (!served) return false;
 
@@ -97,7 +95,7 @@ module.exports = function createVoteRoutes(models, { videoRepository, userServic
         // interval is recomputed, as on POST, in POST's lock order.
         const deleted = await sequelize.transaction(async (transaction) => {
             const calculatedVideo = await lockVideoCalculated(models, vote.video_id, { transaction });
-            const aiRow = await lockAi(vote.video_id, { transaction });
+            const aiRow = await lockAiCalculated(models, vote.video_id, { transaction });
 
             const count = await models.Vote.destroy({ where: { id: vote.id }, transaction });
             if (!count) return false; // deleted concurrently: nothing left to undo

@@ -418,6 +418,83 @@ test('prv: five markups — true middle median', async () => {
     assert.ok(findSeg(body, cats.prv.intro, 0, 5), `expected end=5 (true middle of 5 values), got ${JSON.stringify(body)}`);
 });
 
+// ── Category ids (lib/schema.js syncCategories) ───────────────────────────────
+
+// The extension sends these literals for every provider (shared/types SEGMENT_CATEGORY_IDS).
+const EXTENSION_CATEGORY_IDS = { intro: 3, sponsor: 4, self_promotion: 5, credits: 6 };
+
+test('categories: every provider has the extension\'s ids; /rt and /yt take the literal ids 3..6 for markups and votes', async () => {
+    assert.deepEqual(cats, { prv: EXTENSION_CATEGORY_IDS, rt: EXTENSION_CATEGORY_IDS, yt: EXTENSION_CATEGORY_IDS });
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_literal_category_ids`;
+        for (const id of [3, 4, 5, 6]) {
+            await postMarkup(p, { video_id: vid, v: '1', user_id: `${p}-literal-${id}`, category_id: id, duration: 600,
+                data: { intervals: [{ start: id * 60, end: id * 60 + 10 }] } });
+        }
+        runCalc(p);
+        const res = await getCalculated(p, vid, { v: '1', duration: 600 });
+        assert.equal(res.status, 200, `${p}: ${JSON.stringify(res.body)}`);
+        assert.deepEqual(res.body.map(({ category_id, start }) => [category_id, start]).sort((a, b) => a[0] - b[0]),
+            [[3, 180], [4, 240], [5, 300], [6, 360]], p);
+        await postVote(p, { video_id: vid, user_id: `${p}-literal-voter`, category_id: 6, start: 360, end: 370, vote: 1, duration: 600 });
+        assert.equal(await getJsonRating(p, vid, 6, 360, 370), 1, `${p}: a vote on credits (6)`);
+    }
+});
+
+test('categories: only the old seed 1..4 with nothing written is renumbered; any other state is left with a warning, never a failed boot', async () => {
+    const { syncCategories } = require('../lib/schema');
+    const db = `${BASE_DB}_e2e_categories`;
+    const c = adminClient();
+    await c.connect();
+    await c.query(`DROP DATABASE IF EXISTS "${db}"`);
+    await c.query(`CREATE DATABASE "${db}"`);
+    const seq = new Sequelize(db, DB_USER, DB_PASSWORD, { host: DB_HOST, port: DB_PORT, dialect: 'postgres', logging: false });
+    try {
+        const prv = definePrvModels(seq);
+        const rt = require('../rt/db')(seq);
+        const yt = require('../yt/db')(seq);
+        await seq.sync();
+        const ids = async (table) => (await seq.query(`SELECT id, category FROM ${table} ORDER BY id`))[0]
+            .map((r) => `${r.id}=${r.category}`).join(' ');
+        const seed = async (table, rows) => seq.query(`INSERT INTO ${table} (id, category, "createdAt", "updatedAt") VALUES ${
+            rows.map(([id, cat]) => `(${id}, '${cat}', now(), now())`).join(', ')}`);
+        const oldSeed = [[1, 'intro'], [2, 'sponsor'], [3, 'self_promotion'], [4, 'credits']];
+        // prv as on prod plus an extra unused id and an orphan segment on it (FK): untouched.
+        await seed('markup_categories', [[3, 'intro'], [4, 'sponsor'], [5, 'self_promotion'], [6, 'credits'], [7, 'credits']]);
+        await seq.query(`INSERT INTO prv_calculated_segments (video_id, category_id, start, "end", rating, "createdAt", "updatedAt") VALUES (NULL, 7, 0, 10, 0, now(), now())`);
+        // rt: the old seed, but an event (no FK) holds one of its ids: untouched.
+        await seed('rt_markup_categories', oldSeed);
+        await seq.query(`INSERT INTO rt_events_interval_undo (category_id, start, "end", "createdAt", "updatedAt") VALUES (1, 0, 10, now(), now())`);
+        // yt: the old seed with nothing written: renumbered.
+        await seed('yt_markup_categories', oldSeed);
+
+        const logs = [];
+        const [warn, error] = [console.warn, console.error];
+        console.warn = console.error = (...a) => logs.push(a.join(' '));
+        const broken = { MarkupCategory: { getTableName: () => 'broken_markup_categories', findAll: async () => { throw new Error('boom'); } } };
+        try {
+            await syncCategories(seq, [prv, rt, yt, broken]);
+            await syncCategories(seq, [prv, rt, yt]);
+        } finally { [console.warn, console.error] = [warn, error]; }
+
+        assert.equal(await ids('markup_categories'), '3=intro 4=sponsor 5=self_promotion 6=credits 7=credits', 'prv untouched');
+        assert.equal((await seq.query(`SELECT category_id FROM prv_calculated_segments`))[0][0].category_id, 7, 'the segment keeps its id');
+        assert.equal(await ids('rt_markup_categories'), '1=intro 2=sponsor 3=self_promotion 4=credits', 'rt untouched');
+        assert.equal(await ids('yt_markup_categories'), '3=intro 4=sponsor 5=self_promotion 6=credits', 'yt renumbered');
+        const [[{ last_value }]] = await seq.query(`SELECT last_value FROM yt_markup_categories_id_seq`);
+        assert.equal(Number(last_value), 6, 'the sequence is past the explicit ids');
+        const count = (prefix) => logs.filter((l) => l.startsWith(prefix)).length;
+        assert.equal(count('markup_categories: ids 3=intro 4=sponsor 5=self_promotion 6=credits 7=credits left as is'), 2, logs.join('\n'));
+        assert.equal(count('rt_markup_categories: old seed 1=intro 2=sponsor 3=self_promotion 4=credits left as is: rt_events_interval_undo have rows'), 2, logs.join('\n'));
+        assert.equal(count('broken_markup_categories: category sync failed'), 1, logs.join('\n'));
+        assert.equal(count('yt_markup_categories'), 0, 'yt: nothing to say');
+    } finally {
+        await seq.close();
+        await c.query(`DROP DATABASE IF EXISTS "${db}"`);
+        await c.end();
+    }
+});
+
 // ── RT Tests ──────────────────────────────────────────────────────────────────
 
 // RT: endpoints at /rt/*, the prv routes mounted with provider rt
@@ -1922,6 +1999,22 @@ test('ai-first: the AI row is served over video_calculateds with AI_FIRST=on, th
         res = await getCalculatedOn(AI_PORT, vid, { v: '1', ...extra });
         assert.equal(res.status, 200);
         assert.deepEqual(res.body.map(({ start }) => start), [100], `human path for ${JSON.stringify(extra)}`);
+    }
+});
+
+test('ai-first: rt/yt on the AI_FIRST=on app serve their human row (no AI model, no TypeError)', async () => {
+    await aiFirstServer();
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_ai_first_on`;
+        await postMarkup(p, { video_id: vid, v: '1', user_id: 'u1', category_id: cats[p].intro, duration: 300, data: { intervals: [{ start: 0, end: 10 }] } });
+        runCalc(p);
+        const lookup = async () => parseCounter((await requestOn(AI_PORT, 'GET', '/metrics')).body,
+            'video_calculated_lookup_total', { outcome: 'match', provider: p, source: 'human' });
+        const before = await lookup();
+        const res = await requestOn(AI_PORT, 'GET', `/${p}/video-calculated?${new URLSearchParams({ video_id: vid, v: '1', duration: '300' })}`);
+        assert.equal(res.status, 200, `${p}: ${JSON.stringify(res.body)}`);
+        assert.ok(findSeg(res.body, cats[p].intro, 0, 10), `${p}: ${JSON.stringify(res.body)}`);
+        assert.equal(await lookup() - before, 1, `${p}: counted with source="human"`);
     }
 });
 
@@ -3669,13 +3762,69 @@ test('rt/yt: DELETE /markups/:id sets is_new on the live markups of the video on
     }
 });
 
-test('rt/yt: views_text is ignored, never a 400, and queues nothing', async () => {
+test('rt/yt: views_text is ignored, a repeated one too, and queues nothing even for a prv-shaped id', async () => {
+    const vid = '-1_456009001';
     for (const p of ['rt', 'yt']) {
-        const vid = `__e2e__${p}_views_text`;
         const res = await getCalculated(p, vid, { v: '1', duration: 300, views_text: '1.2M views' });
         assert.equal(res.status, 204, `${p}: ${JSON.stringify(res.body)}`);
-        await sleep(200);
-        assert.equal((await dbQuery('SELECT 1 FROM prv_ai_videos WHERE native_id = $1', [vid])).length, 0, `${p}: no AI queue row`);
+        const repeated = await request('GET', `/${p}/video-calculated?video_id=${vid}&v=1&views_text=1&views_text=2`, null);
+        assert.equal(repeated.status, 204, `${p}: a non-string views_text`);
+    }
+    // The prv control: the same request queues its id, and its row landing means the rt/yt ones had their chance.
+    const control = '-1_456009002';
+    assert.equal((await getCalculated('', control, { v: '1', duration: 300, views_text: '1.2M views' })).status, 204);
+    assert.ok(await waitAiVideo(control, 1), 'prv queues the id');
+    assert.equal((await dbQuery('SELECT 1 FROM prv_ai_videos WHERE native_id = $1', [vid])).length, 0, 'no AI queue row from rt/yt');
+});
+
+test('rt/yt: a request without v is counted under the provider and takes the normal path (no "-" prefix)', async () => {
+    for (const p of ['rt', 'yt']) {
+        const vid = `__e2e__${p}_no_v`;
+        const post = await getRequestWithoutVersionCount('POST /markup', p);
+        await postMarkup(p, { video_id: vid, user_id: 'u1', category_id: cats[p].intro, duration: 300, data: { intervals: [{ start: 0, end: 10 }] } });
+        assert.equal(await getRequestWithoutVersionCount('POST /markup', p) - post, 1, `${p}: POST counted`);
+        assert.deepEqual([await countVideos(p, vid), await countVideos(p, `-${vid}`)], [1, 0], `${p}: the markup lands on the plain id`);
+        runCalc(p);
+
+        const get = await getRequestWithoutVersionCount('GET /video-calculated', p);
+        const match = await getLookupCount('match', p);
+        const res = await getCalculated(p, vid, { duration: 300 });
+        assert.equal(res.status, 200, `${p}: ${JSON.stringify(res.body)}`);
+        assert.ok(findSeg(res.body, cats[p].intro, 0, 10), `${p}: ${JSON.stringify(res.body)}`);
+        assert.equal(await getRequestWithoutVersionCount('GET /video-calculated', p) - get, 1, `${p}: GET counted`);
+        assert.equal(await getLookupCount('match', p) - match, 1, `${p}: the lookup outcome of the normal path`);
+    }
+});
+
+test('rt/yt: deleting the last markup (DELETE and its GET twin) drops video_calculateds; DELETE /videos/:id/markups removes them all', async () => {
+    const auth = { Authorization: `Bearer ${VOTE_AUTH}` };
+    const calculated = async (p, vid) => (await dbQuery(
+        `SELECT 1 FROM ${p}_video_calculateds vc JOIN ${p}_videos v ON v.id = vc.video_id WHERE v.native_id = $1`, [vid])).length;
+    for (const p of ['rt', 'yt']) {
+        for (const [twin, del] of [
+            ['DELETE', (id) => request('DELETE', `/${p}/markups/${id}`, null, auth)],
+            ['GET', (id) => request('GET', `/${p}/markups/${id}/delete?verifyBearerToken=${VOTE_AUTH}`, null)],
+        ]) {
+            const vid = `__e2e__${p}_last_markup_${twin}`;
+            const userId = `${p}-last-markup-${twin}`;
+            await postMarkup(p, { video_id: vid, v: '1', user_id: userId, category_id: cats[p].intro, data: { intervals: [{ start: 0, end: 10 }] } });
+            runCalc(p);
+            assert.equal(await calculated(p, vid), 1, `${p} ${twin}: calculated`);
+            const res = await del((await markupRowsByUser(p, userId)).markups[0].id);
+            assert.equal(res.status, 201, `${p} ${twin}: ${JSON.stringify(res.body)}`);
+            assert.equal(await calculated(p, vid), 0, `${p} ${twin}: the last markup takes video_calculateds with it`);
+            assert.equal((await markupRowsByUser(p, userId)).markups.length, 0, `${p} ${twin}: soft-deleted`);
+        }
+
+        const vid = `__e2e__${p}_video_markups_delete`;
+        for (const user of ['a', 'b']) {
+            await postMarkup(p, { video_id: vid, v: '1', user_id: `${p}-vm-${user}`, category_id: cats[p].intro, data: { intervals: [{ start: 0, end: 10 }] } });
+        }
+        runCalc(p);
+        const res = await request('DELETE', `/${p}/videos/${vid}/markups`, null, auth);
+        assert.equal(res.status, 201, `${p}: ${JSON.stringify(res.body)}`);
+        const left = await dbQuery(`SELECT 1 FROM ${p}_markups m JOIN ${p}_videos v ON v.id = m.video_id WHERE v.native_id = $1`, [vid]);
+        assert.deepEqual([left.length, await calculated(p, vid)], [0, 0], `${p}: markups and video_calculateds removed`);
     }
 });
 

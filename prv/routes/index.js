@@ -19,8 +19,8 @@ const userService = require('../service/user')(models, {
 
 const router = express.Router();
 
-router.use('/', require('./markups')(models, { markupRepository, markupTimeIntervalRepository, videoRepository }));
-router.use('/', require('./videos')(models, { videoRepository, durationLogRepository, aiRepository }));
+router.use('/', require('./markups')(models, { markupRepository, markupTimeIntervalRepository, videoRepository, legacyUnversioned: true }));
+router.use('/', require('./videos')(models, { videoRepository, durationLogRepository, aiRepository, legacyUnversioned: true }));
 router.use('/', require('./votes')(models, { videoRepository, userService }));
 router.use('/', require('./users')(models));
 router.use('/', require('./events')(models));

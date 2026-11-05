@@ -8,7 +8,8 @@ const { validateIntervals } = require('../../lib/validate-intervals');
 
 const IGNORE_MARKUPS_USER_RATING_VAL = -2;
 
-module.exports = function createMarkupRoutes(models, { markupRepository, markupTimeIntervalRepository, videoRepository, provider = 'prv' }) {
+// legacyUnversioned: prv's old clients sent no `v` and video ids without the leading `-`.
+module.exports = function createMarkupRoutes(models, { markupRepository, markupTimeIntervalRepository, videoRepository, provider = 'prv', legacyUnversioned = false }) {
     const router = express.Router();
     const sequelize = models.Markup.sequelize;
 
@@ -31,7 +32,7 @@ module.exports = function createMarkupRoutes(models, { markupRepository, markupT
 
         if (!req.body.v) {
             prometheusWrapper.incrementRequestWithoutVersion('POST /markup', provider);
-            videoId = '-' + videoId;
+            if (legacyUnversioned) videoId = '-' + videoId;
         }
 
         const video = await videoRepository.findByNativeIdAndDuration(videoId, req.body.duration);

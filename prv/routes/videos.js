@@ -10,7 +10,8 @@ const handler = require('../../middleware/handler');
 // The extension sends the counter cut to 64 characters; longer is someone else's, kept only this far.
 const VIEWS_TEXT_MAX = 128;
 
-module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository, aiRepository, provider = 'prv' }) {
+// legacyUnversioned: see markups.js; on the other providers a request without `v` takes the normal path.
+module.exports = function createVideoRoutes(models, { videoRepository, durationLogRepository, aiRepository, provider = 'prv', legacyUnversioned = false }) {
     const router = express.Router();
 
     router.get('/video-calculated', [
@@ -24,9 +25,8 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
         const duration = req.query.duration;
         const nativeFullVideoId = req.query.video_id;
 
-        if (!req.query.v) {
-            prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', provider);
-
+        if (!req.query.v) prometheusWrapper.incrementRequestWithoutVersion('GET /video-calculated', provider);
+        if (!req.query.v && legacyUnversioned) {
             let video = await models.Video.findOne({ where: { native_id: '-' + nativeFullVideoId } });
             if (!video) {
                 video = await models.Video.findOne({ where: { native_id: nativeFullVideoId } });
@@ -67,7 +67,7 @@ module.exports = function createVideoRoutes(models, { videoRepository, durationL
             return;
         }
 
-        const aiCalculated = models.AiVideoCalculated && AI_LOOKUP_OUTCOMES.has(outcome) ? await findAiCalculated(models, video.id) : null;
+        const aiCalculated = AI_LOOKUP_OUTCOMES.has(outcome) ? await findAiCalculated(models, video.id) : null;
         if (aiCalculated) {
             prometheusWrapper.incrementVideoCalculatedLookup(outcome, provider, 'ai');
             res.status(200).send(aiCalculated.data);

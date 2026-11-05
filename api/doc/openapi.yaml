@@ -43,7 +43,7 @@ components:
         `confidence` and `source: "ai"` (`"review"` once an assessor set its bounds). `rating` is the sum of the users' latest votes on the
         segment, omitted when 0.
       properties:
-        category_id: { type: integer, example: 1 }
+        category_id: { type: integer, example: 4 }
         start:       { type: integer, example: 5 }
         end:         { type: integer, example: 30 }
         rating:      { type: integer, example: 0 }
@@ -68,7 +68,7 @@ components:
         video_id:    { type: string, example: "123_456" }
         user_id:     { type: string, example: "uuid-abc" }
         prv_user_id:  { type: integer, minimum: 1, nullable: true, example: 789 }
-        category_id: { type: integer, minimum: 1, example: 1 }
+        category_id: { type: integer, minimum: 1, example: 4, description: "intro 3, sponsor 4, self_promotion 5, credits 6" }
         v:
           type: string
           example: "1"
@@ -124,7 +124,7 @@ components:
         v:
           type: string
           example: "1"
-          description: "Version string. If omitted, legacy mode activates and `-` is prepended to video_id."
+          description: "Version string. If omitted, the request is only counted (`request_without_version_total`); video_id is used as is."
         data:
           type: object
           required: [intervals]
@@ -729,7 +729,7 @@ paths:
       description: "The prv lookup (`duration` ± 2, then a null duration, then any row); `views_text` is accepted and ignored."
       parameters:
         - { name: video_id,  in: query, required: true,  schema: { type: string } }
-        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. Required for correct lookup; omit only for legacy clients." }
+        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. If omitted, the request is only counted (`request_without_version_total`) and takes the same lookup." }
         - { name: duration,  in: query, required: false, schema: { type: integer } }
         - { name: user_id,   in: query, required: false, schema: { type: string } }
         - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
@@ -915,7 +915,7 @@ paths:
       description: "The prv lookup (`duration` ± 2, then a null duration, then any row); `views_text` is accepted and ignored."
       parameters:
         - { name: video_id,  in: query, required: true,  schema: { type: string } }
-        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. Required for correct lookup; omit only for legacy clients." }
+        - { name: v,         in: query, required: false, schema: { type: string }, description: "Version string. If omitted, the request is only counted (`request_without_version_total`) and takes the same lookup." }
         - { name: duration,  in: query, required: false, schema: { type: integer } }
         - { name: user_id,   in: query, required: false, schema: { type: string } }
         - { name: prv_user_id,in: query, required: false, schema: { type: integer, minimum: 1 } }
