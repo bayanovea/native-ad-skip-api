@@ -223,8 +223,8 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0]
-      # 15 = AI_DAILY_BUDGET_VIDEOS (default 300) × $0.05: the daily budget's cost
-      # ($0.025 a video) twice over. Grafana cannot read the env: change it with the budget.
+      # 20 is above a full budget day (docs/reference/metrics.md). Grafana cannot read the env:
+      # change it with the budget.
       - uid: ai-cost-daily
         title: AiCostDaily
         condition: B
@@ -232,7 +232,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'AI spent {{ $values.A }} USD in 24 h, about 1.5× a full budget day (AI_DAILY_BUDGET_VIDEOS 230 × (~$0.052 detect + ~$0.006 second opinion)): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
+          summary: 'AI spent {{ $values.A }} USD in 24 h, above a full budget day (AI_DAILY_BUDGET_VIDEOS 700 × ~$0.0106 per video-hour of terra + Haiku ≈ $7–15): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
         data:
           - refId: A
             relativeTimeRange:

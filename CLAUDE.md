@@ -196,7 +196,7 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   the same change, then republishes both artifacts (ru `6NZNwDcYKbLV5MUgKPwc8n`, en `SQhQy8xEPoY8XaxvKL4d6o`; one file
   each, `style.css` inlined, the cross-language link pointing at the other artifact).
 - Every AI panel lives on `grafana/dashboards/ai-pipeline.json`. Its thresholds are literals tagged with their variable
-  (`500000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `200 /* AI_DAILY_BUDGET_VIDEOS */`,
+  (`500000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `700 /* AI_DAILY_BUDGET_VIDEOS */`,
   `INTERVAL '14 days' /* queue.go queueMaxAge */`) and the ad-chapter SQL with `/* chapters.go adTitle */`: changing the
   variable, the constant or the regexp updates every tagged literal in the same change.
 
@@ -296,7 +296,7 @@ AI_JUDGE_AUTO_WITHDRAW (on)               # off = an LLM withdraw only sends to 
 AI_JUDGE_MIN_INTERVAL (6h)                # Go duration: no LLM call within it of the video's last judgement (judged_at, any judgement)
 AI_JUDGE_MODEL, AI_MODEL (claude-sonnet-5-5)
 AI_MIN_VIEWS (500000), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
-AI_DAILY_BUDGET_VIDEOS (300; prod 230 since 2026-11-01 ≈ $12/day at ~$0.052/video, + ~$1.4 second opinion), AI_BATCH_MAX (5)
+AI_DAILY_BUDGET_VIDEOS (300; prod 700 since 2026-11-06 ≈ $7–15/day at terra + Haiku ~$0.0106 per video-hour), AI_BATCH_MAX (5)
 AI_MIN_SEGMENT_SECONDS (5)                # int ≥ 1: shorter AI segments go to `hidden` (reason short); read by the ai command (invalid = exit 1) and Node (lib/ai-rules.js, once on load, invalid throws)
 AI_FETCH_PAUSE (40s)                      # Go duration: mean pause before each video's prv fetch on a cron tick, ± 50 % jitter; e2e sets 0
 AI_CLIENT (anthropic)                     # judge and audit: anthropic | messages (both Messages API) | fixture (tests); the detector's fallback
