@@ -80,7 +80,8 @@ module.exports = function createAiRepository(models, sequelize) {
          * moved), in `data` with the rating of the votes on the new category and bounds, or in `hidden` with reason
          * `short` when under MIN_SEGMENT_SECONDS. Served entries of the same category lying entirely inside `to`
          * are absorbed (the pieces of one ad become this entry; their votes and items are left behind); a partial
-         * overlap or a covered entry of another category is refused (ReviewInputError, nothing written). A row
+         * overlap or a covered entry of another category is refused (ReviewInputError, nothing written), except a keep
+         * on an entry that is not served, whose `to` lies inside a wider served entry: that changes nothing. A row
          * withdrawn by judge or review is served again once every served entry has a keep verdict. Idempotent;
          * returns `{ changed, absorbed }`.
          */
@@ -113,6 +114,8 @@ module.exports = function createAiRepository(models, sequelize) {
                 if (to.end - to.start < MIN_SEGMENT_SECONDS) {
                     if (!alreadyShort) toHidden = { ...entry, reason: HIDDEN_REASONS.SHORT };
                 } else if (!alreadyServed) {
+                    // The stretch is served already by a wider entry, and this entry stays where it is.
+                    if (inData === -1 && others.data.some(e => e.start <= to.start && to.end <= e.end && e.end - e.start > to.end - to.start)) return none;
                     const overlapping = others.data.filter(e => e.start < to.end && to.start < e.end);
                     if (overlapping.some(e => e.category_id !== category.id || e.start < to.start || to.end < e.end)) {
                         throw new ReviewInputError(`bounds ${to.start}-${to.end} overlap another AI segment of the video`, 'bounds_overlap');

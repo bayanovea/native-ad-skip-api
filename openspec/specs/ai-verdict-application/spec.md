@@ -25,7 +25,7 @@ When a keep verdict with bounds covers other served entries of the verdict's cat
 - **THEN** a later verdict on that item changes no entry (its effective bounds find none), and only the merging item's verdict drives the merged entry
 
 ### Requirement: A partial overlap or another category is still refused
-A keep whose bounds overlap a served entry without covering it entirely, or cover a served entry of another category, SHALL be refused with the `bounds_overlap` error and nothing written.
+A keep whose bounds overlap a served entry without covering it entirely, or cover a served entry of another category, SHALL be refused with the `bounds_overlap` error and nothing written. The exception is a keep on an entry that is not served, with bounds lying inside a wider served entry of any category: the stretch is served already, so the save SHALL succeed and change no entry.
 
 #### Scenario: Partial overlap
 - **WHEN** the row serves sponsor 1258–1275 and a sponsor keep with bounds 1237–1270 is saved on another item
@@ -34,6 +34,10 @@ A keep whose bounds overlap a served entry without covering it entirely, or cove
 #### Scenario: Covered entry of another category
 - **WHEN** the row serves self_promotion 1258–1275 and a sponsor keep with bounds 1237–1297 is saved on another item
 - **THEN** the save fails with `bounds_overlap` and the row is unchanged
+
+#### Scenario: A hidden entry inside a wider served one
+- **WHEN** the row serves sponsor 100–200 and hides sponsor 150–160, and a keep is saved on the hidden entry's item
+- **THEN** the save succeeds, the row is unchanged and the entry stays hidden
 
 ### Requirement: The review page warns before an absorbing save
 On an ai item with an AI row, the review page SHALL know the row's served entries and, while the typed or selected bounds cover other served entries of the chosen keep category, SHALL show how many segments the save will merge into this one and that their votes are lost. The warning never blocks the save.

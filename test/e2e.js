@@ -2822,6 +2822,33 @@ test('ai review merge: a keep whose bounds cover same-category served entries ab
     assert.deepEqual([res.status, res.body.ai_applied, res.body.absorbed], [201, true, 0]);
 });
 
+test('ai review merge: a keep on a hidden entry inside a wider served one changes nothing (201, not applied); a partial overlap stays 400, the served entry\'s exact bounds absorb', async () => {
+    const vid = '-1_456000522';
+    const batch = 'e2e-ai-covered';
+    const sp = cats.prv.sponsor;
+    const entries = [[100, 200], [150, 160], [120, 130], [170, 180], [190, 210], [110, 115]];
+    const { videoId, items: [, plain, otherCategory, moved, partial, exact] } = await aiReviewSeed(vid, batch, entries);
+    const [served, ...hidden] = entries.map(([start, end], i) => ({ category_id: sp, start, end, confidence: 'high', source: 'ai', ...(i && { reason: 'unconfirmed' }) }));
+    const seeded = { data: [served], hidden };
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = $2, hidden = $3 WHERE video_id = $1`, [videoId, JSON.stringify(seeded.data), JSON.stringify(seeded.hidden)]);
+    const row = async () => (await dbQuery(`SELECT data, hidden FROM prv_ai_video_calculateds WHERE video_id = $1`, [videoId]))[0];
+    await takeReview(batch);
+
+    for (const [item, verdict, bounds] of [[plain, 'sponsor', null], [otherCategory, 'self_promotion', null], [moved, 'sponsor', { start: 170, end: 185, source: 'typed' }]]) {
+        const res = await decideBounds(item, verdict, bounds);
+        assert.deepEqual([res.status, res.body.ai_applied, res.body.absorbed], [201, false, 0], JSON.stringify(res.body));
+        assert.deepEqual(await row(), seeded, 'row unchanged');
+    }
+
+    const res = await decideBounds(partial, 'sponsor', null);
+    assert.deepEqual([res.status, res.body], [400, RU.text('error_bounds_overlap')]);
+    assert.deepEqual(await row(), seeded);
+
+    const onto = await decideBounds(exact, 'sponsor', { start: 100, end: 200, source: 'typed' });
+    assert.deepEqual([onto.status, onto.body.ai_applied, onto.body.absorbed], [201, true, 1], JSON.stringify(onto.body));
+    assert.deepEqual(await aiEntries(videoId), [[sp, 100, 200, 'review', undefined]]);
+});
+
 test('ai judge: a keep verdict that moved the entry is its baseline: every entry kept → ok by rules, the old bounds\' signals stay behind', async () => {
     const vid = '-1_456000412';
     const sp = cats.prv.sponsor;
