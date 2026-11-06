@@ -26,9 +26,9 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai-judge-<date>` batches, `withdrawn` > 0 is expected and fine (a judge withdraw, restored by keep verdicts).
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
-- **Cost**: `usd_24h` < 20 (AiCostDaily since 2026-11-01); `runs_24h` ≤ 230 (prod `AI_DAILY_BUDGET_VIDEOS` since
-  2026-11-01, 200 from 2026-10-28, code default 300). Real price is ~$0.045–0.05/video plus ~$0.003 for the
-  second opinion, so a full 230-video day ≈ $11–12. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
+- **Cost**: `usd_24h` < 25 (AiCostDaily since 2026-11-07, 20 before and after 2026-11-09); `runs_24h` ≤ 1100
+  (prod `AI_DAILY_BUDGET_VIDEOS` 2026-11-07 to 11-09, then ~260; code default 300), ~1060 a day is the tick's ceiling at
+  `AI_BATCH_MAX` 5. Real price is ~$0.011–0.014/video (terra) plus ~$0.0035 (Haiku). `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
   `fetching` rows included, until the rolling window drops under it.
 - **Capacity**: `queue_now` (eligible `seen` + due retries) growing from run to run while `budget_pct` sits
   at 100 means the eligible inflow exceeds the budget: raise `AI_DAILY_BUDGET_VIDEOS` or the thresholds.
@@ -38,10 +38,10 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   videos, fine. yt-dlp `'NoneType' object has no attribute 'split'` / `expected string or bytes-like object` =
   extractor bug on single pages (3 videos on 2026-10-25); many at once or every fetch failing = host ban, see
   `ai detect: every fetch of the tick failed` in docker logs and `AI_DETECT_ENABLED=off`.
-- **Second opinion** (`AI_SECOND_ENABLED=on` since 2026-11-01, `gpt-6-luna`): `second_errors_24h` 0 (a burst of
-  429 = the OpenAI project limit or balance is out, videos then publish unconfirmed); `second_confirmed_pct` ~85–95
-  (held-out: 280 of 311 at IoU 0.3); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
-  `ai-second-<date>`; `second_cost` ~$0.003–0.006 per video.
+- **Second opinion** (`AI_SECOND_ENABLED=on`, `claude-haiku-5-5` since 2026-11-05): `second_errors_24h` a few
+  invalid answers at most (a burst = the Anthropic balance or API, videos then publish unconfirmed); `second_confirmed_pct`
+  ~75 (2026-11-07); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
+  `ai-second-<date>`; `second_cost` ~$0.0035 per video.
 - **Quality signals** (only meaningful once users see AI segments, i.e. `ai_first 1`): `votes` `< 0`,
   `against_table`, `withdrawn`, `verdicts not_ad`. `misses` = videos the model called clean but users marked.
 

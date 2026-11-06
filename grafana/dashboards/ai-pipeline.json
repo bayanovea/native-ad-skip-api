@@ -1062,7 +1062,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH v AS (\n  SELECT a.native_id, a.status, a.next_attempt_at, a.first_seen_at, COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN native_id !~ '^-' AND status IN ('seen', 'queued', 'fetching') THEN 0\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' AND NOT first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */ THEN 1.5\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (0, '0. Видео пользователя (id без «-»): AI не запускаем'),\n  (1, '1. Просмотров / запросов недостаточно'),\n  (1.5, '2а. Не дождались (старше 14 дней)'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
+          "rawSql": "WITH v AS (\n  SELECT a.native_id, a.status, a.next_attempt_at, a.first_seen_at, COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AS eligible,\n         c.video_id, CASE WHEN c.video_id IS NULL THEN NULL ELSE jsonb_array_length(c.data) END AS n_entries,\n         EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS open_review\n  FROM prv_ai_videos a LEFT JOIN prv_ai_video_calculateds c ON c.native_id = a.native_id\n), s AS (\n  SELECT CASE\n    WHEN native_id !~ '^-' AND status IN ('seen', 'queued', 'fetching') THEN 0\n    WHEN status = 'seen' AND NOT eligible THEN 1\n    WHEN status = 'seen' AND NOT first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */ THEN 1.5\n    WHEN status = 'seen' OR (status = 'queued' AND next_attempt_at <= NOW()) THEN 2\n    WHEN status = 'queued' THEN 3\n    WHEN status = 'fetching' THEN 4\n    WHEN status = 'no_track' THEN 5\n    WHEN status = 'timeline_unreliable' THEN 6\n    WHEN status = 'failed' THEN 7\n    WHEN status = 'detecting' THEN 8\n    WHEN status = 'published' AND COALESCE(n_entries, 0) = 0 THEN 9\n    WHEN status = 'withdrawn' THEN 10\n    WHEN status = 'published' AND open_review THEN 11\n    WHEN status = 'published' THEN 12\n    ELSE 13 END AS ord\n  FROM v\n), names(ord, stage) AS (VALUES\n  (0, '0. Видео пользователя (id без «-»): AI не запускаем'),\n  (1, '1. Просмотров / запросов недостаточно'),\n  (1.5, '2а. Не дождались (старше 14 дней)'),\n  (2, '2. В очереди на обкачку субтитров'),\n  (3, '3. Ждут повторной попытки (нет дорожки / ошибка yt-dlp)'),\n  (4, '4. Качаем субтитры'),\n  (5, '5. Субтитров нет → только пользовательская разметка'),\n  (6, '6. Таймлайн ненадёжен → только пользовательская разметка'),\n  (7, '7. Ошибка (yt-dlp 3 раза / модель) → только пользовательская'),\n  (8, '8. Субтитры есть, ждём ответ модели'),\n  (9, '9. Ответ без отдаваемых сегментов (ничего не нашла / всё скрыто)'),\n  (10, '10. Отозвано (судья / асессоры / админ)'),\n  (11, '11. Готовы к отдаче, но есть открытые вопросы у асессоров'),\n  (12, '12. Готовы к отдаче'),\n  (13, '?. Прочее (не должно быть)'))\nSELECT n.stage, COUNT(s.ord) AS \"видео\"\nFROM names n LEFT JOIN s ON s.ord = n.ord\nGROUP BY n.ord, n.stage ORDER BY n.ord",
           "refId": "A"
         }
       ],
@@ -1209,7 +1209,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false)",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false)",
           "refId": "A"
         }
       ],
@@ -1272,7 +1272,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE native_id LIKE '-%' AND status = 'seen' AND views_max IS NOT NULL AND views_max < 500000 /* AI_MIN_VIEWS */ AND requests < 20 /* AI_MIN_REQUESTS */",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos WHERE native_id LIKE '-%' AND status = 'seen' AND views_max IS NOT NULL AND views_max < 200000 /* AI_MIN_VIEWS */ AND requests < 20 /* AI_MIN_REQUESTS */",
           "refId": "A"
         }
       ],
@@ -1401,7 +1401,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT LEAST(a.requests, 20 /* AI_MIN_REQUESTS */)::text AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false)\nGROUP BY LEAST(a.requests, 20 /* AI_MIN_REQUESTS */) ORDER BY LEAST(a.requests, 20 /* AI_MIN_REQUESTS */)",
+          "rawSql": "SELECT LEAST(a.requests, 20 /* AI_MIN_REQUESTS */)::text AS \"запросов\", COUNT(*) AS \"видео\"\nFROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND NOT COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false)\nGROUP BY LEAST(a.requests, 20 /* AI_MIN_REQUESTS */) ORDER BY LEAST(a.requests, 20 /* AI_MIN_REQUESTS */)",
           "refId": "A"
         }
       ],
@@ -1546,7 +1546,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND ((a.status = 'seen' AND COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */) OR (a.status = 'queued' AND a.next_attempt_at <= NOW()))",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND ((a.status = 'seen' AND COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */) OR (a.status = 'queued' AND a.next_attempt_at <= NOW()))",
           "refId": "A"
         }
       ],
@@ -1807,7 +1807,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT 100.0 * COUNT(*) / 230 /* AI_DAILY_BUDGET_VIDEOS */ AS pct FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT 100.0 * COUNT(*) / 1100 /* AI_DAILY_BUDGET_VIDEOS */ AS pct FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'",
           "refId": "A"
         }
       ],
@@ -2259,7 +2259,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT CASE b WHEN 0 THEN '< 500k (по запросам)' WHEN 1 THEN '500k–1M' WHEN 2 THEN '1M–2M' WHEN 3 THEN '2M–5M' WHEN 4 THEN '5M–10M' WHEN 5 THEN '≥ 10M' ELSE 'только по запросам' END AS \"просмотры\", COUNT(*) AS \"видео\" FROM (SELECT COALESCE(width_bucket(a.views_max, ARRAY[500000, 1000000, 2000000, 5000000, 10000000]), 6) AS b FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND ((a.status = 'seen' AND COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */) OR (a.status = 'queued' AND a.next_attempt_at <= NOW()))) q GROUP BY b ORDER BY b",
+          "rawSql": "SELECT CASE b WHEN 0 THEN '< 200k (по запросам)' WHEN 1 THEN '200k–500k' WHEN 2 THEN '500k–1M' WHEN 3 THEN '1M–2M' WHEN 4 THEN '2M–5M' WHEN 5 THEN '5M–10M' WHEN 6 THEN '≥ 10M' ELSE 'только по запросам' END AS \"просмотры\", COUNT(*) AS \"видео\" FROM (SELECT COALESCE(width_bucket(a.views_max, ARRAY[200000, 500000, 1000000, 2000000, 5000000, 10000000]), 7) AS b FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND ((a.status = 'seen' AND COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at > NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */) OR (a.status = 'queued' AND a.next_attempt_at <= NOW()))) q GROUP BY b ORDER BY b",
           "refId": "A"
         }
       ],
@@ -2322,7 +2322,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND COALESCE(a.views_max >= 500000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at <= NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_videos a WHERE a.native_id LIKE '-%' AND a.status = 'seen' AND COALESCE(a.views_max >= 200000 /* AI_MIN_VIEWS */ OR a.requests >= 20 /* AI_MIN_REQUESTS */, false) AND a.first_seen_at <= NOW() - INTERVAL '14 days' /* queue.go queueMaxAge */",
           "refId": "A"
         }
       ],
