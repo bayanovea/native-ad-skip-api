@@ -132,6 +132,8 @@ jobs:
         AI_MIN_VIEWS: ${{ vars.AI_MIN_VIEWS }}
         AI_MIN_REQUESTS: ${{ vars.AI_MIN_REQUESTS }}
         AI_DAILY_BUDGET_VIDEOS: ${{ vars.AI_DAILY_BUDGET_VIDEOS }}
+        AI_BATCH_MAX: ${{ vars.AI_BATCH_MAX }}
+        AI_FETCH_PAUSE: ${{ vars.AI_FETCH_PAUSE }}
         AI_MIN_SEGMENT_SECONDS: ${{ vars.AI_MIN_SEGMENT_SECONDS }}
         AI_MODEL: ${{ vars.AI_MODEL }}
         AI_DETECT_CLIENT: ${{ vars.AI_DETECT_CLIENT }}
@@ -184,6 +186,8 @@ jobs:
             AI_MIN_VIEWS "$AI_MIN_VIEWS" \
             AI_MIN_REQUESTS "$AI_MIN_REQUESTS" \
             AI_DAILY_BUDGET_VIDEOS "$AI_DAILY_BUDGET_VIDEOS" \
+            AI_BATCH_MAX "$AI_BATCH_MAX" \
+            AI_FETCH_PAUSE "$AI_FETCH_PAUSE" \
             AI_MIN_SEGMENT_SECONDS "$AI_MIN_SEGMENT_SECONDS" \
             AI_MODEL "$AI_MODEL" \
             AI_DETECT_CLIENT "$AI_DETECT_CLIENT" \

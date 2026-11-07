@@ -205,7 +205,7 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   the same change, then republishes both artifacts (ru `6NZNwDcYKbLV5MUgKPwc8n`, en `SQhQy8xEPoY8XaxvKL4d6o`; one file
   each, `style.css` inlined, the cross-language link pointing at the other artifact).
 - Every AI panel lives on `grafana/dashboards/ai-pipeline.json`. Its thresholds are literals tagged with their variable
-  (`200000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `1100 /* AI_DAILY_BUDGET_VIDEOS */`,
+  (`100000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `2000 /* AI_DAILY_BUDGET_VIDEOS */`,
   `INTERVAL '14 days' /* queue.go queueMaxAge */`) and the ad-chapter SQL with `/* chapters.go adTitle */`: changing the
   variable, the constant or the regexp updates every tagged literal in the same change.
 
@@ -305,17 +305,18 @@ AI_JUDGE_ENABLED (off)                    # on = the ai judge cron tick works
 AI_JUDGE_AUTO_WITHDRAW (on)               # off = an LLM withdraw only sends to review; no effect while the judge is off
 AI_JUDGE_MIN_INTERVAL (6h)                # Go duration: no LLM call within it of the video's last judgement (judged_at, any judgement)
 AI_JUDGE_MODEL, AI_MODEL (claude-sonnet-5-5)
-AI_MIN_VIEWS (500000; prod 200000 2026-11-07 to 11-09, to spend the OpenAI allowance), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
-AI_DAILY_BUDGET_VIDEOS (300; prod 1100 from 2026-11-07 to 11-09 ≈ $16–19/day at terra + Haiku ~$0.015–0.018 a video and ~1060 runs a day at AI_BATCH_MAX 5, then ~260 ≈ $100/month of OpenAI), AI_BATCH_MAX (5)
+AI_MIN_VIEWS (500000; prod 100000 2026-11-07 to 11-09, to spend the OpenAI allowance), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
+AI_DAILY_BUDGET_VIDEOS (300; prod 2000 from 2026-11-07 to 11-09 ≈ $26/day at terra alone ~$0.013 a video, then ~250 ≈ $100/month of OpenAI), AI_BATCH_MAX (5; prod 10 2026-11-07 to 11-09, ~2000 runs a day)
 AI_MIN_SEGMENT_SECONDS (5)                # int ≥ 1: shorter AI segments go to `hidden` (reason short); read by the ai command (invalid = exit 1) and Node (lib/ai-rules.js, once on load, invalid throws)
-AI_FETCH_PAUSE (40s)                      # Go duration: mean pause before each video's prv fetch on a cron tick, ± 50 % jitter; e2e sets 0
+AI_FETCH_PAUSE (40s)                      # Go duration: mean pause before each video's prv fetch on a cron tick, ± 50 % jitter; e2e sets 0;
+                                          # prod 15s 2026-11-07 to 11-09 (10 fetches must fit the 5-minute tick)
 AI_CLIENT (anthropic)                     # judge and audit: anthropic | messages (both Messages API) | fixture (tests); the detector's fallback
 AI_DETECT_CLIENT (AI_CLIENT)              # anthropic = Claude Batches API on the cron tick | messages | openai-batch = OpenAI Batch API | openai | fixture;
                                           # the manual run is synchronous; AI_MODEL must be the transport's vendor's (claude-* = Anthropic), else exit 1
 AI_PROMPT (/app/ai/prompts/v2.2.md), AI_JUDGE_PROMPT (/app/ai/prompts/judge-v1.md), AI_FIXTURE_DIR (/app/test/fixtures/ai)
 YTDLP_BIN (/usr/local/bin/yt-dlp)         # the image's pinned static release, absolute because cron's PATH lacks /usr/local/bin; e2e points it to the stub
 ANTHROPIC_API_KEY                         # env only (no key file); AI_CLIENT=anthropic|messages without it is a startup error (exit 1)
-AI_SECOND_ENABLED (off)                   # on = the second opinion before publish (ai detect)
+AI_SECOND_ENABLED (off)                   # on = the second opinion before publish (ai detect); prod off 2026-11-07 to ~11-19 (Claude spend)
 AI_SECOND_CLIENT (openai)                 # openai | anthropic (Messages) | fixture (<native_id>.second.json, tests); AI_SECOND_MODEL must match its vendor
 AI_SECOND_MODEL (gpt-6-luna)              # the second model's id (price from detector.Prices; unknown = cost 0 and a log line)
 AI_CHAPTERS_ENABLED (off)                 # on = the chapter check after the second opinion (ai detect); chapters are stored either way
@@ -339,7 +340,7 @@ API_HOST, LANDING_HOST                    # the public host names (secrets); onl
                                           # bind-mounted prometheus.yml and dashboards (see Deployment → Render), never the containers
 ```
 
-Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
+Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
 
 ### Deployment
 

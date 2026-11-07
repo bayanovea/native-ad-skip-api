@@ -26,9 +26,9 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai-judge-<date>` batches, `withdrawn` > 0 is expected and fine (a judge withdraw, restored by keep verdicts).
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
-- **Cost**: `usd_24h` < 25 (AiCostDaily since 2026-11-07, 20 before and after 2026-11-09); `runs_24h` ≤ 1100
-  (prod `AI_DAILY_BUDGET_VIDEOS` 2026-11-07 to 11-09, then ~260; code default 300), ~1060 a day is the tick's ceiling at
-  `AI_BATCH_MAX` 5. Real price is ~$0.011–0.014/video (terra) plus ~$0.0035 (Haiku). `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
+- **Cost**: `usd_24h` < 30 (AiCostDaily since 2026-11-07, 20 before and after 2026-11-09); `runs_24h` ≤ 2000
+  (prod `AI_DAILY_BUDGET_VIDEOS` 2026-11-07 to 11-09 at `AI_BATCH_MAX` 10 / `AI_FETCH_PAUSE` 15s, then ~250; code
+  default 300). Real price is ~$0.013/video (terra), plus ~$0.0035 (Haiku) while the second opinion is on. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
   `fetching` rows included, until the rolling window drops under it.
 - **Capacity**: `queue_now` (eligible `seen` + due retries) growing from run to run while `budget_pct` sits
   at 100 means the eligible inflow exceeds the budget: raise `AI_DAILY_BUDGET_VIDEOS` or the thresholds.
@@ -38,7 +38,8 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   videos, fine. yt-dlp `'NoneType' object has no attribute 'split'` / `expected string or bytes-like object` =
   extractor bug on single pages (3 videos on 2026-10-25); many at once or every fetch failing = host ban, see
   `ai detect: every fetch of the tick failed` in docker logs and `AI_DETECT_ENABLED=off`.
-- **Second opinion** (`AI_SECOND_ENABLED=on`, `claude-haiku-5-5` since 2026-11-05): `second_errors_24h` a few
+- **Second opinion** (`AI_SECOND_ENABLED=on`, `claude-haiku-5-5` since 2026-11-05; off on prod 2026-11-07 to ~11-19,
+  then `second_*` stay flat and every entry publishes without a veto): `second_errors_24h` a few
   invalid answers at most (a burst = the Anthropic balance or API, videos then publish unconfirmed); `second_confirmed_pct`
   ~75 (2026-11-07); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
   `ai-second-<date>`; `second_cost` ~$0.0035 per video.

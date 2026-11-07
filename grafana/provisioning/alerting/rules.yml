@@ -223,7 +223,7 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0]
-      # 25 is above a full budget day (docs/reference/metrics.md). Grafana cannot read the env:
+      # 30 is above a full budget day (docs/reference/metrics.md). Grafana cannot read the env:
       # change it with the budget.
       - uid: ai-cost-daily
         title: AiCostDaily
@@ -232,7 +232,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'AI spent {{ $values.A }} USD in 24 h, above a full day at the tick ceiling (AI_DAILY_BUDGET_VIDEOS 1100, ~1060 runs a day at AI_BATCH_MAX 5 × ~$0.015–0.018 of terra + Haiku ≈ $16–19): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
+          summary: 'AI spent {{ $values.A }} USD in 24 h, above a full budget day (AI_DAILY_BUDGET_VIDEOS 2000 × ~$0.013 of terra alone ≈ $26): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
         data:
           - refId: A
             relativeTimeRange:
@@ -255,7 +255,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [25]
+                    params: [30]
       # No series means node-exporter is not scraped: that alerts too.
       - uid: host-disk-low
         title: HostDiskLow
