@@ -26,8 +26,8 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai-judge-<date>` batches, `withdrawn` > 0 is expected and fine (a judge withdraw, restored by keep verdicts).
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
-- **Cost**: `usd_24h` < 30 (AiCostDaily since 2026-11-07, 20 before and after 2026-11-09); `runs_24h` ≤ 2000
-  (prod `AI_DAILY_BUDGET_VIDEOS` 2026-11-07 to 11-09 at `AI_BATCH_MAX` 10 / `AI_FETCH_PAUSE` 15s, then ~250; code
+- **Cost**: `usd_24h` < 35 (AiCostDaily 30 since 2026-11-07, 35 on 11-09, 20 before and after); `runs_24h` ≤ 2500
+  (prod `AI_DAILY_BUDGET_VIDEOS` 2026-11-07 to 11-09 at `AI_BATCH_MAX` 10 / `AI_FETCH_PAUSE` 15s, 14 / 10s on 11-09, then ~250; code
   default 300). Real price is ~$0.013/video (terra), plus ~$0.0035 (Haiku) while the second opinion is on. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
   `fetching` rows included, until the rolling window drops under it.
 - **Capacity**: `queue_now` (eligible `seen` + due retries) growing from run to run while `budget_pct` sits
