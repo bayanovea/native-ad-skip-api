@@ -102,12 +102,12 @@ run)
   # (a fetch stopped halfway is sent, then the rest after a re-run of fetch).
   touch "$dir/sent.txt"
   while read -r id; do
-    if [ -s "$dir/$id.info.json" ] && ! grep -qxF "$id" "$dir/sent.txt"; then echo "$id"; fi
+    if [ -s "$dir/$id.info.json" ] && ! grep -qxF -e "$id" "$dir/sent.txt"; then echo "$id"; fi
   done < "$dir/ids.txt" > "$dir/order.txt"
   [ -s "$dir/order.txt" ] || { echo "nothing new fetched in $dir" >&2; exit 1; }
   (cd "$dir" && { echo order.txt; sed 's/$/.info.json/' order.txt; sed 's/$/.ru.vtt/' order.txt |
     while read -r f; do if [ -e "$f" ]; then echo "$f"; fi; done; } |
-    COPYFILE_DISABLE=1 tar czf - -T -) |
+    COPYFILE_DISABLE=1 tar czf - --no-xattrs -T -) |
     ssh "$PROD_HOST" "mkdir -p $remote/data && tar xzf - -C $remote/data"
   scp -q "$(dirname "$0")/geo-subs-host.sh" "$PROD_HOST:$remote/"
   ssh "$PROD_HOST" "APP_CONTAINER=$APP_CONTAINER nohup bash $remote/geo-subs-host.sh $remote \
