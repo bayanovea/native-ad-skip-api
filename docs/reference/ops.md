@@ -24,7 +24,7 @@ flock /tmp/ai-detect.lock /app/prv/commands/ai/ai detect <native_id>
 export PROD_HOST=root@${HOST_IP} APP_CONTAINER=<project>-app-1
 scripts/geo-subs.sh list ~/Web/data/geo-subs/$(date +%F)    # VPN off
 scripts/geo-subs.sh fetch ~/Web/data/geo-subs/<date>        # VPN on; Ctrl-C and a re-run continue where it stopped
-scripts/geo-subs.sh run ~/Web/data/geo-subs/<date>          # VPN off; then `status` for the host log
+scripts/geo-subs.sh run ~/Web/data/geo-subs/<date>          # VPN off; only videos not sent before; `status` = host log
 # Rule change (AI_MIN_SEGMENT_SECONDS via deploy, or accepted() in code): regate every AI row once, under the detect
 # lock so no tick publishes meanwhile; --backfill (once, before the first regate and at the threshold the rows were
 # published with, 5) first fills an empty hidden from the run:

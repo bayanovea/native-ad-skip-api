@@ -98,16 +98,22 @@ fetch)
 run)
   need_prod
   remote=geo-subs-$(date +%Y%m%d-%H%M%S)
-  # Hand-run order = ids.txt (views first), only the videos fetched here.
-  while read -r id; do [ -s "$dir/$id.info.json" ] && echo "$id"; done < "$dir/ids.txt" > "$dir/order.txt"
-  [ -s "$dir/order.txt" ] || { echo "nothing fetched in $dir" >&2; exit 1; }
-  (cd "$dir" && { echo order.txt; ls | grep -E '\.(info\.json|ru\.vtt)$'; } |
+  # Hand-run order = ids.txt (views first), only the videos fetched here and not sent by an earlier run
+  # (a fetch stopped halfway is sent, then the rest after a re-run of fetch).
+  touch "$dir/sent.txt"
+  while read -r id; do
+    if [ -s "$dir/$id.info.json" ] && ! grep -qxF "$id" "$dir/sent.txt"; then echo "$id"; fi
+  done < "$dir/ids.txt" > "$dir/order.txt"
+  [ -s "$dir/order.txt" ] || { echo "nothing new fetched in $dir" >&2; exit 1; }
+  (cd "$dir" && { echo order.txt; sed 's/$/.info.json/' order.txt; sed 's/$/.ru.vtt/' order.txt |
+    while read -r f; do if [ -e "$f" ]; then echo "$f"; fi; done; } |
     COPYFILE_DISABLE=1 tar czf - -T -) |
     ssh "$PROD_HOST" "mkdir -p $remote/data && tar xzf - -C $remote/data"
   scp -q "$(dirname "$0")/geo-subs-host.sh" "$PROD_HOST:$remote/"
   ssh "$PROD_HOST" "APP_CONTAINER=$APP_CONTAINER nohup bash $remote/geo-subs-host.sh $remote \
     > $remote/run.log 2>&1 < /dev/null &"
   echo "$remote" > "$dir/remote"
+  cat "$dir/order.txt" >> "$dir/sent.txt"
   echo "started $(grep -c . "$dir/order.txt") videos on the host; log: ~/$remote/run.log"
   ;;
 status)
