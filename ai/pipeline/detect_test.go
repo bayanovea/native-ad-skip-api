@@ -285,6 +285,13 @@ func expectWaiting(mock sqlmock.Sqlmock) {
 			AddRow("-1_456000002", "msgbatch_1", 12, 8, "claude-sonnet-5-5", []byte(`{"meta":{},"cues":[]}`), nil))
 }
 
+// expectPublishBegin is finish's start: the transaction, then publishLock before any row lock.
+func expectPublishBegin(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_xact_lock(hashtext('ai detect publish'))`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
 func TestPollLeavesARunningBatchForALaterTick(t *testing.T) {
 	r, mock, f := batchRun(t)
 	expectWaiting(mock)
@@ -315,7 +322,7 @@ func TestPollResolvesAnEndedBatchAFailedResultIsTheVideosOutcome(t *testing.T) {
 	f.ended = true
 	expectWaiting(mock)
 	for _, id := range []string{"-1_456000001", "-1_456000002"} {
-		mock.ExpectBegin()
+		expectPublishBegin(mock)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).WithArgs(id).
 			WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
 		mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -349,7 +356,7 @@ func expectWaitingModel(mock sqlmock.Sqlmock, model string) {
 
 // An empty answer publishes nothing: the run's cost and the published mark are what the test reads.
 func expectPublishedEmpty(mock sqlmock.Sqlmock, cost float64) {
-	mock.ExpectBegin()
+	expectPublishBegin(mock)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
 	mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WithArgs(int64(11), nil, sqlmock.AnyArg(), cost).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -499,7 +506,7 @@ func TestSyncUnusableAnswerFailsTheVideo(t *testing.T) {
 	r.batch, r.client = nil, syncClient{res: detector.Result{Usage: detector.Usage{InputTokens: 10000, OutputTokens: 64000}},
 		err: errors.New("stop_reason max_tokens")}
 	expectStartRun(mock, "-1_456000001", 11)
-	mock.ExpectBegin()
+	expectPublishBegin(mock)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).WithArgs("-1_456000001").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
 	mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))

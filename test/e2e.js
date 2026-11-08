@@ -1877,6 +1877,21 @@ test('ai detect: a yt-dlp failure is the video’s (retried later, not a failed 
     await dbQuery(`UPDATE prv_ai_videos SET status = 'queued', next_attempt_at = NOW() + INTERVAL '1 day' WHERE native_id = '-1_456000207'`);
 });
 
+test('ai detect: "its creator has been blocked" fails the video at the first attempt (no retry)', async () => {
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000217', 600000, 1)`);
+    const r = runAi(['detect']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /ai detect: -1_456000217 failed after fetch attempt 1: .*its creator has been blocked/);
+    const v = await aiVideo('-1_456000217');
+    assert.deepEqual([v.status, v.attempts, v.next_attempt_at], ['failed', 1, null]);
+    assert.match(v.last_error, /its creator has been blocked/);
+});
+
+test('ai detect: the image\'s crontab keeps two ticks apart with flock -n', () => {
+    const tab = fs.readFileSync('/etc/cron.d/my-crontab', 'utf8');
+    assert.match(tab, /^\*\/5 \* \* \* \* flock -n \/tmp\/ai-detect\.lock \/app\/prv\/commands\/ai\/ai detect >> \/proc\/1\/fd\/1 2>&1$/m);
+});
+
 test('ai detect: a tick whose every fetch fails while a published video still fetches is the videos’: attempts spent, no failed tick', async () => {
     await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ('-1_456000214', 600000, 1), ('-1_456000215', 600000, 1)`);
     const r = runAi(['detect']);

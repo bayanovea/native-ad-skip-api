@@ -95,7 +95,7 @@ func TestFinishAppliesChaptersOnlyWhenSwitchedOn(t *testing.T) {
 		if on {
 			data = `[{"category_id":2,"start":8,"end":42,"confidence":"high","source":"chapter"},{"category_id":2,"start":60,"end":90,"confidence":"high","source":"ai"}]`
 		}
-		mock.ExpectBegin()
+		expectPublishBegin(mock)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).
 			WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
 		mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))

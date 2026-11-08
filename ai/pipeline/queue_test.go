@@ -128,6 +128,30 @@ func TestMarkAttemptNoTrack(t *testing.T) {
 	}
 }
 
+func TestMarkAttemptBlockedCreatorFailsAtFirstSightGeoIsRetried(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	blocked := "ytdlp: ERROR: [prv] -1_456000001: This video is unavailable because its creator has been blocked"
+	geo := "ytdlp: ERROR: [prv] -1_456000002: This video is not available in your country"
+	mock.ExpectExec("UPDATE prv_ai_videos SET status").WithArgs("-1_456000001", "failed", 1, nil, blocked).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE prv_ai_videos SET status").WithArgs("-1_456000002", "queued", 1, sqlmock.AnyArg(), geo).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if status, err := markAttempt(db, queued{nativeID: "-1_456000001"}, false, blocked); err != nil || status != "failed" {
+		t.Fatalf("blocked creator: got %s, %v", status, err)
+	}
+	if status, err := markAttempt(db, queued{nativeID: "-1_456000002"}, false, geo); err != nil || status != "queued" {
+		t.Fatalf("geo: got %s, %v", status, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMarkAttemptAnErrorAfterTwoNoTrackTriesFailsTheVideo(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

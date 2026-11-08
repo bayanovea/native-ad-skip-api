@@ -130,7 +130,7 @@ func TestPollConfirmsBeforeTheLockAndRecordsInThePublish(t *testing.T) {
 	mock.ExpectQuery("WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL").WillReturnRows(
 		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "model", "transcript", "chapters"}).AddRow("-1_456000001", "msgbatch_1", 11, 7, "claude-sonnet-5-5",
 			[]byte(`{"meta":{},"cues":[{"start":0,"end":10,"text":"a"},{"start":10,"end":40,"text":"b"},{"start":40,"end":60,"text":"c"},{"start":60,"end":90,"text":"d"}]}`), nil))
-	mock.ExpectBegin()
+	expectPublishBegin(mock)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).WithArgs(lockSpy{&events}).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
 	mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))

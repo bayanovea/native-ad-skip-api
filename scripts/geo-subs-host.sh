@@ -17,26 +17,13 @@ ensure() {
     docker exec "$c" cp /app/test/fixtures/ai/yt-dlp-stub.sh "$d/"
 }
 
-# A tick holds the detect lock for most of its 5 minutes, so the hand runs take the second half of each
-# 10 minutes: waiting on the lock from :x4:30, they skip the :x5 tick (flock -n) and start no video after
-# :x8, leaving the :x0 tick to the cron.
-wait_slot() {
-  while :; do
-    s=$(($(date +%s) % 600))
-    [ "$s" -ge 270 ] && [ "$s" -lt 480 ] && return
-    sleep 10
-  done
-}
-
 n=0 published=0
 total=$(grep -c . "$dir/data/order.txt")
 while read -r id; do
   [ -n "$id" ] || continue
   n=$((n + 1))
-  wait_slot
   ensure || { echo "$(date -u +%T) cannot copy the files into $c, stopping"; exit 1; }
-  if out=$(docker exec "$c" flock /tmp/ai-detect.lock \
-      env YTDLP_BIN="$d/yt-dlp-stub.sh" /app/prv/commands/ai/ai detect "$id" 2>&1); then
+  if out=$(docker exec "$c" env YTDLP_BIN="$d/yt-dlp-stub.sh" /app/prv/commands/ai/ai detect "$id" 2>&1); then
     published=$((published + 1))
     st=published
   else

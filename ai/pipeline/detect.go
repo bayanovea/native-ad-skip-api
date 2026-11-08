@@ -805,8 +805,8 @@ func (r *detectRun) expire() error {
 }
 
 // finish records the model's answer on the run and publishes the video, in one
-// transaction under the queue row's lock; a video another run already resolved is
-// skipped. A failed call or an invalid answer marks the video failed (the run row
+// transaction under publishLock and the queue row's lock; a video another run already
+// resolved is skipped. A failed call or an invalid answer marks the video failed (the run row
 // keeps what came back); the error return is for the database only, and the caller logs it.
 // c is the second opinion (nil with the switch off): its row and the unconfirmed
 // entries' review items go into the same transaction, as do the chapter check's.
@@ -816,6 +816,9 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(publishLock); err != nil {
+		return fmt.Errorf("publish lock: %w", err)
+	}
 	var status string
 	if err := tx.QueryRow(`SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE`, nativeID).Scan(&status); err != nil {
 		return fmt.Errorf("lock queue row: %w", err)
@@ -899,6 +902,11 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		nativeID, len(data), len(hidden), second, len(res.Output.Segments), onChapters, videoID, runID, cost)
 	return nil
 }
+
+// publishLock makes the publishes of a tick and of manual runs, which run side by side, take turns:
+// the day's review sheets number their items from MAX(position) (review.Add) and cap D items by a
+// count. Taken first, holding no row, it adds no lock cycle.
+const publishLock = `SELECT pg_advisory_xact_lock(hashtext('ai detect publish'))`
 
 type usageRow struct {
 	InputTokens      int `json:"input_tokens"`

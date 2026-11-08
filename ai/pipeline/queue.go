@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -194,9 +195,17 @@ func nextAttempt(attempts int, noTrack bool) (string, time.Duration) {
 	return statusQueued, d
 }
 
+// permanentFetchError is a yt-dlp error no retry changes: the video fails at first sight.
+func permanentFetchError(msg string) bool {
+	return strings.Contains(msg, "its creator has been blocked")
+}
+
 func markAttempt(db *sql.DB, q queued, noTrack bool, lastErr string) (string, error) {
 	attempts := q.attempts + 1
 	status, wait := nextAttempt(attempts, noTrack)
+	if !noTrack && permanentFetchError(lastErr) {
+		status = statusFailed
+	}
 	var next any
 	if status == statusQueued {
 		next = time.Now().Add(wait)

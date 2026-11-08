@@ -111,8 +111,8 @@ func (c *confirmation) gate() []bool {
 const secondReviewDaily = 30
 
 // record writes the confirmation row and sends the unconfirmed entries to
-// review up to the day's cap, in finish's transaction (lock order: queue row, video_calculateds,
-// then a batch row, as the judge's AI row before its batch row).
+// review up to the day's cap, in finish's transaction (lock order: publishLock, queue row,
+// video_calculateds, then a batch row, as the judge's AI row before its batch row).
 func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int, nativeID string, data, hidden []Entry, cues []vtt.Cue, now time.Time) error {
 	usage, err := json.Marshal(usageRow{c.res.Usage.InputTokens, c.res.Usage.OutputTokens, c.res.Usage.CacheReadTokens, c.res.Usage.CacheWriteTokens})
 	if err != nil {

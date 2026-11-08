@@ -1,7 +1,7 @@
 #!/bin/sh
 # Stand-in for yt-dlp in e2e (YTDLP_BIN): `-j` prints <native_id>.info.json, a subtitle
-# download copies <native_id>.ru.vtt to <-o>.ru.vtt. No info file = yt-dlp failing;
-# YTDLP_STUB_REFUSE=1 fails every call (prv refusing the host).
+# download copies <native_id>.ru.vtt to <-o>.ru.vtt. No info file = yt-dlp failing, with the
+# message in <native_id>.error when there is one; YTDLP_STUB_REFUSE=1 fails every call (prv refusing the host).
 dir=$(dirname "$0")
 mode=info
 out=
@@ -17,6 +17,10 @@ done
 id=${url##*/video} # the id follows the last /video of the page URL (PROVIDER_VIDEO_URL)
 if [ -n "$YTDLP_STUB_REFUSE" ]; then
   echo "ERROR: [prv] $id: HTTP Error 403: Forbidden" >&2
+  exit 1
+fi
+if [ -f "$dir/$id.error" ]; then
+  echo "ERROR: [prv] $id: $(cat "$dir/$id.error")" >&2
   exit 1
 fi
 if [ ! -f "$dir/$id.info.json" ]; then

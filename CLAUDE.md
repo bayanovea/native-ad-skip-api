@@ -76,7 +76,9 @@ Every ops command and what each script does: `docs/reference/ops.md`. What to kn
   `~/Web/dumps/native-ad-skip-prod/`, `DUMP_DIR` overrides).
 - A hand run that writes ratings or AI rows goes inside the app container under its cron job's lock, so it never
   overlaps a tick: `flock /tmp/calculate-<provider>.lock … calculate --recompute-ratings`,
-  `flock /tmp/ai-detect.lock … ai detect <native_id>` / `ai regate [--backfill]`, `flock /tmp/ai-audit.lock … ai audit <batch>`.
+  `flock /tmp/ai-audit.lock … ai audit <batch>`. `ai detect <native_id>` and `ai regate [--backfill]` take no lock and
+  run any time: `/tmp/ai-detect.lock` only keeps two detect ticks apart; claims are conditional row updates, only a
+  tick polls batches, publishes take turns on an advisory lock (`publishLock`, see ai-first.md).
 - AI switches are GitHub repository variables; a change takes a deploy (Run workflow, `image_tag` = the running sha).
   Kill switch `AI_FIRST=off`; one video: the withdraw link on `/admin/video/:video_id`.
 - A rule change (`AI_MIN_SEGMENT_SECONDS`, `accepted()`) is an `ai regate` run, never a read-time filter.
