@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/openai/openai-go/v3"
 
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/provider"
@@ -572,5 +573,15 @@ func TestDetectEveryFetchFailedIsTheHosts(t *testing.T) {
 	// No UPDATE expected: no attempt spent, the rows stay `fetching`.
 	if failed := r.detect(context.Background(), claimed); failed != 2 {
 		t.Fatalf("failed = %d, want 2", failed)
+	}
+}
+
+func TestAPIErrorAddsOpenAIBody(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &openai.Error{StatusCode: 400, Code: "billing_hard_limit_reached", Message: "limit"})
+	if got, want := apiError(err), "wrapped: OpenAI API error: 400 Bad Request (billing_hard_limit_reached: limit)"; got != want {
+		t.Errorf("apiError = %q, want %q", got, want)
+	}
+	if got := apiError(errors.New("plain")); got != "plain" {
+		t.Errorf("apiError = %q, want plain", got)
 	}
 }

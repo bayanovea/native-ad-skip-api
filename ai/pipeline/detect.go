@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/openai/openai-go/v3"
 
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/platform"
@@ -624,7 +625,7 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 	if err != nil {
 		// Nothing was sent, so a rejection (quota, billing, an API outage) is the account's, not
 		// the videos': the run rows go and the videos are queued again in an hour, no attempt spent.
-		msg := "batch submit: " + strings.ReplaceAll(err.Error(), "\n", ": ")
+		msg := "batch submit: " + strings.ReplaceAll(apiError(err), "\n", ": ")
 		for i, p := range started {
 			r.unsent(p.q.nativeID, runIDs[i], msg)
 		}
@@ -637,6 +638,15 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 	}
 	log.Printf("ai detect: batch %s submitted: %d videos", batchID, len(started))
 	return failed
+}
+
+// apiError adds the body's code and message to an OpenAI API error, whose Error() gives only the status.
+func apiError(err error) string {
+	var e *openai.Error
+	if errors.As(err, &e) && (e.Code != "" || e.Message != "") {
+		return fmt.Sprintf("%v (%s: %s)", err, e.Code, e.Message)
+	}
+	return err.Error()
 }
 
 // unsent drops the run row of a request that got no answer and queues the video again in an hour, no attempt spent.
