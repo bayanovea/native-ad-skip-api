@@ -37,8 +37,8 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   videos, fine. yt-dlp `'NoneType' object has no attribute 'split'` / `expected string or bytes-like object` =
   extractor bug on single pages (3 videos on 2026-10-25); many at once or every fetch failing = host ban, see
   `ai detect: every fetch of the tick failed` in docker logs and `AI_DETECT_ENABLED=off`.
-- **Second opinion** (`AI_SECOND_ENABLED=on`, `claude-haiku-5-5` since 2026-11-05; off on prod 2026-11-07 to ~11-19,
-  then `second_*` stay flat and every entry publishes without a veto): `second_errors_24h` a few
+- **Second opinion** (`AI_SECOND_ENABLED=on`, `claude-haiku-5-5` since 2026-11-05; off on prod 2026-11-07 to 11-19 (4,346
+  rows published by terra alone), on again since 2026-11-19 12:20 UTC; while off `second_*` stay flat and every entry publishes without a veto): `second_errors_24h` a few
   invalid answers at most (a burst = the Anthropic balance or API, videos then publish unconfirmed); `second_confirmed_pct`
   ~75 (2026-11-07); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
   `ai-second-<date>`; `second_cost` ~$0.0035 per video.

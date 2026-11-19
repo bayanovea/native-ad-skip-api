@@ -317,7 +317,7 @@ AI_DETECT_CLIENT (AI_CLIENT)              # anthropic = Claude Batches API on th
 AI_PROMPT (/app/ai/prompts/v2.2.md), AI_JUDGE_PROMPT (/app/ai/prompts/judge-v1.md), AI_FIXTURE_DIR (/app/test/fixtures/ai)
 YTDLP_BIN (/usr/local/bin/yt-dlp)         # the image's pinned static release, absolute because cron's PATH lacks /usr/local/bin; e2e points it to the stub
 ANTHROPIC_API_KEY                         # env only (no key file); AI_CLIENT=anthropic|messages without it is a startup error (exit 1)
-AI_SECOND_ENABLED (off)                   # on = the second opinion before publish (ai detect); prod off 2026-11-07 to ~11-19 (Claude spend)
+AI_SECOND_ENABLED (off)                   # on = the second opinion before publish (ai detect); prod off 2026-11-07 to 11-19 (Claude spend), on again since 2026-11-19
 AI_SECOND_CLIENT (openai)                 # openai | anthropic (Messages) | fixture (<native_id>.second.json, tests); AI_SECOND_MODEL must match its vendor
 AI_SECOND_MODEL (gpt-6-luna)              # the second model's id (price from detector.Prices; unknown = cost 0 and a log line)
 AI_CHAPTERS_ENABLED (off)                 # on = the chapter check after the second opinion (ai detect); chapters are stored either way
