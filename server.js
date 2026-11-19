@@ -8,7 +8,7 @@ const routes = require('./prv/routes/routes');
 const { sequelize, bootstrap } = require('./db');
 const { redactRequest } = require('./lib/redact-request');
 const { legacyField } = require('./lib/legacy-field');
-const { registerCalculatorHeartbeat, registerAiMetrics } = require('./prometheus-wrapper');
+const { registerCalculatorHeartbeat, registerAiMetrics, registerAiBudget } = require('./prometheus-wrapper');
 
 const app = express();
 const port = process.env.NODE_APP_PORT;
@@ -97,6 +97,7 @@ app.use((error, req, res, next) => {
 bootstrap().then(() => {
     registerCalculatorHeartbeat(sequelize);
     registerAiMetrics(sequelize);
+    registerAiBudget(sequelize);
     app.listen(port, () => {
         console.log(`I am alive, http://localhost:${port}`);
     });

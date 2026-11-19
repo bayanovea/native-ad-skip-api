@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestClaimQueuedTakesTheBudgetLeft(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
 
-	got, err := claimQueued(db, testCfg)
+	got, err := claimQueued(db, testCfg, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestClaimQueuedStopsAtTheBudget(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("FROM prv_ai_runs").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(200))
-	got, err := claimQueued(db, testCfg)
+	got, err := claimQueued(db, testCfg, math.MaxInt)
 	if err != nil || got != nil {
 		t.Fatalf("budget spent: got %v, %v", got, err)
 	}
@@ -77,12 +78,40 @@ func TestClaimQueuedBatchMax(t *testing.T) {
 	mock.ExpectQuery("FOR UPDATE OF a SKIP LOCKED").WithArgs(10000, 3, 100).
 		WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}))
 	mock.ExpectRollback()
-	got, err := claimQueued(db, testCfg)
+	got, err := claimQueued(db, testCfg, math.MaxInt)
 	if err != nil || got != nil {
 		t.Fatalf("empty queue: got %v, %v", got, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// With AI_BUDGET_ENABLED the spend cap's room joins the limits; the daily count and AI_BATCH_MAX still hold.
+func TestClaimQueuedSpendRoom(t *testing.T) {
+	cfg := testCfg
+	cfg.BatchMax = 5
+	for _, c := range []struct {
+		room, limit int
+	}{{2, 2}, {50, 5}, {0, 0}} {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mock.ExpectQuery("FROM prv_ai_runs").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		if c.limit > 0 {
+			mock.ExpectBegin()
+			mock.ExpectQuery("FOR UPDATE OF a SKIP LOCKED").WithArgs(10000, 3, c.limit).
+				WillReturnRows(sqlmock.NewRows([]string{"native_id", "views_max", "attempts"}))
+			mock.ExpectRollback()
+		}
+		if got, err := claimQueued(db, cfg, c.room); err != nil || got != nil {
+			t.Fatalf("room %d: got %v, %v", c.room, got, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("room %d: %v", c.room, err)
+		}
+		db.Close()
 	}
 }
 

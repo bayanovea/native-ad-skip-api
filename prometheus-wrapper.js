@@ -136,6 +136,41 @@ function registerAiMetrics(sequelize) {
     shareCollect(refresh, [videos, cost, cost24h, judgements, reviewOpen]);
 }
 
+// The AI spend budget (prv_ai_budgets, one row per vendor, written by `ai detect` with AI_BUDGET_ENABLED=on), for
+// the AiBudgetOverrun alert; the dashboard reads the table itself. No rows (the budget never on) = no series.
+function registerAiBudget(sequelize) {
+    const gauges = {
+        allowance_usd: ['ai_budget_allowance_usd', 'Monthly allowance in USD per vendor'],
+        spent_cycle_usd: ['ai_budget_spent_cycle_usd', 'Recorded spend in USD since the cycle reset per vendor'],
+        spent_today_usd: ['ai_budget_spent_today_usd', 'Recorded spend in USD today (UTC) per vendor'],
+        cap_today_usd: ['ai_budget_cap_today_usd', "Today's spend cap in USD per vendor"],
+        updated: ['ai_budget_updated_timestamp_seconds', 'Unix time of the budget state per vendor'],
+    };
+    for (const [col, [name, help]] of Object.entries(gauges)) {
+        gauges[col] = new client.Gauge({ name, help, labelNames: ['vendor'] });
+    }
+    let logged = false;
+    async function refresh() {
+        let rows;
+        try {
+            [rows] = await sequelize.query(
+                `SELECT vendor, allowance_usd, spent_cycle_usd, spent_today_usd, cap_today_usd,
+                        EXTRACT(EPOCH FROM updated_at) AS updated
+                   FROM prv_ai_budgets`);
+            logged = false;
+        } catch (err) {
+            if (!logged) console.error('AI budget query failed:', err.message);
+            logged = true;
+            rows = [];
+        }
+        for (const g of Object.values(gauges)) g.reset();
+        for (const row of rows) {
+            for (const [col, g] of Object.entries(gauges)) g.set({ vendor: row.vendor }, Number(row[col]));
+        }
+    }
+    shareCollect(refresh, Object.values(gauges));
+}
+
 function incrementVideoCalculatedLookup(outcome, provider, source = 'human') {
     videoCalculatedLookupTotal.inc({ outcome, provider, source });
 }
@@ -147,6 +182,7 @@ function incrementRequestWithoutVersion(method, provider) {
 module.exports = {
     registerCalculatorHeartbeat,
     registerAiMetrics,
+    registerAiBudget,
     incrementVideoCalculatedLookup,
     incrementRequestWithoutVersion,
 };

@@ -12,6 +12,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	"odedohbest/video-calculate/ai/budget"
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/transcript"
 	"odedohbest/video-calculate/ai/vtt"
@@ -98,6 +99,81 @@ func TestConfirmGatesOnlyWhenTheSecondModelAnswered(t *testing.T) {
 	}
 	if c = (&detectRun{}).confirm(context.Background(), "-1_456000001", transcript.Meta{}, confirmCues, first, nil); c != nil {
 		t.Fatalf("switch off: got %+v", c)
+	}
+}
+
+// testBudget is a tick's state with one vendor's cap and today's spend (fakeSecond's gpt-5 is OpenAI's).
+func testBudget(vendor string, cap, spent, avg float64) *budget.State {
+	return &budget.State{Vendors: map[string]*budget.Vendor{vendor: {Cap: cap, SpentToday: spent, AvgDetect: avg, AvgConfirm: avg}}}
+}
+
+// With the budget, the second call is made while the vendor's cap has room for one at its average,
+// and its cost counts; past the cap it is deferred (no call, nothing gated).
+func TestConfirmDeferredByTheBudget(t *testing.T) {
+	first := segs(seg("sponsor", 1, 1), seg("sponsor", 3, 3))
+	f := &fakeSecond{res: segs(seg("sponsor", 1, 1))}
+	f.res.Usage = detector.Usage{InputTokens: 100_000}
+	r := &detectRun{second: f, secondPrice: detector.Prices["gpt-5"], budget: testBudget(budget.OpenAI, 1, 0.8, 0.1)}
+
+	if c := r.confirm(context.Background(), "-1_456000001", transcript.Meta{}, confirmCues, first, nil); c == nil || f.calls != 1 {
+		t.Fatalf("room for one: want the call, got %+v", c)
+	}
+	if got := r.budget.Vendors[budget.OpenAI].SpentToday; got < 0.925-1e-9 || got > 0.925+1e-9 {
+		t.Fatalf("spent %v, want 0.8 + the call's 0.125", got)
+	}
+	if c := r.confirm(context.Background(), "-1_456000001", transcript.Meta{}, confirmCues, first, nil); c != nil || f.calls != 1 {
+		t.Fatalf("cap spent: want it deferred, got %+v after %d calls", c, f.calls)
+	}
+	r.budget = nil // the manual run and AI_BUDGET_ENABLED off
+	if c := r.confirm(context.Background(), "-1_456000001", transcript.Meta{}, confirmCues, first, nil); c == nil || f.calls != 2 {
+		t.Fatalf("no budget: want the call, got %+v", c)
+	}
+}
+
+// A deferred second opinion publishes like the switch off: every accepted entry served, no
+// confirmation row, no D item; the row is left for the backlog.
+func TestPollDeferredPublishServesEverything(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	first := &validFirst{fakeBatch{ended: true}}
+	second := &fakeSecond{res: segs(seg("sponsor", 1, 1))}
+	r := &detectRun{db: db, client: first, batch: first, batches: map[string]batchClient{vendorAnthropic: first}, second: second, secondPrice: detector.Prices["gpt-5"],
+		categories: map[string]int{"sponsor": 2, "self_promotion": 3}, prv: testPrv, budget: testBudget(budget.OpenAI, 2, 2, 0.01)}
+	r.budget.Vendors[budget.Anthropic] = &budget.Vendor{Cap: 10, AvgDetect: 0.03}
+	r.cfg.MinSegmentSeconds = 5
+
+	mock.ExpectQuery("WHERE v.status = 'detecting' AND v.batch_id IS NOT NULL").WillReturnRows(
+		sqlmock.NewRows([]string{"native_id", "batch_id", "id", "video_id", "model", "transcript", "chapters"}).AddRow("-1_456000001", "msgbatch_1", 11, 7, "claude-sonnet-5-5",
+			[]byte(`{"meta":{},"cues":[{"start":0,"end":10,"text":"a"},{"start":10,"end":40,"text":"b"},{"start":40,"end":60,"text":"c"},{"start":60,"end":90,"text":"d"}]}`), nil))
+	expectPublishBegin(mock)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM prv_ai_videos WHERE native_id = $1 FOR UPDATE")).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("detecting"))
+	mock.ExpectExec("UPDATE prv_ai_runs SET raw_output").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT 1 FROM video_calculateds WHERE video_id = $1 FOR UPDATE")).WithArgs(7).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)DISTINCT ON .*FROM votes`).WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating"}))
+	mock.ExpectExec("INSERT INTO prv_ai_video_calculateds").
+		WithArgs(7, "-1_456000001", int64(11),
+			[]byte(`[{"category_id":2,"start":10,"end":40,"confidence":"high","source":"ai"},{"category_id":2,"start":60,"end":90,"confidence":"high","source":"ai"}]`),
+			[]byte(`[]`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE prv_ai_videos SET status = 'published'").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if failed, err := r.poll(context.Background()); failed != 0 || err != nil {
+		t.Fatalf("got %d %v", failed, err)
+	}
+	if second.calls != 0 {
+		t.Fatal("deferred: no second call")
+	}
+	// The run was counted at Anthropic's average while in flight; priced at 0 (no usage), it gives that back.
+	if got := r.budget.Vendors[budget.Anthropic].SpentToday; got > -0.03+1e-9 || got < -0.03-1e-9 {
+		t.Fatalf("anthropic spent %v, want −0.03", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -204,7 +280,7 @@ func TestRecordCapsTheDaysReviewItems(t *testing.T) {
 		}
 		conf := &confirmation{model: "claude-haiku-5-5", confirmed: []bool{false, false, false}}
 		now := time.Date(2026, 11, 5, 23, 30, 0, 0, time.UTC)
-		if err := r.record(tx, conf, 11, 7, "-1_456000001", nil, unconfirmed, confirmCues, now); err != nil {
+		if err := r.record(tx, conf, 11, 7, "-1_456000001", 0, len(unconfirmed), unconfirmed, confirmCues, now); err != nil {
 			t.Fatalf("today %d: %v", c.today, err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {

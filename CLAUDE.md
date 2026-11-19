@@ -81,6 +81,8 @@ Every ops command and what each script does: `docs/reference/ops.md`. What to kn
   tick polls batches, publishes take turns on an advisory lock (`publishLock`, see ai-first.md).
 - AI switches are GitHub repository variables; a change takes a deploy (Run workflow, `image_tag` = the running sha).
   Kill switch `AI_FIRST=off`; one video: the withdraw link on `/admin/video/:video_id`.
+- Spend budget (`AI_BUDGET_*`): switching it on, the manual `AI_MIN_VIEWS` step rule (OpenAI's forecast unspent > 20 %
+  of its usable amount three days running → one step down) and reconciling with the vendors' consoles: ops.md → Spend budget.
 - A rule change (`AI_MIN_SEGMENT_SECONDS`, `accepted()`) is an `ai regate` run, never a read-time filter.
 - Detector / prompt: **eval first, then sync** (`scripts/sync-detector.sh ~/Web/native-ad-skip-eval`); never edit the
   copied `ai/` packages or the detector prompt here.
@@ -148,7 +150,7 @@ users (ban gate), no `moderationRepository` (auto-ban). A route change therefore
 | Path | Purpose |
 |------|---------|
 | `prv/`, `rt/`, `yt/` | Per-provider models, routers and Go CLI entry points; route handlers and repositories live in `prv/` |
-| `ai/` | AI command packages (Go, prv only): `detector`, `transcript`, `vtt`, `provider`, `ytdlp` are synced copies from the eval repo (see Ops → Detector sync; `ai/SOURCE` = the eval commit; product-owned `detector/fixture.go` = `AI_CLIENT=fixture` and, with the suffix `.second.json`, `AI_SECOND_CLIENT=fixture`; `detector/openai.go` = the synchronous OpenAI transport, `detector/openai_batch.go` = the OpenAI Batch API one), `platform/` (product-owned: `platform.FromEnv()` registers the provider `prv` with `provider.Register(Def)` from `PROVIDER_VIDEO_URL` / `PROVIDER_LINK_AT` on its first call and returns it; `ai detect` and `ai judge` call it after their switch check, so a missing variable is their startup error (exit 1), a switched-off tick and `ai regate` never read them; Go tests register the e2e templates themselves, `testPrv`), `pipeline/` (`ai detect`: `queue.go`, `detect.go`, `gate.go`, `publish.go`, `confirm.go` (the second opinion), `chapters.go` (the chapter check); `ai regate`: `regate.go`), `judge/` (`ai judge`: `signals.go`, `rules.go`, `llm.go`, `review.go`, `judge.go`), `review/` (`review.Add` / `Batch`: the kind='ai' items and batch parts the Go callers write: the judge's, the second opinion's and the chapter check's; `openPart()` in `prv/repository/review.js` is its JS twin), `prompts/` (`v2.2.md` detector prompt from the eval, `judge-v1.md` and `audit-v1.md` product-owned), `audit/` (`ai audit`: `config.go`, `due.go`, `rules.go`, `llm.go`, `notify.go`, `audit.go`, see Ops → Audit). Entry point `prv/commands/ai/main.go`, binary `prv/commands/ai/ai` |
+| `ai/` | AI command packages (Go, prv only): `detector`, `transcript`, `vtt`, `provider`, `ytdlp` are synced copies from the eval repo (see Ops → Detector sync; `ai/SOURCE` = the eval commit; product-owned `detector/fixture.go` = `AI_CLIENT=fixture` and, with the suffix `.second.json`, `AI_SECOND_CLIENT=fixture`; `detector/openai.go` = the synchronous OpenAI transport, `detector/openai_batch.go` = the OpenAI Batch API one), `platform/` (product-owned: `platform.FromEnv()` registers the provider `prv` with `provider.Register(Def)` from `PROVIDER_VIDEO_URL` / `PROVIDER_LINK_AT` on its first call and returns it; `ai detect` and `ai judge` call it after their switch check, so a missing variable is their startup error (exit 1), a switched-off tick and `ai regate` never read them; Go tests register the e2e templates themselves, `testPrv`), `pipeline/` (`ai detect`: `queue.go`, `detect.go`, `gate.go`, `publish.go`, `confirm.go` (the second opinion), `backlog.go` (the second opinion later, on rows published without one), `chapters.go` (the chapter check); `ai regate`: `regate.go`), `budget/` (`ai detect`'s spend budget per model vendor: `config.go` = the `AI_BUDGET_*` variables, `budget.go` = cycles, today's cap, `VendorOf`, the `prv_ai_budgets` upsert), `judge/` (`ai judge`: `signals.go`, `rules.go`, `llm.go`, `review.go`, `judge.go`), `review/` (`review.Add` / `Batch`: the kind='ai' items and batch parts the Go callers write: the judge's, the second opinion's and the chapter check's; `openPart()` in `prv/repository/review.js` is its JS twin), `prompts/` (`v2.2.md` detector prompt from the eval, `judge-v1.md` and `audit-v1.md` product-owned), `audit/` (`ai audit`: `config.go`, `due.go`, `rules.go`, `llm.go`, `notify.go`, `audit.go`, see Ops → Audit). Entry point `prv/commands/ai/main.go`, binary `prv/commands/ai/ai` |
 | `calculator/` | Shared Go source: `calculate.go` (algorithm), `recompute.go` (`--recompute-ratings`), `pool.go` (goroutine pool) |
 | `middleware/` | Auth (`verify-bearer-token.js`; `verify-query-token.js` for the `?verifyBearerToken=` GET links of `votes.js`), validation, async error wrapper |
 | `lib/` | Shared helpers: `find-video-for-read.js` (read-only video lookup), `duration-tolerance.js` (`DURATION_TOLERANCE = 2`, `durationMatchQuery()` — the `(native_id, duration ± 2)` where + order shared by the read helper and `prv/repository/video.js`, which rt and yt use too), `review-sheet.js` (review sheet parser, verdict normalisation, `formatPlayerTime` and its inverse `parsePlayerTime` (`s`, `m:ss`, `h:mm:ss`, else NaN), `validateVerdictBounds()` (the verdict bounds rules: `format` / `range` / `order`, else null; short bounds are valid, the page warns on them against `STATE.min_segment_seconds`; both inlined into the review page's script), `entryInsideSheetItem()` (an AI entry inside an old below-threshold sheet item's cue bounds, < 1 s each end; adopt's match, `hasItemAt`'s SQL twin), `splitSheet()` — items → balanced parts of at most N, shared by the importer and `splitBatch()`, `cuesOver()` — the cue texts over an entry's bounds, the item `cues` of the below-threshold importer and the admin link), `player-link.js` (`linkAt(native_id, seconds)` — the player link from the `PROVIDER_LINK_AT` template (`{id}`, `{t}` = `1h2m3s`, read once on load; unset = `https://example.invalid/video{id}?t={t}`), the Go provider's format; callers pass start − 2), `legacy-field.js` (`legacyField()` — the `<legacy>_user_id` → `prv_user_id` request alias and `LEGACY_PRV` as read at boot, see Routes), `admin-html.js` (`escapeHtml`, `urlToken`, `formatDate`, `CATEGORY_COLORS` for the prv admin pages), `script-db.js` (`scriptSequelize()` — DB connection for `scripts/`), `schema.js` (`syncSchema()` — sync + idempotent ALTERs + category ids (`syncCategories()`, `CATEGORY_IDS` 3..6, see Schema bootstrap) and reviewer seeding (`REVIEWERS`), the 2026-10-18 one-off that gives verdicts of unknown reviewers to `bayanovea`, the 2026-10-20 `assignee` one-off (see Schema bootstrap) and a default `prv_review_batches` row for every batch of `prv_review_items`; used by `db.js` boot and `scripts/sync-db.js`), `i18n.js` (review page strings from `prv/locales/review/{ru,en}.json`: `translator(lang)` → `t(key, params)` returns HTML (escaped, except `_html` keys whose markup is kept and only params escaped), `t.text()` plain text for the inline `STATE` (throws on `_html`); both locales have the same keys (parity checked in `test/i18n.test.js`), an unknown key throws; `pickLang(req)`: `?lang=` → `review_lang` cookie → `ru`), `reviewer-name.js` (`validReviewerName()` — the cleaned name or null: NFC, trimmed, inner spaces collapsed, 1–64 letters of any script, digits, space, `.`, `_`, `-`; the route checks it before `createReviewer()`), `redact-request.js` (`redactRequest()` — request fields for the `server.js` error log with the `Authorization` header and `verifyBearerToken` (query and url) redacted), `validate-intervals.js` (`validateIntervals()` — `POST /markup` interval rules, shared by prv/rt/yt), `parse-views-text.js` (`parseViewsText()` — the prv page's view counter text → count or null, see AI-first segments → Trigger), `ai-rules.js` (`MIN_SEGMENT_SECONDS` from `AI_MIN_SEGMENT_SECONDS`, default 5, read once on load, invalid throws; `prv/repository/ai.js` requires it, so an invalid value fails boot), `segment-rating.js` (`lockVideoCalculated()`, `recomputeSegmentRating()` — a segment's rating from the votes table, per provider `models`; `recomputeAiSegmentRating()` the same for an entry of `prv_ai_video_calculateds.data` (JSON only), `voteRating()`), `find-ai-calculated.js` (`findAiCalculated(models, videoId, { transaction })` — the AI row served instead of `video_calculateds`, or null (`servesAi`: `AI_FIRST` off (read once at boot), no row, withdrawn or empty `data`); `lockAiCalculated()` — the row in any state `FOR UPDATE`, for the vote handlers; `AI_LOOKUP_OUTCOMES` = `match` / `backfilled`) |
@@ -194,6 +196,16 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   detector model (a batch API), then the second model (`AI_SECOND_ENABLED`) and the chapter check (`AI_CHAPTERS_ENABLED`), publishes
   `prv_ai_video_calculateds` → served instead of `video_calculateds` with `AI_FIRST=on` on a `match` / `backfilled`
   lookup → `ai judge` reads new user signals and sends review items or withdraws.
+- Roles are fixed (owner, 2026-11-19): OpenAI detects, Anthropic gives the second opinion and runs the judge and the
+  audit (vendor = model prefix, `claude-` = Anthropic: `budget.VendorOf`); a model changes only through the eval.
+- Spend budget (`AI_BUDGET_ENABLED`, read only by the `ai detect` cron tick; the manual run is never paced and always
+  confirms): per vendor a monthly allowance cycle from 00:00 UTC of its reset day; spend = the recorded `cost_usd` of
+  runs, confirmations, judgements and audits; today's cap = (allowance × (1 − reserve) − spent before today) / days
+  left, computed at tick start. The detector claims only what its vendor's cap pays for (`AI_BATCH_MAX` and
+  `AI_DAILY_BUDGET_VIDEOS` stay ceilings); past the second vendor's cap the second opinion is deferred (published as
+  with the switch off); after `poll()` the backlog pass confirms rows with no confirmation (another vendor's detector),
+  newest first, 10 a tick, hiding unconfirmed entries no verdict pins as `unconfirmed`. Judge and audit are counted,
+  never held. State per vendor in `prv_ai_budgets`.
 - An AI row keeps every detected segment: `data` = exactly what is served, `hidden` = the rest with a `reason`
   (`confidence` | `short` | `review` | `unconfirmed`). Both are precomputed (publish, `applyVerdict`, `ai regate`),
   nothing is evaluated on the read path, and everything that reads `data` ignores `hidden`.
@@ -208,8 +220,9 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   each, `style.css` inlined, the cross-language link pointing at the other artifact).
 - Every AI panel lives on `grafana/dashboards/ai-pipeline.json`. Its thresholds are literals tagged with their variable
   (`500000 /* AI_MIN_VIEWS */`, `20 /* AI_MIN_REQUESTS */`, `250 /* AI_DAILY_BUDGET_VIDEOS */`,
-  `INTERVAL '14 days' /* queue.go queueMaxAge */`) and the ad-chapter SQL with `/* chapters.go adTitle */`: changing the
-  variable, the constant or the regexp updates every tagged literal in the same change.
+  `INTERVAL '14 days' /* queue.go queueMaxAge */`), the ad-chapter SQL with `/* chapters.go adTitle */`, the backlog
+  panels' `/* second model: Anthropic */` and the vendor rule `/* budget.VendorOf */`: changing the variable, the
+  constant, the regexp or the second model's vendor updates every tagged literal in the same change.
 
 ### Routes
 
@@ -261,7 +274,7 @@ Fields and writers of every model: `docs/reference/models.md`.
 | `CalculatorHeartbeat` | `calculator_heartbeats`: one row per provider and `ai_detect` / `ai_judge` / `ai_audit`; Node never writes it |
 | `IntervalUndo`, `IntervalClick`, `TimeSavedEvent`, `ClientFailed` | `{provider}_events_*` |
 | `ReviewItem`, `ReviewVerdict`, `ReviewReviewer`, `ReviewBatch`, `ReviewAudit` | `prv_review_*`: items (`kind` sheet / ai), append-only verdicts (latest wins, written through `reviewRepository.recordVerdict()`), reviewer codes, batches and their lock, batch audits |
-| `AiVideo`, `AiRun`, `AiVideoCalculated`, `AiJudgement`, `AiConfirmation`, `AiTimeline` | `prv_ai_*`: queue, detector runs (the budget counts them), served `data` / `hidden`, judgements, second-model calls, phase 3 (no writer) |
+| `AiVideo`, `AiRun`, `AiVideoCalculated`, `AiJudgement`, `AiConfirmation`, `AiBudget`, `AiTimeline` | `prv_ai_*`: queue, detector runs (the budget counts them), served `data` / `hidden`, judgements, second-model calls, the spend budget's state per vendor (written by `ai detect` only), phase 3 (no writer) |
 
 The Go side (`ai/review`) inserts review items and batches with its own SQL, so a change to those tables updates both
 (and `openPart()` in `prv/repository/review.js`).
@@ -282,14 +295,16 @@ Every metric, scrape target, dashboard and alert rule: `docs/reference/metrics.m
 
 - `GET /metrics` (served by `server.js`): `video_calculated_lookup_total{outcome, provider, source}` (outcomes `match` /
   `backfilled` / `mismatch` / `no_duration` / `not_calculated` / `not_found`), `request_without_version_total`, the
-  `calculator_*` heartbeat gauges, the `ai_*` gauges, `http_request_duration_seconds` (paths normalised in `server.js`:
-  a new dynamic route needs a `normalizePath` rule).
+  `calculator_*` heartbeat gauges, the `ai_*` gauges (`ai_budget_*{vendor}` from `prv_ai_budgets`, no rows = no
+  series), `http_request_duration_seconds` (paths normalised in `server.js`: a new dynamic route needs a `normalizePath`
+  rule).
 - Prometheus keeps 30 days **and** at most 2 GB (the `path` label is unbounded).
 - Grafana on `:3024`, provisioned from `grafana/` (UI edits live only in its volume). Never commit a token into a
   dashboard: admin links read the `verifyBearerToken` textbox variable.
 - Alert rules in `grafana/provisioning/alerting/rules.yml` go to the Telegram contact point, which Compose renders from
   secrets; a rule removed from the file must be listed under `deleteRules`. `AiCostDaily`'s threshold is a literal:
-  change it with the budget or the second model.
+  change it with the budget or the second model. `AiBudgetOverrun` reads the `ai_budget_*` gauges (state older than a
+  day or none = no data = OK).
 
 ### Environment Variables
 
@@ -323,6 +338,11 @@ AI_SECOND_MODEL (gpt-6-luna)              # the second model's id (price from de
 AI_CHAPTERS_ENABLED (off)                 # on = the chapter check after the second opinion (ai detect); chapters are stored either way
 AI_CHAPTER_EDGE_SECONDS (10)              # int ≥ 1: how far a chapter's edge may be from the entry's (invalid = exit 1)
 OPENAI_API_KEY                            # env only; AI_SECOND_ENABLED=on with AI_SECOND_CLIENT=openai and no key: startup error (exit 1)
+AI_BUDGET_ENABLED (off)                   # on = the ai detect cron tick paces spend per vendor (claims, deferred and backlog second
+                                          # opinion, prv_ai_budgets); the manual run and Node never read any AI_BUDGET_*
+AI_BUDGET_OPENAI_USD, AI_BUDGET_ANTHROPIC_USD   # monthly allowance per vendor; with the budget on required, else exit 1 naming it
+AI_BUDGET_OPENAI_RESET_DAY, AI_BUDGET_ANTHROPIC_RESET_DAY   # 1–28: the cycle starts 00:00 UTC that day; required likewise
+AI_BUDGET_RESERVE (0.1)                   # share in [0, 1) of each allowance never planned for
 AI_AUDIT_ENABLED (off)                    # on = the ai audit cron tick works (review batch audit, see Ops → Audit)
 AI_AUDIT_TELEGRAM (off)                   # on = the audit pings the owner in Telegram; off = the page block only (Telegram is
                                           # unreachable from the prod host since 2026-11-01: docs/backlog/telegram-blocked-from-prod-host.md)
@@ -341,7 +361,7 @@ API_HOST, LANDING_HOST                    # the public host names (secrets); onl
                                           # bind-mounted prometheus.yml and dashboards (see Deployment → Render), never the containers
 ```
 
-Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
+Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_BUDGET_ENABLED` (`:-off`), `AI_BUDGET_OPENAI_USD`, `AI_BUDGET_OPENAI_RESET_DAY`, `AI_BUDGET_ANTHROPIC_USD`, `AI_BUDGET_ANTHROPIC_RESET_DAY`, `AI_BUDGET_RESERVE`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
 
 ### Deployment
 

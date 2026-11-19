@@ -133,7 +133,7 @@ needs undoing.
 
 ## Open Questions
 
-- Haiku 5.5's long tier: whether output tokens are multiplied too (the pricing page is the source; the eval task
-  records it in `pricing.go`'s comment).
+- Answered: Haiku 5.5's long tier multiplies output too ($0.50 / $2.50 per MTok above 100K input tokens, ×5 both;
+  eval `79dd2b2`, `pricing.go`'s comment).
 - When the backlog is drained, whether the OpenAI-unspent forecast should first raise the detector's model tier
   instead of lowering thresholds — the eval track's answer, not this change's.

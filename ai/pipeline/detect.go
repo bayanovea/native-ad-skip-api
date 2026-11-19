@@ -23,6 +23,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/openai/openai-go/v3"
 
+	"odedohbest/video-calculate/ai/budget"
 	"odedohbest/video-calculate/ai/detector"
 	"odedohbest/video-calculate/ai/platform"
 	"odedohbest/video-calculate/ai/provider"
@@ -148,12 +149,11 @@ type detectRun struct {
 	db     *sql.DB
 	client detector.Client
 	batch  batchClient // nil for the synchronous client
-	// batches resolves a waiting batch by the vendor of its run's model (vendorOf), whatever
+	// batches resolves a waiting batch by the vendor of its run's model (budget.VendorOf), whatever
 	// the transport is now; openBatch builds a missing vendor's client on first use.
 	batches     map[string]batchClient
 	openBatch   func(vendor, model string) (batchClient, error)
 	prompt      detector.Prompt
-	price       detector.Price
 	priceFactor float64
 	categories  map[string]int
 	ytdlp       *ytdlp.Runner
@@ -162,6 +162,8 @@ type detectRun struct {
 	fetchErrs   []fetchErr      // this detect call's yt-dlp errors, recorded once the call knows whether all failed
 	second      detector.Client // nil unless AI_SECOND_ENABLED=on
 	secondPrice detector.Price
+	budgetCfg   budget.Config
+	budget      *budget.State // the cron tick's spend budget; nil when AI_BUDGET_ENABLED is off and on a manual run
 }
 
 type fetchErr struct {
@@ -224,6 +226,11 @@ func Detect(cfg Config, nativeID string) error {
 		return manualOutcome(r.db, nativeID)
 	}
 
+	if r.budgetCfg.Enabled {
+		if r.budget, err = budget.Load(r.db, r.budgetCfg, time.Now()); err != nil {
+			return fmt.Errorf("budget: %w", err)
+		}
+	}
 	failed, err := r.tick(ctx)
 	if herr := calculator.WriteHeartbeatStatus(r.db, "ai_detect", failed, err == nil); herr != nil {
 		log.Printf("Heartbeat write failed: %v", herr)
@@ -239,17 +246,11 @@ func Detect(cfg Config, nativeID string) error {
 }
 
 const (
-	vendorAnthropic = "anthropic"
-	vendorOpenAI    = "openai"
+	vendorAnthropic = budget.Anthropic
+	vendorOpenAI    = budget.OpenAI
 )
 
-// vendorOf is the one rule for which API serves a model id.
-func vendorOf(model string) string {
-	if strings.HasPrefix(model, "claude-") {
-		return vendorAnthropic
-	}
-	return vendorOpenAI
-}
+func vendorOf(model string) string { return budget.VendorOf(model) }
 
 // checkVendor refuses a model that its transport's vendor does not serve (fixture takes any).
 func checkVendor(modelVar, model, clientVar, client, vendor string) error {
@@ -286,6 +287,9 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 		ytdlp: &ytdlp.Runner{Bin: cfg.YtdlpBin, Attempts: 2, Timeout: 90 * time.Second, Backoff: 2 * time.Second, Logf: log.Printf}}
 	if !manual {
 		r.fetchPause = cfg.FetchPause
+		if r.budgetCfg, err = budget.ConfigFromEnv(); err != nil {
+			return nil, err
+		}
 	}
 	if r.prv, err = platform.FromEnv(); err != nil {
 		return nil, err
@@ -333,7 +337,7 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 		r.priceFactor = 0.5 // both batch APIs' discount; the fixture batch stands in for it
 	}
 	var priced bool
-	if r.price, priced = detector.Prices[cfg.Model]; !priced {
+	if _, priced = detector.Prices[cfg.Model]; !priced {
 		log.Printf("ai detect: no price for %s, cost recorded as 0", cfg.Model)
 	}
 	switch {
@@ -362,7 +366,12 @@ func newDetectRun(cfg Config, manual bool) (*detectRun, error) {
 // (unavailable, no track, an invalid answer, expired: recorded on its row);
 // err is the failures of the tick's own steps.
 func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
-	claimed, cerr := claimQueued(r.db, r.cfg)
+	room := math.MaxInt
+	if r.budget != nil {
+		v := vendorOf(r.cfg.Model)
+		room = r.budget.Room(v, r.budget.Vendors[v].AvgDetect)
+	}
+	claimed, cerr := claimQueued(r.db, r.cfg, room)
 	if cerr != nil {
 		err = fmt.Errorf("claim: %w", cerr)
 	}
@@ -376,6 +385,21 @@ func (r *detectRun) tick(ctx context.Context) (failed int, err error) {
 	}
 	if eerr := r.expire(); eerr != nil {
 		err = errors.Join(err, fmt.Errorf("expire: %w", eerr))
+	}
+	if r.budget != nil {
+		var backlog map[string]int
+		if r.second != nil {
+			// After poll: the tick's new answers take the second model's cap first.
+			n, berr := r.confirmBacklog(ctx)
+			if berr != nil {
+				err = errors.Join(err, fmt.Errorf("confirm backlog: %w", berr))
+			} else {
+				backlog = map[string]int{vendorOf(r.second.Model()): n}
+			}
+		}
+		if serr := r.budget.Save(r.db, backlog); serr != nil {
+			err = errors.Join(err, fmt.Errorf("budget state: %w", serr))
+		}
 	}
 	return failed, err
 }
@@ -604,7 +628,7 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 				continue
 			}
 			c := r.confirm(ctx, p.q.nativeID, p.meta, p.cues, res, err)
-			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, r.price, res, err, c); err != nil {
+			if err := r.finish(p.q.nativeID, runID, p.videoID, p.cues, p.chapters, r.client.Model(), res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", p.q.nativeID, err)
 				failed++
 			}
@@ -637,6 +661,11 @@ func (r *detectRun) submit(ctx context.Context, ready []pending) (failed int) {
 		return failed + len(started)
 	}
 	log.Printf("ai detect: batch %s submitted: %d videos", batchID, len(started))
+	if r.budget != nil {
+		// In flight until priced: Load counts such a run at the vendor's average, so this tick does too.
+		v := vendorOf(r.client.Model())
+		r.budget.Spend(v, float64(len(started))*r.budget.Vendors[v].AvgDetect)
+	}
 	return failed
 }
 
@@ -756,8 +785,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 			failed += len(videos)
 			continue
 		}
-		price, priced := detector.Prices[model]
-		if !priced {
+		if _, priced := detector.Prices[model]; !priced {
 			log.Printf("ai detect: no price for %s, batch %s cost recorded as 0", model, batchID)
 		}
 		for _, w := range videos {
@@ -769,7 +797,7 @@ func (r *detectRun) poll(ctx context.Context) (failed int, err error) {
 				continue
 			}
 			c := r.confirm(ctx, w.nativeID, w.meta, w.cues, res, err)
-			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, w.chapters, price, res, err, c); err != nil {
+			if err := r.finish(w.nativeID, w.runID, w.videoID, w.cues, w.chapters, model, res, err, c); err != nil {
 				log.Printf("ai detect: %s %v", w.nativeID, err)
 				failed++
 			}
@@ -820,7 +848,7 @@ func (r *detectRun) expire() error {
 // keeps what came back); the error return is for the database only, and the caller logs it.
 // c is the second opinion (nil with the switch off): its row and the unconfirmed
 // entries' review items go into the same transaction, as do the chapter check's.
-func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, chapters []chapter, price detector.Price, res detector.Result, callErr error, c *confirmation) error {
+func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt.Cue, chapters []chapter, model string, res detector.Result, callErr error, c *confirmation) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -841,7 +869,7 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	if err != nil {
 		return fmt.Errorf("run %d usage: %w", runID, err)
 	}
-	cost := price.Cost(res.Usage) * r.priceFactor
+	cost := detector.Prices[model].Cost(res.Usage) * r.priceFactor
 	if _, err := tx.Exec(`UPDATE prv_ai_runs SET raw_output = $2, usage = $3, cost_usd = $4 WHERE id = $1`,
 		runID, rawJSON(res.Raw), usage, cost); err != nil {
 		return fmt.Errorf("run %d: %w", runID, err)
@@ -858,6 +886,7 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit failed: %w", err)
 		}
+		r.spendDetect(model, cost)
 		log.Printf("ai detect: %s failed: %v", nativeID, callErr)
 		return nil
 	}
@@ -872,7 +901,13 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	}
 	now := time.Now()
 	if c != nil {
-		if err := r.record(tx, c, runID, videoID, nativeID, data, hidden, cues, now); err != nil {
+		var unconfirmed []Entry
+		for _, e := range hidden {
+			if e.Reason == reasonUnconfirmed {
+				unconfirmed = append(unconfirmed, e)
+			}
+		}
+		if err := r.record(tx, c, runID, videoID, nativeID, len(data), len(unconfirmed), unconfirmed, cues, now); err != nil {
 			return err
 		}
 	}
@@ -886,6 +921,7 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit published: %w", err)
 	}
+	r.spendDetect(model, cost)
 	second := ""
 	if c != nil && c.err != nil {
 		second = fmt.Sprintf(" (second opinion of %s failed: served unconfirmed)", c.model)
@@ -911,6 +947,19 @@ func (r *detectRun) finish(nativeID string, runID int64, videoID int, cues []vtt
 	log.Printf("ai detect: %s published: %d served, %d hidden%s of %d segments%s, video %d, run %d, $%.4f",
 		nativeID, len(data), len(hidden), second, len(res.Output.Segments), onChapters, videoID, runID, cost)
 	return nil
+}
+
+// spendDetect puts a priced run into the tick's budget, in place of the average a batch run
+// was counted at while in flight (Load, submit).
+func (r *detectRun) spendDetect(model string, cost float64) {
+	if r.budget == nil {
+		return
+	}
+	v := vendorOf(model)
+	if r.batch != nil && r.budget.Vendors[v] != nil {
+		cost -= r.budget.Vendors[v].AvgDetect
+	}
+	r.budget.Spend(v, cost)
 }
 
 // publishLock makes the publishes of a tick and of manual runs, which run side by side, take turns:

@@ -1950,6 +1950,88 @@ test('ai detect: a run with no model result after 24 h fails, also while the swi
     await dbQuery(`DELETE FROM prv_ai_videos WHERE native_id IN ('-1_456000210', '-1_456000211')`);
 });
 
+// ── AI spend budget (ai/budget, AI_BUDGET_ENABLED): pacing, the deferred second opinion, the backlog ──
+
+// The roles of prod: terra detects (fixture batch), Haiku gives the second opinion (fixture); thresholds no
+// other test row reaches, so a tick claims only the video a test queues with 2100000000 views.
+const BUDGET_TICK = {
+    ...SECOND_ENV, AI_DETECT_ENABLED: 'on', AI_MODEL: 'gpt-6.1-terra', AI_SECOND_MODEL: 'claude-haiku-5-5',
+    AI_MIN_VIEWS: '2000000000', AI_MIN_REQUESTS: '1000000',
+};
+const budgetEnv = (openaiUsd, anthropicUsd) => ({
+    ...BUDGET_TICK, AI_BUDGET_ENABLED: 'on', AI_BUDGET_OPENAI_USD: String(openaiUsd), AI_BUDGET_OPENAI_RESET_DAY: '1',
+    AI_BUDGET_ANTHROPIC_USD: String(anthropicUsd), AI_BUDGET_ANTHROPIC_RESET_DAY: '1',
+});
+const budgets = async () => Object.fromEntries((await dbQuery('SELECT * FROM prv_ai_budgets')).map(b => [b.vendor, b]));
+
+test('ai budget: off by default the tick writes no budget state; switched on without an allowance variable it exits 1 naming it', async () => {
+    await dbQuery('DELETE FROM prv_ai_budgets');
+    let r = runAi(['detect'], BUDGET_TICK);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.deepEqual(await budgets(), {});
+
+    const env = budgetEnv(200, 100);
+    delete env.AI_BUDGET_ANTHROPIC_USD;
+    r = runAi(['detect'], env);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /AI_BUDGET_ANTHROPIC_USD must be a positive amount with AI_BUDGET_ENABLED=on/);
+    assert.deepEqual(await budgets(), {});
+});
+
+test('ai budget: Anthropic\'s cap spent defers the second opinion (published on terra alone, no confirmation row); a later tick with room confirms it from the backlog, hides the entry Haiku lacks with a D item; /metrics has ai_budget_*', async () => {
+    const vid = '-1_456001201';
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ($1, 2100000000, 1)`, [vid]);
+    let r = runAi(['detect'], budgetEnv(200, 0.0001));
+    let out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /ai detect: -1_456001201 second opinion deferred \(budget\)/);
+    let ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end]), [[30, 70], [75, 90], [300, 320]], 'served as with the switch off');
+    assert.equal(await confirmationOf(vid), undefined);
+    let b = await budgets();
+    assert.deepEqual(Object.keys(b).sort(), ['anthropic', 'openai']);
+    assert.equal(b.openai.allowance_usd, 200);
+    assert.ok(b.openai.spent_today_usd > 0, 'the terra run counts');
+    assert.ok(b.anthropic.cap_today_usd <= 0.00009, `at most the usable $0.00009: ${b.anthropic.cap_today_usd}`);
+    assert.ok(b.anthropic.backlog >= 1);
+    assert.equal(b.openai.backlog, null);
+
+    r = runAi(['detect'], budgetEnv(200, 1000));
+    out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /ai detect: -1_456001201 confirmed later by claude-haiku-5-5: 1 confirmed, 2 unconfirmed \(0 kept by review\), 2 moved to hidden/);
+    ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end]), [[30, 70]]);
+    assert.deepEqual(ai.hidden.map(e => [e.start, e.end, e.reason]), [[480, 483, 'short'], [75, 90, 'unconfirmed'], [300, 320, 'unconfirmed']]);
+    assert.equal(ai.withdrawn_at, null);
+    const c = await confirmationOf(vid);
+    assert.deepEqual([c.run_id, c.model, c.error, c.confirmed, c.unconfirmed, c.extra], [ai.run_id, 'claude-haiku-5-5', null, 1, 2, 1]);
+    const items = await dbQuery(`SELECT sheet, start, "end", flagged_by FROM prv_review_items WHERE native_id = $1 ORDER BY start`, [vid]);
+    assert.deepEqual(items.map(i => [i.sheet, i.start, i.end, i.flagged_by[0]]), [
+        [secondSheet(), 75, 90, 'second claude-haiku-5-5: not found'],
+        [secondSheet(), 300, 320, 'second claude-haiku-5-5: not found'],
+    ]);
+    b = await budgets();
+    assert.ok(b.anthropic.spent_today_usd > 0 && b.anthropic.cap_today_usd > 1);
+
+    const text = await fetchMetrics();
+    assert.match(text, /^ai_budget_allowance_usd\{vendor="anthropic"\} 1000$/m);
+    assert.match(text, /^ai_budget_cap_today_usd\{vendor="openai"\} [0-9.e+-]+$/m);
+    assert.match(text, /^ai_budget_spent_cycle_usd\{vendor="openai"\} [0-9.e+-]+$/m);
+    assert.match(text, /^ai_budget_spent_today_usd\{vendor="anthropic"\} [0-9.e+-]+$/m);
+    assert.match(text, /^ai_budget_updated_timestamp_seconds\{vendor="openai"\} \d+/m);
+});
+
+test('ai budget: OpenAI\'s cap spent claims nothing; the video waits in the queue', async () => {
+    const vid = '-1_456001202';
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, views_max, requests) VALUES ($1, 2100000000, 1)`, [vid]);
+    const r = runAi(['detect'], budgetEnv(0.0001, 1000));
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await aiVideo(vid)).status, 'seen');
+    assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_ai_runs WHERE native_id = $1`, [vid]))[0].n, 0);
+    await dbQuery(`DELETE FROM prv_ai_videos WHERE native_id = $1`, [vid]);
+});
+
 // ── AI-first serving (lib/find-ai-calculated.js): AI_FIRST is read at boot ──
 // The main app runs with the default (off); a second app on AI_PORT runs with AI_FIRST=on against the same DB.
 

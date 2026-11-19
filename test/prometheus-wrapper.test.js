@@ -161,3 +161,27 @@ test('registerAiMetrics: a failing query logs once and leaves the gauges empty; 
     assert.equal(logs.length, 1, logs.join('\n'));
     assert.match(logs[0], /AI metrics query failed: relation "prv_ai_videos" does not exist/);
 });
+
+test('registerAiBudget: one series per vendor row, none without rows', async () => {
+    let wrapper = require('../prometheus-wrapper.js');
+    const rows = [
+        { vendor: 'openai', allowance_usd: 200, spent_cycle_usd: 16.5, spent_today_usd: 3.25, cap_today_usd: 7.8, updated: '1763550000' },
+        { vendor: 'anthropic', allowance_usd: 100, spent_cycle_usd: 2, spent_today_usd: 1.5, cap_today_usd: 2.9, updated: '1763550060' },
+    ];
+    const db = fakeDb(sql => { assert.match(sql, /FROM prv_ai_budgets/); return rows; });
+    wrapper.registerAiBudget(db);
+    let output = await client.register.metrics();
+    assert.equal(db.calls.length, 1, 'the gauges share one query');
+    assert.match(output, /^ai_budget_allowance_usd\{vendor="openai"\} 200$/m);
+    assert.match(output, /^ai_budget_spent_cycle_usd\{vendor="openai"\} 16.5$/m);
+    assert.match(output, /^ai_budget_spent_today_usd\{vendor="anthropic"\} 1.5$/m);
+    assert.match(output, /^ai_budget_cap_today_usd\{vendor="anthropic"\} 2.9$/m);
+    assert.match(output, /^ai_budget_updated_timestamp_seconds\{vendor="anthropic"\} 1763550060$/m);
+
+    client.register.clear();
+    delete require.cache[require.resolve('../prometheus-wrapper.js')];
+    wrapper = require('../prometheus-wrapper.js');
+    wrapper.registerAiBudget(fakeDb(() => []));
+    output = await client.register.metrics();
+    assert.doesNotMatch(output, /^ai_budget_\w+\{/m);
+});

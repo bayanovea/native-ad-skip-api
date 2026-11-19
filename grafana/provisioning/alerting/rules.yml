@@ -256,6 +256,43 @@ groups:
                 - evaluator:
                     type: gt
                     params: [20]
+      # The spend budget (ai/budget, AI_BUDGET_ENABLED): a vendor's spend today past 1.5 × its cap + $1, or this
+      # cycle's past the full allowance. Only state written in the last day counts, so a budget switched off
+      # (rows left as they were) or never on (no rows) is no data = OK.
+      - uid: ai-budget-overrun
+        title: AiBudgetOverrun
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'AI budget {{ $labels.vendor }}: {{ $values.A }} USD spent, today past 1.5 × its cap + $1 or this cycle past the allowance: see prv_ai_budgets and the dashboard row Бюджеты; AI_DETECT_ENABLED=off stops the spend'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: c62ca5db-1b9b-4b36-a035-145154b708ae
+            model:
+              refId: A
+              expr: >-
+                (max by (vendor) (ai_budget_spent_today_usd > 1.5 * ai_budget_cap_today_usd + 1)
+                or max by (vendor) (ai_budget_spent_cycle_usd > ai_budget_allowance_usd))
+                and on (vendor) (time() - ai_budget_updated_timestamp_seconds < 86400)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
       # No series means node-exporter is not scraped: that alerts too.
       - uid: host-disk-low
         title: HostDiskLow

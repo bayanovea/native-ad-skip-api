@@ -75,14 +75,15 @@ const channelHistory = `WITH ch AS (
 	FROM prv_ai_video_calculateds GROUP BY 1)`
 
 // claimQueued moves up to the tick's share of the daily budget from the queue to
-// `fetching`, highest queueScore first. The row lock is held only for the claim, so
-// the read path's views upsert never waits on a yt-dlp call.
-func claimQueued(db *sql.DB, cfg Config) ([]queued, error) {
+// `fetching`, highest queueScore first; room is how many runs the detector vendor's
+// spend cap pays for today (math.MaxInt without AI_BUDGET_ENABLED). The row lock is
+// held only for the claim, so the read path's views upsert never waits on a yt-dlp call.
+func claimQueued(db *sql.DB, cfg Config, room int) ([]queued, error) {
 	var runs int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM prv_ai_runs WHERE created_at > NOW() - INTERVAL '24 hours'`).Scan(&runs); err != nil {
 		return nil, fmt.Errorf("daily budget: %w", err)
 	}
-	limit := min(cfg.BatchMax, cfg.DailyBudget-runs)
+	limit := min(cfg.BatchMax, cfg.DailyBudget-runs, room)
 	if limit <= 0 {
 		return nil, nil
 	}

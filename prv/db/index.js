@@ -315,6 +315,22 @@ module.exports = function(sequelize) {
         hidden_by: { type: DataTypes.TEXT, allowNull: true },
     }, { tableName: 'prv_review_audits', timestamps: false, indexes: [{ fields: ['batch'] }, { fields: ['created_at'] }] });
 
+    // One row per model vendor (openai | anthropic), upserted by every `ai detect` tick with AI_BUDGET_ENABLED=on
+    // (ai/budget): the allowance cycle, the spend and today's cap the tick paced by. Node never writes it.
+    const AiBudget = sequelize.define('ai_budget', {
+        vendor: { type: DataTypes.TEXT, primaryKey: true },
+        allowance_usd: { type: DataTypes.FLOAT, allowNull: false },
+        reserve: { type: DataTypes.FLOAT, allowNull: false },
+        cycle_start: { type: DataTypes.DATE, allowNull: false },
+        cycle_end: { type: DataTypes.DATE, allowNull: false },
+        spent_cycle_usd: { type: DataTypes.FLOAT, allowNull: false },
+        spent_today_usd: { type: DataTypes.FLOAT, allowNull: false },
+        cap_today_usd: { type: DataTypes.FLOAT, allowNull: false },
+        forecast_unspent_usd: { type: DataTypes.FLOAT, allowNull: false },
+        backlog: { type: DataTypes.INTEGER, allowNull: true }, // rows waiting for a second opinion; NULL for a vendor that gives none
+        updated_at: { type: DataTypes.DATE, allowNull: false },
+    }, { tableName: 'prv_ai_budgets', timestamps: false });
+
     // Phase 3 (audio drift): subtitle-vs-audio shifts per video, steps [{at_s, shift_s}] with shift = subtitle time − audio time. No writer in the product yet.
     const AiTimeline = sequelize.define('ai_timeline', {
         native_id: { type: DataTypes.STRING, allowNull: false },
@@ -340,5 +356,5 @@ module.exports = function(sequelize) {
     DurationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
     DurationLog.belongsTo(Video, { foreignKey: 'video_id', as: 'video' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiConfirmation, AiTimeline, ReviewAudit };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, DurationLog, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup, AdminDecision, ReviewItem, ReviewVerdict, ReviewReviewer, ReviewBatch, ReviewVideoFlag, AiVideo, AiRun, AiVideoCalculated, AiJudgement, AiConfirmation, AiTimeline, AiBudget, ReviewAudit };
 };

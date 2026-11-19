@@ -34,16 +34,19 @@ type confirmation struct {
 
 // confirm asks the second model about the same transcript, before finish takes
 // the queue row's lock (the read path upserts that row on every request). nil
-// when the switch is off or the first answer has nothing to confirm (a failed
-// call or an invalid answer: the run fails as without the switch).
+// when the switch is off, the first answer has nothing to confirm (a failed
+// call or an invalid answer: the run fails as without the switch) or the second
+// model's vendor has spent today's cap (deferred: the row waits in the backlog).
 func (r *detectRun) confirm(ctx context.Context, nativeID string, meta transcript.Meta, cues []vtt.Cue, first detector.Result, firstErr error) *confirmation {
 	units := requestFormat.Apply(cues)
 	if r.second == nil || firstErr != nil || detector.Validate(units, first.Output) != nil {
 		return nil
 	}
-	req := detector.NewRequestFormat(r.prompt, meta, units, requestFormat)
-	req.Key = nativeID
-	res, err := r.second.Detect(ctx, req)
+	if !r.secondAllowed() {
+		log.Printf("ai detect: %s second opinion deferred (budget)", nativeID)
+		return nil
+	}
+	res, err := r.askSecond(ctx, nativeID, meta, units)
 	c := &confirmation{model: r.second.Model(), promptSHA: r.prompt.SHA, res: res, cost: r.secondPrice.Cost(res.Usage)}
 	if err == nil {
 		err = detector.Validate(units, res.Output)
@@ -55,6 +58,26 @@ func (r *detectRun) confirm(ctx context.Context, nativeID string, meta transcrip
 	}
 	c.confirmed, c.extra = agree(detector.Resolve(units, first.Output), detector.Resolve(units, res.Output))
 	return c
+}
+
+// secondAllowed is whether the budget leaves room for one second call at its vendor's average.
+func (r *detectRun) secondAllowed() bool {
+	if r.budget == nil {
+		return true
+	}
+	v := vendorOf(r.second.Model())
+	return r.budget.Vendors[v] != nil && r.budget.Allow(v, r.budget.Vendors[v].AvgConfirm)
+}
+
+// askSecond makes the second call and puts its cost into the tick's budget.
+func (r *detectRun) askSecond(ctx context.Context, nativeID string, meta transcript.Meta, units []vtt.Cue) (detector.Result, error) {
+	req := detector.NewRequestFormat(r.prompt, meta, units, requestFormat)
+	req.Key = nativeID
+	res, err := r.second.Detect(ctx, req)
+	if r.budget != nil {
+		r.budget.Spend(vendorOf(r.second.Model()), r.secondPrice.Cost(res.Usage))
+	}
+	return res, err
 }
 
 // agree marks each first-model prediction the second model found too: same
@@ -110,25 +133,20 @@ func (c *confirmation) gate() []bool {
 // (owner, 2026-11-05). An entry past it stays hidden as unconfirmed with no item.
 const secondReviewDaily = 30
 
-// record writes the confirmation row and sends the unconfirmed entries to
-// review up to the day's cap, in finish's transaction (lock order: publishLock, queue row,
-// video_calculateds, then a batch row, as the judge's AI row before its batch row).
-func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int, nativeID string, data, hidden []Entry, cues []vtt.Cue, now time.Time) error {
+// record writes the confirmation row (confirmed / unconfirmed: the served entries the second
+// model found / did not) and sends the entries it moved to hidden to review up to the day's cap,
+// in finish's or confirmLater's transaction (lock order: publishLock, then the queue row or
+// video_calculateds and the AI row, then a batch row, as the judge's AI row before its batch row).
+func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int, nativeID string, confirmedN, unconfirmedN int, unconfirmed []Entry, cues []vtt.Cue, now time.Time) error {
 	usage, err := json.Marshal(usageRow{c.res.Usage.InputTokens, c.res.Usage.OutputTokens, c.res.Usage.CacheReadTokens, c.res.Usage.CacheWriteTokens})
 	if err != nil {
 		return err
-	}
-	var unconfirmed []Entry
-	for _, e := range hidden {
-		if e.Reason == reasonUnconfirmed {
-			unconfirmed = append(unconfirmed, e)
-		}
 	}
 	var errText, confirmed, uncount, extra any
 	if c.err != nil {
 		errText = c.err.Error()
 	} else {
-		confirmed, uncount, extra = len(data), len(unconfirmed), c.extra
+		confirmed, uncount, extra = confirmedN, unconfirmedN, c.extra
 	}
 	if _, err := tx.Exec(`INSERT INTO prv_ai_confirmations
 			(run_id, video_id, native_id, model, prompt_sha, raw_output, usage, cost_usd, error, confirmed, unconfirmed, extra)
@@ -139,7 +157,7 @@ func (r *detectRun) record(tx *sql.Tx, c *confirmation, runID int64, videoID int
 	if len(unconfirmed) == 0 {
 		return nil
 	}
-	// Ticks never overlap (flock), so no other transaction adds to the day's sheet meanwhile.
+	// publishLock: no other transaction adds to the day's sheet meanwhile.
 	sheet := "ai-second-" + now.UTC().Format("2006-01-02")
 	var today int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM prv_review_items WHERE COALESCE(sheet, batch) = $1`, sheet).Scan(&today); err != nil {

@@ -993,12 +993,463 @@
       "type": "row",
       "collapsed": false,
       "panels": [],
-      "title": "Воронка: где сейчас каждое видео (по порядку обработки)",
+      "title": "Бюджеты: деньги поставщиков моделей до сброса (AI_BUDGET_ENABLED)",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 9
+      },
+      "id": 84
+    },
+    {
+      "id": 85,
+      "type": "table",
+      "title": "Бюджеты: состояние по поставщикам",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 24,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "noValue": "нет данных"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "поставщик"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "лимит цикла"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "потрачено за цикл"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "осталось из usable"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "дней до сброса"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "лимит на сегодня"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "потрачено сегодня"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "прогноз недотраты"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "недотрата, % usable"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 20
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "состояние от"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "возраст состояния"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dtdurations"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 600
+                    },
+                    {
+                      "color": "red",
+                      "value": 900
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT k.vendor AS \"поставщик\",\n       to_char(b.cycle_start AT TIME ZONE 'UTC', 'MM-DD') || ' → ' || to_char(b.cycle_end AT TIME ZONE 'UTC', 'MM-DD') AS \"цикл (UTC)\",\n       b.allowance_usd AS \"лимит цикла\", b.spent_cycle_usd AS \"потрачено за цикл\",\n       b.allowance_usd * (1 - b.reserve) - b.spent_cycle_usd AS \"осталось из usable\",\n       EXTRACT(EPOCH FROM b.cycle_end - NOW()) / 86400 AS \"дней до сброса\",\n       b.cap_today_usd AS \"лимит на сегодня\", b.spent_today_usd AS \"потрачено сегодня\",\n       b.forecast_unspent_usd AS \"прогноз недотраты\",\n       100 * b.forecast_unspent_usd / NULLIF(b.allowance_usd * (1 - b.reserve), 0) AS \"недотрата, % usable\",\n       b.updated_at AS \"состояние от\", EXTRACT(EPOCH FROM NOW() - b.updated_at) AS \"возраст состояния\"\nFROM (VALUES (1, 'openai'), (2, 'anthropic')) AS k(ord, vendor) LEFT JOIN prv_ai_budgets b ON b.vendor = k.vendor ORDER BY k.ord",
+          "refId": "A"
+        }
+      ],
+      "description": "Что записал последний тик ai detect (prv_ai_budgets; пишет только при AI_BUDGET_ENABLED=on), дашборд это не пересчитывает. usable — лимит цикла без резерва AI_BUDGET_RESERVE; «осталось» = лимит × (1 − резерв) − потрачено. Лимит на сегодня — что осталось из usable, поделённое на дни до сброса (UTC). Прогноз недотраты — сколько останется к сбросу при темпе последних 7 дней; больше 20 % usable (оранжевый) — сигнал снизить AI_MIN_VIEWS (правило в docs/reference/ops.md). Возраст состояния больше 10 мин — бюджет выключен или тик ai detect падает. «нет данных» — бюджет ни разу не включали."
+    },
+    {
+      "id": 86,
+      "type": "table",
+      "title": "Потрачено за цикл: по видам",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 14,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "decimals": 2,
+          "noValue": "нет данных"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "поставщик"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH s AS (\n  SELECT 'detect' AS kind, model, cost_usd, created_at FROM prv_ai_runs\n  UNION ALL SELECT 'confirm', model, cost_usd, created_at FROM prv_ai_confirmations\n  UNION ALL SELECT 'judge', model, cost_usd, created_at FROM prv_ai_judgements\n  UNION ALL SELECT 'audit', model, cost_usd, created_at FROM prv_review_audits)\nSELECT k.vendor AS \"поставщик\",\n       CASE WHEN b.vendor IS NOT NULL THEN COALESCE(SUM(s.cost_usd) FILTER (WHERE s.kind = 'detect'), 0) END AS \"детектор\",\n       CASE WHEN b.vendor IS NOT NULL THEN COALESCE(SUM(s.cost_usd) FILTER (WHERE s.kind = 'confirm'), 0) END AS \"второе мнение\",\n       CASE WHEN b.vendor IS NOT NULL THEN COALESCE(SUM(s.cost_usd) FILTER (WHERE s.kind = 'judge'), 0) END AS \"судья\",\n       CASE WHEN b.vendor IS NOT NULL THEN COALESCE(SUM(s.cost_usd) FILTER (WHERE s.kind = 'audit'), 0) END AS \"аудит\",\n       CASE WHEN b.vendor IS NOT NULL THEN COALESCE(SUM(s.cost_usd), 0) END AS \"итого\"\nFROM (VALUES (1, 'openai'), (2, 'anthropic')) AS k(ord, vendor) LEFT JOIN prv_ai_budgets b ON b.vendor = k.vendor\nLEFT JOIN s ON CASE WHEN s.model LIKE 'claude-%' THEN 'anthropic' ELSE 'openai' END /* budget.VendorOf */ = k.vendor AND s.created_at >= b.cycle_start\nGROUP BY k.ord, k.vendor, b.vendor ORDER BY k.ord",
+          "refId": "A"
+        }
+      ],
+      "description": "SUM(cost_usd) с начала цикла поставщика (cycle_start его строки prv_ai_budgets): детектор — prv_ai_runs, второе мнение — prv_ai_confirmations, судья — prv_ai_judgements, аудит — prv_review_audits. Поставщик по модели: claude-* — anthropic, остальное — openai. Запуски, ждущие ответа батча, здесь без цены, а в состоянии тика идут по средней, поэтому «итого» бывает чуть меньше «потрачено за цикл»."
+    },
+    {
+      "id": 87,
+      "type": "bargauge",
+      "title": "Сегодня: потрачено из лимита на день",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 15,
+        "w": 10,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 150,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 150
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "нет данных"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT k.vendor AS \"поставщик\", 100 * b.spent_today_usd / NULLIF(b.cap_today_usd, 0) AS \"% лимита на сегодня\"\nFROM (VALUES (1, 'openai'), (2, 'anthropic')) AS k(ord, vendor) JOIN prv_ai_budgets b ON b.vendor = k.vendor ORDER BY k.ord",
+          "refId": "A"
+        }
+      ],
+      "description": "Потрачено сегодня (UTC) от лимита на сегодня, по состоянию последнего тика. Тик не заказывает сверх лимита: детектор не берёт видео, второе мнение откладывается в бэклог. Больше 150 % — сработал алерт AiBudgetOverrun (1.5 × лимит + $1)."
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "title": "Воронка: где сейчас каждое видео (по порядку обработки)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
       },
       "id": 14
     },
@@ -1012,7 +1463,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 10,
+        "y": 21,
         "w": 14,
         "h": 14
       },
@@ -1078,7 +1529,7 @@
       },
       "gridPos": {
         "x": 14,
-        "y": 10,
+        "y": 21,
         "w": 10,
         "h": 14
       },
@@ -1148,7 +1599,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 35
       },
       "id": 17
     },
@@ -1162,7 +1613,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 36,
         "w": 4,
         "h": 5
       },
@@ -1225,7 +1676,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 25,
+        "y": 36,
         "w": 4,
         "h": 5
       },
@@ -1288,7 +1739,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 25,
+        "y": 36,
         "w": 4,
         "h": 5
       },
@@ -1351,7 +1802,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 25,
+        "y": 36,
         "w": 12,
         "h": 10
       },
@@ -1417,7 +1868,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 46,
         "w": 12,
         "h": 5
       },
@@ -1485,7 +1936,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 51
       },
       "id": 23
     },
@@ -1499,7 +1950,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1562,7 +2013,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1625,7 +2076,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1691,7 +2142,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1754,7 +2205,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1823,7 +2274,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 41,
+        "y": 52,
         "w": 4,
         "h": 5
       },
@@ -1886,7 +2337,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 57,
         "w": 12,
         "h": 9
       },
@@ -1999,7 +2450,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 57,
         "w": 12,
         "h": 9
       },
@@ -2069,7 +2520,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 66,
         "w": 12,
         "h": 8
       },
@@ -2135,7 +2586,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 55,
+        "y": 66,
         "w": 12,
         "h": 8
       },
@@ -2209,7 +2660,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 74,
         "w": 12,
         "h": 8
       },
@@ -2275,7 +2726,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 63,
+        "y": 74,
         "w": 4,
         "h": 5
       },
@@ -2337,7 +2788,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 82
       },
       "id": 32
     },
@@ -2351,7 +2802,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 83,
         "w": 8,
         "h": 5
       },
@@ -2414,7 +2865,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 72,
+        "y": 83,
         "w": 4,
         "h": 5
       },
@@ -2478,7 +2929,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 72,
+        "y": 83,
         "w": 12,
         "h": 8
       },
@@ -2544,7 +2995,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 91,
         "w": 12,
         "h": 8
       },
@@ -2668,7 +3119,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 99
       },
       "id": 37
     },
@@ -2682,7 +3133,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 89,
+        "y": 100,
         "w": 6,
         "h": 5
       },
@@ -2762,7 +3213,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 89,
+        "y": 100,
         "w": 3,
         "h": 5
       },
@@ -2826,7 +3277,7 @@
       },
       "gridPos": {
         "x": 9,
-        "y": 89,
+        "y": 100,
         "w": 3,
         "h": 5
       },
@@ -2889,7 +3340,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 89,
+        "y": 100,
         "w": 12,
         "h": 10
       },
@@ -2955,7 +3406,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 99,
+        "y": 110,
         "w": 6,
         "h": 10
       },
@@ -3021,7 +3472,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 99,
+        "y": 110,
         "w": 6,
         "h": 10
       },
@@ -3113,7 +3564,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 99,
+        "y": 110,
         "w": 12,
         "h": 7
       },
@@ -3187,7 +3638,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 109,
+        "y": 120,
         "w": 12,
         "h": 7
       },
@@ -3259,7 +3710,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 127
       },
       "id": 65
     },
@@ -3273,7 +3724,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3336,7 +3787,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3400,7 +3851,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3463,7 +3914,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3530,7 +3981,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3593,7 +4044,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 117,
+        "y": 128,
         "w": 4,
         "h": 5
       },
@@ -3657,7 +4108,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 122,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -3731,7 +4182,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 122,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -3788,6 +4239,325 @@
       "description": "Нормализованный error из prv_ai_confirmations, за всё время."
     },
     {
+      "id": 88,
+      "type": "stat",
+      "title": "Бэклог: ждут второго мнения",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 141,
+        "w": 4,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"строк\", COALESCE(SUM(jsonb_array_length(c.data)), 0) AS \"отдаётся сегментов\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
+          "refId": "A"
+        }
+      ],
+      "description": "Неотозванные AI-строки без строки prv_ai_confirmations, чей детектор не Anthropic (вторая модель — Anthropic). Их отдаваемые сегменты зрители видят без второго мнения. Бэклог-проход ai detect берёт их по одной, новые первыми, до 10 за тик, пока хватает лимита Anthropic на день (AI_BUDGET_ENABLED=on)."
+    },
+    {
+      "id": 89,
+      "type": "stat",
+      "title": "Бэклог: самая старая строка",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 141,
+        "w": 4,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "бэклог пуст"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT EXTRACT(EPOCH FROM NOW() - MIN(c.published_at)) AS \"ждёт\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
+          "refId": "A"
+        }
+      ],
+      "description": "Сколько ждёт самая старая строка бэклога (по published_at). Проход берёт новые строки первыми, так что старые уходят последними."
+    },
+    {
+      "id": 90,
+      "type": "timeseries",
+      "title": "Подтверждено позже по дням",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 141,
+        "w": 16,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(f.created_at, '1d'), COUNT(*) AS \"подтверждено позже\", COUNT(*) FILTER (WHERE f.error IS NOT NULL) AS \"из них с ошибкой\"\nFROM prv_ai_confirmations f JOIN prv_ai_video_calculateds c ON c.run_id = f.run_id\nWHERE $__timeFilter(f.created_at) AND f.created_at > c.published_at + INTERVAL '1 hour' GROUP BY 1 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "Строки prv_ai_confirmations, записанные больше чем через час после published_at своей AI-строки (тот же run_id): второе мнение от бэклог-прохода, а не при публикации. «С ошибкой» — ответ не прошёл проверку, строка всё равно уходит из бэклога."
+    },
+    {
+      "id": 91,
+      "type": "table",
+      "title": "Пары детектор → вторая модель: сигналы",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 147,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "decimals": 1,
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "пара"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 330
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "строк"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "D решено"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "сегментов на строку"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH pr AS (\n  SELECT c.video_id, c.data, f.confirmed, f.unconfirmed,\n         CASE WHEN f.run_id IS NULL THEN r.model || ' (без второй модели)' ELSE r.model || ' → ' || f.model END AS pair\n  FROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id LEFT JOIN prv_ai_confirmations f ON f.run_id = c.run_id),\nd AS (\n  SELECT DISTINCT ON (i.id) pr.pair, v.verdict\n  FROM prv_review_items i JOIN pr ON pr.video_id = i.video_id JOIN prv_review_verdicts v ON v.item_id = i.id\n  WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-second-%' ORDER BY i.id, v.decided_at DESC, v.id DESC),\ndp AS (SELECT pair, COUNT(*) AS decided, COUNT(*) FILTER (WHERE verdict IN ('not_ad', 'unclear')) AS hide FROM d GROUP BY 1),\njp AS (\n  SELECT pr.pair, COUNT(*) FILTER (WHERE j.decision = 'review') AS review, COUNT(*) FILTER (WHERE j.decision = 'withdraw') AS withdraw\n  FROM prv_ai_judgements j JOIN pr ON pr.video_id = j.video_id GROUP BY 1),\nlv AS (\n  SELECT DISTINCT ON (user_id, video_id, category_id, start, \"end\") video_id, category_id, start, \"end\", vote\n  FROM votes WHERE video_id IN (SELECT video_id FROM prv_ai_video_calculateds)\n  ORDER BY user_id, video_id, category_id, start, \"end\", \"createdAt\" DESC, id DESC),\nnp AS (\n  SELECT pr.pair, COUNT(*) AS minus FROM pr CROSS JOIN LATERAL jsonb_array_elements(pr.data) e\n  JOIN lv ON lv.video_id = pr.video_id AND lv.category_id = (e ->> 'category_id')::int\n    AND lv.start = (e ->> 'start')::float AND lv.\"end\" = (e ->> 'end')::float\n  WHERE lv.vote = -1 GROUP BY 1)\nSELECT pr.pair AS \"пара\", COUNT(*) AS \"строк\", AVG(jsonb_array_length(pr.data)) AS \"сегментов на строку\",\n       100.0 * SUM(pr.unconfirmed) / NULLIF(SUM(pr.confirmed) + SUM(pr.unconfirmed), 0) AS \"не подтверждено, %\",\n       MAX(dp.decided) AS \"D решено\", 100.0 * MAX(dp.hide) / NULLIF(MAX(dp.decided), 0) AS \"D not_ad / unclear, %\",\n       100.0 * COALESCE(MAX(jp.review), 0) / COUNT(*) AS \"судья review на 100 строк\",\n       100.0 * COALESCE(MAX(jp.withdraw), 0) / COUNT(*) AS \"судья withdraw на 100 строк\",\n       100.0 * COALESCE(MAX(np.minus), 0) / NULLIF(SUM(jsonb_array_length(pr.data)), 0) AS \"−1 на 100 сегментов\"\nFROM pr LEFT JOIN dp ON dp.pair = pr.pair LEFT JOIN jp ON jp.pair = pr.pair LEFT JOIN np ON np.pair = pr.pair\nGROUP BY pr.pair ORDER BY COUNT(*) DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "Строка таблицы — пара: модель запуска AI-строки (prv_ai_runs.model) → модель второго мнения (prv_ai_confirmations.model); AI-строки без второго мнения — отдельно, «(без второй модели)». Все AI-строки, и отозванные. Сегментов на строку — отдаваемые (data). Не подтверждено — из строк prv_ai_confirmations: unconfirmed / (confirmed + unconfirmed) на момент вызова (hidden с reason unconfirmed потом меняют вердикты асессоров). D — вопросы листов ai-second-<дата> по видео пары, последний вердикт. Судья — решения prv_ai_judgements по видео пары. −1 — последние голоса пользователей −1 за сегменты data (точное совпадение category_id, start, end). Только чтение: таблица не создаёт вопросов."
+    },
+    {
       "type": "row",
       "collapsed": false,
       "panels": [],
@@ -3796,7 +4566,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 130
+        "y": 155
       },
       "id": 74
     },
@@ -3810,7 +4580,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 131,
+        "y": 156,
         "w": 6,
         "h": 5
       },
@@ -3873,7 +4643,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 131,
+        "y": 156,
         "w": 6,
         "h": 5
       },
@@ -3936,7 +4706,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 131,
+        "y": 156,
         "w": 6,
         "h": 5
       },
@@ -3999,7 +4769,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 131,
+        "y": 156,
         "w": 6,
         "h": 5
       },
@@ -4062,7 +4832,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 136,
+        "y": 161,
         "w": 8,
         "h": 8
       },
@@ -4128,7 +4898,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 136,
+        "y": 161,
         "w": 16,
         "h": 8
       },
@@ -4202,7 +4972,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 144,
+        "y": 169,
         "w": 24,
         "h": 9
       },
@@ -4325,7 +5095,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 153
+        "y": 178
       },
       "id": 46
     },
@@ -4339,7 +5109,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 154,
+        "y": 179,
         "w": 6,
         "h": 8
       },
@@ -4405,7 +5175,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 154,
+        "y": 179,
         "w": 6,
         "h": 8
       },
@@ -4471,7 +5241,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 154,
+        "y": 179,
         "w": 6,
         "h": 8
       },
@@ -4537,7 +5307,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 154,
+        "y": 179,
         "w": 6,
         "h": 8
       },
@@ -4603,7 +5373,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 162,
+        "y": 187,
         "w": 8,
         "h": 8
       },
@@ -4673,7 +5443,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 162,
+        "y": 187,
         "w": 4,
         "h": 8
       },
@@ -4740,7 +5510,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 162,
+        "y": 187,
         "w": 12,
         "h": 8
       },
@@ -4813,7 +5583,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 170,
+        "y": 195,
         "w": 24,
         "h": 10
       },
@@ -4984,7 +5754,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 180
+        "y": 205
       },
       "id": 55
     },
@@ -4998,7 +5768,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 181,
+        "y": 206,
         "w": 12,
         "h": 8
       },
@@ -5073,7 +5843,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 181,
+        "y": 206,
         "w": 4,
         "h": 8
       },
@@ -5138,7 +5908,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 181,
+        "y": 206,
         "w": 4,
         "h": 8
       },
@@ -5201,7 +5971,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 181,
+        "y": 206,
         "w": 4,
         "h": 8
       },
@@ -5264,7 +6034,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 189,
+        "y": 214,
         "w": 6,
         "h": 8
       },
@@ -5331,7 +6101,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 189,
+        "y": 214,
         "w": 18,
         "h": 8
       },

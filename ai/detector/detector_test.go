@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -115,8 +116,29 @@ func TestOpenAICost(t *testing.T) {
 }
 
 func TestHaikuCost(t *testing.T) {
-	c := Prices["claude-haiku-5-5"].Cost(Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000})
-	if want := 0.10 + 0.05 + 0.01 + 0.125; c < want-1e-9 || c > want+1e-9 {
+	c := Prices["claude-haiku-5-5"].Cost(Usage{InputTokens: 10_000, OutputTokens: 1_000, CacheReadTokens: 10_000, CacheWriteTokens: 10_000})
+	if want := (0.10*10_000 + 0.50*1_000 + 0.01*10_000 + 0.125*10_000) / 1e6; c < want-1e-12 || c > want+1e-12 {
 		t.Fatalf("claude-haiku-5-5 cost %v, want %v", c, want)
+	}
+}
+
+func TestLongInputTier(t *testing.T) {
+	for _, c := range []struct {
+		model string
+		u     Usage
+		want  float64
+	}{
+		// at the threshold: the base rates
+		{"claude-haiku-5-5", Usage{InputTokens: 90_000, CacheReadTokens: 10_000, OutputTokens: 1_000}, (90_000*0.10 + 10_000*0.01 + 1_000*0.50) / 1e6},
+		// above it, cache reads included: the whole call ×5
+		{"claude-haiku-5-5", Usage{InputTokens: 90_000, CacheReadTokens: 10_001, OutputTokens: 1_000}, 5 * (90_000*0.10 + 10_001*0.01 + 1_000*0.50) / 1e6},
+		{"gpt-6-luna", Usage{InputTokens: 272_000, OutputTokens: 2_000}, (272_000*0.10 + 2_000*0.50) / 1e6},
+		{"gpt-6-luna", Usage{InputTokens: 272_001, OutputTokens: 2_000}, (2*272_001*0.10 + 1.5*2_000*0.50) / 1e6},
+		// no tier
+		{"gpt-6.1-terra", Usage{InputTokens: 500_000}, 0.5},
+	} {
+		if got := Prices[c.model].Cost(c.u); math.Abs(got-c.want) > 1e-12 {
+			t.Errorf("%s %+v: cost %v, want %v", c.model, c.u, got, c.want)
+		}
 	}
 }

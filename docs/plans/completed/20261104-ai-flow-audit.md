@@ -28,7 +28,7 @@ A walk of the whole AI-first flow (prv) on `main` at 75c57bd: every state an ent
 
 ## Transitions
 
-- Only publish creates `source: chapter` and `hidden` `unconfirmed`; nothing re-runs either on an existing row (`ai-chapters-backfill-published-rows.md`, `ai-second-opinion-old-rows.md`). An unconfirmed entry kept on review is served at its AI bounds without the chapter check.
+- Only publish creates `source: chapter` and `hidden` `unconfirmed`; nothing re-runs either on an existing row (`ai-chapters-backfill-published-rows.md`; the second opinion's later pass came with change `ai-model-budget-controller`, 2026-11-19). An unconfirmed entry kept on review is served at its AI bounds without the chapter check.
 - `hidden` `review` leaves only by a keep; `hidden` `unconfirmed` only by a verdict (keep → `data` / `short`, `not_ad` → `review`), never by regate or `--backfill`. A keep on a `D` item serves it, a `not_ad` hides it as `review`, as on any ai item.
 - Absorb takes only `data` entries; `hidden` entries inside the merged bounds stay (spec `ai-verdict-application`). A keep on such a covered hidden entry is refused (400), while a keep on an absorbed (gone) one is a no-op: the one transition two paths treat differently (finding 1). The chapter check can make the same shape at publish: it checks chapter bounds against served entries only.
 - An emptied `data` withdraws only through a `not_ad` / `unclear` on a served entry; a short keep or a regate leaves a published row serving nothing (funnel stage 9, like "nothing found").
