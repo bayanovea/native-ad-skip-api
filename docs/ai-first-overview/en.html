@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-11-19 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-11-20 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -68,7 +68,7 @@
     <div class="node ai"><b>The detector (OpenAI)</b><span>takes only as many new videos as today's share pays for (never more than the fixed daily number); the rest wait in the queue, most-watched first as always.</span></div>
     <div class="node warn"><b>The second opinion (Anthropic)</b><span>when today's share is spent, the check is postponed, never the video: it is published from the first model alone, every segment that passed the two steps above goes live, and the video waits for its check.</span></div>
   </div>
-  <p class="caption">Postponed videos are checked later, newest first, as the following days' money allows; the videos published while the second opinion was off are among them. A late check never adds a segment: one the second model does not find is set aside ("the second model did not find it") and goes to an assessor within the same 30 a day; a segment an assessor has already confirmed or given edges stays live. The judge and the batch audit are counted in Anthropic's spend but never held back. A day that spends far past its share raises an alert.</p>
+  <p class="caption">Postponed videos are checked later, newest first, as the following days' money allows; the videos published while the second opinion was off are among them. A video that shows nothing is not checked: a late check could not change it. To clear the queue faster, the owner can add a fixed sum to Anthropic's daily share for a while; the following days pay it back out of theirs. A late check never adds a segment: one the second model does not find is set aside ("the second model did not find it") and goes to an assessor within the same 30 a day; a segment an assessor has already confirmed or given edges stays live. The judge and the batch audit are counted in Anthropic's spend but never held back. A day that spends far past its share raises an alert.</p>
 
   <h3>The author's chapters: sharper edges</h3>
   <p>On since 2026-11-02 (a switch of its own). Many videos have chapters in their description, the author's timecodes such as "2:15 Ad"; every detector run saves them. Once both models agree, the segment is checked against the chapters.</p>

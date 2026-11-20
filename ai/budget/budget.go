@@ -109,6 +109,14 @@ func Load(db *sql.DB, cfg Config, now time.Time) (*State, error) {
 	return s, nil
 }
 
+// Raise adds usd to the vendor's cap for today, at most up to what is left of its usable
+// amount; the days after pay it back through the cap formula.
+func (s *State) Raise(vendor string, usd float64) {
+	if v := s.Vendors[vendor]; v != nil {
+		v.Cap = min(v.Cap+usd, max(v.Usable-v.SpentBefore, 0))
+	}
+}
+
 // Room is how many more calls at cost each the vendor's cap pays for today.
 func (s *State) Room(vendor string, cost float64) int {
 	v := s.Vendors[vendor]

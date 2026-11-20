@@ -97,6 +97,14 @@ See proposal.md for the why. State on prod at 2026-11-19 (read-only queries):
     100k); the cap spent before 18:00 UTC three days running → one step up. Each step is a commit (the dashboard's
     `/* AI_MIN_VIEWS */` literals) and a deploy. The automation is `docs/backlog/ai-thresholds-from-budget.md`.
 
+12. **Backlog catch-up** (owner, 2026-11-20: the backlog of the switched-off days took ~7 days at the even pace).
+    `AI_BUDGET_BACKLOG_USD` (default 0, ≥ 0) is added to today's cap of the vendor that works the backlog (the second
+    model's), at most up to what is left of its usable amount; the stored cap includes it, so the alert and the
+    dashboard read the raised cap, and the days after pay it back through the usual cap formula. The owner raises it
+    step by step and sets it back to 0 once the backlog is empty (left on, it only lets the second opinion run past the
+    pace). Rows that serve nothing leave the backlog: a later confirmation never adds a served entry, so their calls
+    (1,950 of 3,705 on 2026-11-20) change nothing a viewer sees.
+
 ## Serving and precision
 
 The change serves unconfirmed segments in one case: a deferred confirmation publishes the detector's segments alone

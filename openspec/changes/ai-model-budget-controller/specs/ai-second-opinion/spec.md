@@ -55,11 +55,15 @@ The AI dashboard SHALL count `unconfirmed` entries in the hidden-by-reason panel
 ## ADDED Requirements
 
 ### Requirement: Published rows without a confirmation are confirmed later
-With `AI_SECOND_ENABLED` and `AI_BUDGET_ENABLED` on, each detect tick, after resolving its batches, SHALL make second calls for published, not withdrawn rows that have no confirmation row and whose detector is of a vendor other than the second model's, newest published first, at most 10 a tick and while the second model's vendor's cap for today allows.
+With `AI_SECOND_ENABLED` and `AI_BUDGET_ENABLED` on, each detect tick, after resolving its batches, SHALL make second calls for published, not withdrawn rows that serve at least one entry, have no confirmation row and whose detector is of a vendor other than the second model's, newest published first, at most 10 a tick and while the second model's vendor's cap for today allows.
 
 #### Scenario: Rows from the switched-off days
 - **WHEN** rows published by terra on 2026-11-08 have no confirmation row and Anthropic's cap allows
 - **THEN** the tick confirms up to 10 of them, the newest first
+
+#### Scenario: Nothing served
+- **WHEN** a row without a confirmation serves no entry (all of them hidden)
+- **THEN** it is not in the backlog, since a later confirmation never adds a served entry; it joins the backlog once a verdict serves one
 
 #### Scenario: Same-vendor detector
 - **WHEN** a row was published by a Sonnet run with no confirmation row and the second model is Haiku

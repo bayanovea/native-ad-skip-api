@@ -56,6 +56,10 @@ A vendor's cap for today SHALL be its usable amount minus its spend before today
 - **WHEN** the spend before today already exceeds the usable amount
 - **THEN** today's cap is 0
 
+#### Scenario: Backlog catch-up
+- **WHEN** `AI_BUDGET_BACKLOG_USD` is 5, Anthropic works the confirmation backlog and its even-pace cap is $3 with $80 of its usable amount left
+- **THEN** Anthropic's cap for today is $8, and the days after spread what is left as usual; the cap never exceeds what is left of the usable amount
+
 ### Requirement: The detector claims only what OpenAI's cap pays for
 With the budget on, the detect tick SHALL claim at most as many videos as the detector vendor's cap for today, minus today's spend, pays for at that vendor's recent average cost per run; the `AI_BATCH_MAX` and `AI_DAILY_BUDGET_VIDEOS` limits SHALL still apply.
 

@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Enabled bool
 	Reserve float64 // AI_BUDGET_RESERVE: the share of each allowance never planned for
+	Backlog float64 // AI_BUDGET_BACKLOG_USD: added to today's cap of the vendor working the confirmation backlog
 	Vendors []VendorConfig
 }
 
@@ -32,6 +33,13 @@ func ConfigFromEnv() (Config, error) {
 			return c, fmt.Errorf("AI_BUDGET_RESERVE must be a share in [0, 1), got %q", s)
 		}
 		c.Reserve = r
+	}
+	if s := os.Getenv("AI_BUDGET_BACKLOG_USD"); s != "" {
+		b, err := strconv.ParseFloat(s, 64)
+		if err != nil || b < 0 {
+			return c, fmt.Errorf("AI_BUDGET_BACKLOG_USD must be an amount ≥ 0, got %q", s)
+		}
+		c.Backlog = b
 	}
 	for _, v := range []struct{ name, prefix string }{{OpenAI, "AI_BUDGET_OPENAI"}, {Anthropic, "AI_BUDGET_ANTHROPIC"}} {
 		usd, day := v.prefix+"_USD", v.prefix+"_RESET_DAY"

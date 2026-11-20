@@ -54,7 +54,7 @@ func expectBacklog(mock sqlmock.Sqlmock, videoIDs ...int) {
 		rows.AddRow(id, "-1_456000001", int64(11), []byte(backlogRaw), []byte(backlogTranscript))
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(`FROM prv_ai_video_calculateds a JOIN prv_ai_runs r ON r.id = a.run_id
-	WHERE a.withdrawn_at IS NULL AND (r.model LIKE 'claude-%') <> $1`) +
+	WHERE a.withdrawn_at IS NULL AND a.data <> '[]' AND (r.model LIKE 'claude-%') <> $1`) +
 		`(?s).*NOT EXISTS \(SELECT 1 FROM prv_ai_confirmations c WHERE c.run_id = a.run_id\)\s+ORDER BY a.published_at DESC, a.video_id LIMIT 10`).
 		WithArgs(true).WillReturnRows(rows)
 }

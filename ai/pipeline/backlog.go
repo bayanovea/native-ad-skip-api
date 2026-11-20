@@ -22,11 +22,12 @@ const sourceReview = "review"
 const backlogMax = 10
 
 // backlogRule is a published row with no second opinion yet (deferred by the budget, or
-// published with the switch off), of a detector of another vendor than the second model
-// ($1: whether that is Anthropic), with a run its answer can be rebuilt from. A same-vendor
-// pair (Sonnet → Haiku) vetoes true ads too often to run (eval stage 7).
+// published with the switch off) that serves something (a later confirmation never adds
+// an entry), of a detector of another vendor than the second model ($1: whether that is
+// Anthropic), with a run its answer can be rebuilt from. A same-vendor pair (Sonnet → Haiku)
+// vetoes true ads too often to run (eval stage 7).
 const backlogRule = `FROM prv_ai_video_calculateds a JOIN prv_ai_runs r ON r.id = a.run_id
-	WHERE a.withdrawn_at IS NULL AND (r.model LIKE 'claude-%') <> $1
+	WHERE a.withdrawn_at IS NULL AND a.data <> '[]' AND (r.model LIKE 'claude-%') <> $1
 		AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL
 		AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations c WHERE c.run_id = a.run_id)`
 

@@ -4295,7 +4295,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) AS \"строк\", COALESCE(SUM(jsonb_array_length(c.data)), 0) AS \"отдаётся сегментов\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
+          "rawSql": "SELECT COUNT(*) AS \"строк\", COALESCE(SUM(jsonb_array_length(c.data)), 0) AS \"отдаётся сегментов\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND c.data <> '[]' AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
           "refId": "A"
         }
       ],
@@ -4359,7 +4359,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT EXTRACT(EPOCH FROM NOW() - MIN(c.published_at)) AS \"ждёт\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
+          "rawSql": "SELECT EXTRACT(EPOCH FROM NOW() - MIN(c.published_at)) AS \"ждёт\"\nFROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id\nWHERE c.withdrawn_at IS NULL AND c.data <> '[]' AND r.model NOT LIKE 'claude-%' /* second model: Anthropic */\n  AND jsonb_typeof(r.raw_output) = 'object' AND r.transcript IS NOT NULL /* backlog.go backlogRule */\n  AND NOT EXISTS (SELECT 1 FROM prv_ai_confirmations f WHERE f.run_id = c.run_id)",
           "refId": "A"
         }
       ],

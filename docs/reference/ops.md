@@ -120,7 +120,11 @@ scripts/export-review-verdicts.sh <sheet|batch> [reviewer]   # psql (PG* env, de
   (`confirmed later by` log lines, row 4б). Day after: Anthropic's spend today ≈ its cap, the backlog shrinking, the
   `D` cap held, no `ai_detect` failure, `AiBudgetOverrun` silent. A new allowance (plan change, top-up) is a new
   `AI_BUDGET_<VENDOR>_USD` and a redeploy; `AI_BUDGET_ENABLED=off` and a redeploy claim and confirm as before (the state
-  rows stay, aging; deferred rows keep serving unconfirmed). **Thresholds by hand** (design decision 11 of the change,
+  rows stay, aging; deferred rows keep serving unconfirmed). **Backlog catch-up** (design decision 12): the backlog
+  (`backlog` on Anthropic's state row) waits at the even pace; `gh variable set AI_BUDGET_BACKLOG_USD --body 5` and a
+  redeploy of the running sha add $5 to Anthropic's cap for today (the next days' caps shrink by that over the days
+  left); raise it step by step (5 → 10) while `AiBudgetOverrun` stays silent and the consoles agree, and set it back to
+  0 (`gh variable delete`) once the backlog is 0. **Thresholds by hand** (design decision 11 of the change,
   owner 2026-11-19: the controller sets them in the end, `docs/backlog/ai-thresholds-from-budget.md`; until then the
   owner does, by Claude's instructions): OpenAI's forecast unspent (`forecast_unspent_usd`, orange on the state table
   above 20 %) over 20 % of its usable amount three days running while the queue holds less than a day's claims →

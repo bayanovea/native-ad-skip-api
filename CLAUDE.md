@@ -203,8 +203,9 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   runs, confirmations, judgements and audits; today's cap = (allowance × (1 − reserve) − spent before today) / days
   left, computed at tick start. The detector claims only what its vendor's cap pays for (`AI_BATCH_MAX` and
   `AI_DAILY_BUDGET_VIDEOS` stay ceilings); past the second vendor's cap the second opinion is deferred (published as
-  with the switch off); after `poll()` the backlog pass confirms rows with no confirmation (another vendor's detector),
-  newest first, 10 a tick, hiding unconfirmed entries no verdict pins as `unconfirmed`. Judge and audit are counted,
+  with the switch off); after `poll()` the backlog pass confirms rows that serve something with no confirmation (another vendor's detector),
+  newest first, 10 a tick, hiding unconfirmed entries no verdict pins as `unconfirmed`; `AI_BUDGET_BACKLOG_USD` raises
+  that vendor's cap for today to catch it up. Judge and audit are counted,
   never held. State per vendor in `prv_ai_budgets`.
 - An AI row keeps every detected segment: `data` = exactly what is served, `hidden` = the rest with a `reason`
   (`confidence` | `short` | `review` | `unconfirmed`). Both are precomputed (publish, `applyVerdict`, `ai regate`),
@@ -343,6 +344,8 @@ AI_BUDGET_ENABLED (off)                   # on = the ai detect cron tick paces s
 AI_BUDGET_OPENAI_USD, AI_BUDGET_ANTHROPIC_USD   # monthly allowance per vendor; with the budget on required, else exit 1 naming it
 AI_BUDGET_OPENAI_RESET_DAY, AI_BUDGET_ANTHROPIC_RESET_DAY   # 1–28: the cycle starts 00:00 UTC that day; required likewise
 AI_BUDGET_RESERVE (0.1)                   # share in [0, 1) of each allowance never planned for
+AI_BUDGET_BACKLOG_USD (0)                 # ≥ 0: added to today's cap of the second model's vendor to catch up the backlog
+                                          # (paid back by the days after); back to 0 once the backlog is empty
 AI_AUDIT_ENABLED (off)                    # on = the ai audit cron tick works (review batch audit, see Ops → Audit)
 AI_AUDIT_TELEGRAM (off)                   # on = the audit pings the owner in Telegram; off = the page block only (Telegram is
                                           # unreachable from the prod host since 2026-11-01: docs/backlog/telegram-blocked-from-prod-host.md)
@@ -361,7 +364,7 @@ API_HOST, LANDING_HOST                    # the public host names (secrets); onl
                                           # bind-mounted prometheus.yml and dashboards (see Deployment → Render), never the containers
 ```
 
-Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_BUDGET_ENABLED` (`:-off`), `AI_BUDGET_OPENAI_USD`, `AI_BUDGET_OPENAI_RESET_DAY`, `AI_BUDGET_ANTHROPIC_USD`, `AI_BUDGET_ANTHROPIC_RESET_DAY`, `AI_BUDGET_RESERVE`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
+Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_BUDGET_ENABLED` (`:-off`), `AI_BUDGET_OPENAI_USD`, `AI_BUDGET_OPENAI_RESET_DAY`, `AI_BUDGET_ANTHROPIC_USD`, `AI_BUDGET_ANTHROPIC_RESET_DAY`, `AI_BUDGET_RESERVE`, `AI_BUDGET_BACKLOG_USD`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
 
 ### Deployment
 

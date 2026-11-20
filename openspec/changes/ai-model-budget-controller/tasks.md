@@ -38,6 +38,13 @@
 - [x] 7.1 Full suite: `make test-unit`, `go test -mod=vendor ./calculator ./ai/...`, `go vet ./...`, `make test-e2e`. Verify: all green.
 - [x] 7.2 Cleanup pass before commit: `grep -rn vendorOf ai/` only the wrapper; no leftover debug logs; transient state out of docs; open questions of design.md still open or answered. Verify: `git diff --stat` touches only files named above.
 
+## 8. Backlog catch-up (owner, 2026-11-20, design decision 12)
+
+- [x] 8.1 `ai/budget`: `AI_BUDGET_BACKLOG_USD` in `Config` (default 0, ≥ 0, else exit 1 naming it); `State.Raise(vendor, usd)` adds it to today's cap, at most what is left of the usable amount; `ai detect` raises the second model's vendor after `budget.Load`. Verify: `budget_test.go` cases (raised, clamped, invalid variable).
+- [x] 8.2 `backlogRule`: `a.data <> '[]'`; panels 88 and 89 get the same condition. Verify: `backlog_test.go`; the panels' SQL next to `/* backlog.go backlogRule */`.
+- [x] 8.3 `docker-compose.yml`, the deploy workflow's two lists; CLAUDE.md (env, wiring), `docs/reference/ai-first.md`, `ops.md` (the catch-up steps), the overview's budget caption (ru/en, date) and both artifacts republished. Verify: `grep -c AI_BUDGET_ .github/workflows/deploy.yml` = 14.
+- [x] 8.4 Full suite (`make test-unit`, Go, `go vet`, `make test-e2e`). Verify: all green.
+
 ## Workflow follow-up
 
 - Archive `ai-detector-roles-swap` first (its task 1.3 gate is superseded by the owner's 2026-11-19 decision to keep the roles; record that in its design and close it), then this change's specs build on it.

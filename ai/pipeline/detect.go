@@ -230,6 +230,9 @@ func Detect(cfg Config, nativeID string) error {
 		if r.budget, err = budget.Load(r.db, r.budgetCfg, time.Now()); err != nil {
 			return fmt.Errorf("budget: %w", err)
 		}
+		if r.second != nil {
+			r.budget.Raise(vendorOf(r.second.Model()), r.budgetCfg.Backlog)
+		}
 	}
 	failed, err := r.tick(ctx)
 	if herr := calculator.WriteHeartbeatStatus(r.db, "ai_detect", failed, err == nil); herr != nil {

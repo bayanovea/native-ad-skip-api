@@ -47,7 +47,7 @@ func TestVendorOf(t *testing.T) {
 
 func setEnv(t *testing.T, vars map[string]string) {
 	for _, k := range []string{"AI_BUDGET_ENABLED", "AI_BUDGET_RESERVE", "AI_BUDGET_OPENAI_USD", "AI_BUDGET_OPENAI_RESET_DAY",
-		"AI_BUDGET_ANTHROPIC_USD", "AI_BUDGET_ANTHROPIC_RESET_DAY"} {
+		"AI_BUDGET_ANTHROPIC_USD", "AI_BUDGET_ANTHROPIC_RESET_DAY", "AI_BUDGET_BACKLOG_USD"} {
 		t.Setenv(k, vars[k])
 	}
 }
@@ -63,13 +63,22 @@ func TestConfigFromEnv(t *testing.T) {
 
 	setEnv(t, fullEnv)
 	c, err := ConfigFromEnv()
-	if err != nil || !c.Enabled || c.Reserve != 0.1 || len(c.Vendors) != 2 ||
+	if err != nil || !c.Enabled || c.Reserve != 0.1 || c.Backlog != 0 || len(c.Vendors) != 2 ||
 		c.Vendors[0] != (VendorConfig{OpenAI, 200, 10}) || c.Vendors[1] != (VendorConfig{Anthropic, 100, 19}) {
 		t.Fatalf("got %+v %v", c, err)
 	}
 
+	env := map[string]string{"AI_BUDGET_BACKLOG_USD": "5"}
+	for k, v := range fullEnv {
+		env[k] = v
+	}
+	setEnv(t, env)
+	if c, err := ConfigFromEnv(); err != nil || c.Backlog != 5 {
+		t.Fatalf("backlog: got %+v %v", c, err)
+	}
+
 	for name, bad := range map[string]string{"AI_BUDGET_ANTHROPIC_USD": "", "AI_BUDGET_OPENAI_RESET_DAY": "29",
-		"AI_BUDGET_ANTHROPIC_RESET_DAY": "0", "AI_BUDGET_OPENAI_USD": "-5", "AI_BUDGET_RESERVE": "1"} {
+		"AI_BUDGET_ANTHROPIC_RESET_DAY": "0", "AI_BUDGET_OPENAI_USD": "-5", "AI_BUDGET_RESERVE": "1", "AI_BUDGET_BACKLOG_USD": "-1"} {
 		env := map[string]string{}
 		for k, v := range fullEnv {
 			env[k] = v
@@ -163,6 +172,20 @@ func TestLoadOverspent(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The backlog catch-up raises today's cap, never past what is left of the usable amount.
+func TestRaise(t *testing.T) {
+	s := &State{Vendors: map[string]*Vendor{Anthropic: {Usable: 90, SpentBefore: 10, Cap: 3}}}
+	s.Raise(Anthropic, 5)
+	s.Raise(OpenAI, 5)
+	if v := s.Vendors[Anthropic]; !near(v.Cap, 8) || s.Room(Anthropic, 1) != 8 {
+		t.Fatalf("raised: cap %v", v.Cap)
+	}
+	s.Raise(Anthropic, 100)
+	if v := s.Vendors[Anthropic]; !near(v.Cap, 80) {
+		t.Fatalf("clamped to the usable amount left: cap %v", v.Cap)
 	}
 }
 
