@@ -67,7 +67,7 @@ func TestVotesCountsEachUsersLatestVoteOnEachEntry(t *testing.T) {
 
 func TestEventsMatchTheEntriesByNativeID(t *testing.T) {
 	db, mock := newMock(t)
-	for table, n := range map[string]int{"prv_events_interval_undo": 2, "prv_events_interval_click": 5} {
+	for table, n := range map[string]int{"prv_events_interval_skip": 40, "prv_events_interval_undo": 2, "prv_events_interval_click": 5} {
 		mock.ExpectQuery(`(?s)`+regexp.QuoteMeta(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > e.since) FROM `+table+" ev JOIN jsonb_to_recordset($2::jsonb)")+
 			`.*`+regexp.QuoteMeta(`WHERE ev.video_native_id = $1 AND ev."createdAt" <= $3`)).
 			WithArgs("-1_456000001", testBounds(since), asOf).
@@ -117,6 +117,7 @@ func TestCollectSignals(t *testing.T) {
 	mock.ExpectQuery("FROM votes").WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(1, 2, 1))
 	mock.ExpectQuery("prv_events_interval_undo").WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(1, 0))
 	mock.ExpectQuery("prv_events_interval_click").WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(4, 4))
+	mock.ExpectQuery("prv_events_interval_skip").WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(40, 40))
 	mock.ExpectQuery("FROM markups").WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "created"}).
 		AddRow(2, 100.0, 120.0, 0, since).                  // conflicting, at the baseline: not new
 		AddRow(2, 300.0, 320.0, 0, since.Add(time.Second)). // conflicting, after it
@@ -128,7 +129,7 @@ func TestCollectSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Counters{VotesUp: 1, VotesDown: 2, Undo: 1, Clicks: 4, HumanMarkups: 3, ConflictingMarkups: 2, DurationVariants: 3, DurationRecut: 2}
+	want := Counters{VotesUp: 1, VotesDown: 2, Skips: 40, Undo: 1, Clicks: 4, HumanMarkups: 3, ConflictingMarkups: 2, DurationVariants: 3, DurationRecut: 2}
 	if s.Counters != want || s.New != (Evidence{VotesDown: 1, ConflictingMarkups: 1, DurationRecut: 1}) || *s.ViewsMax != 25000 || s.Requests != 12 || s.AgeH != 36 {
 		t.Fatalf("got %+v (views %v)", s, s.ViewsMax)
 	}
@@ -149,8 +150,10 @@ func expectSignals(mock sqlmock.Sqlmock, since, asOf time.Time, down, undo [2]in
 		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, down[0], down[1]))
 	mock.ExpectQuery("prv_events_interval_undo").WithArgs("-1_456000001", testBounds(since), asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(undo[0], undo[1]))
-	mock.ExpectQuery("prv_events_interval_click").WithArgs("-1_456000001", testBounds(since), asOf).
-		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
+	for _, table := range []string{"prv_events_interval_click", "prv_events_interval_skip"} {
+		mock.ExpectQuery(table).WithArgs("-1_456000001", testBounds(since), asOf).
+			WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
+	}
 	mock.ExpectQuery("FROM markups").WithArgs(7, published, asOf).
 		WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "created"}))
 	mock.ExpectQuery("FROM videos").WithArgs("-1_456000001", 7, published, testVideo.LastSeenAt, testVideo.Duration, 2, asOf).

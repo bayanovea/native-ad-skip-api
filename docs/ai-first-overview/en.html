@@ -136,6 +136,7 @@
 
   <h3>The judge: who watches for AI mistakes</h3>
   <p>Once an hour the judge checks the published AI markups that got <b>new negative signals</b>: dislikes, undone skips, human markups elsewhere, a new cut of the video. Likes and agreeing markups give no reason to look.</p>
+  <p>The extension also reports every skip it made, every undo (the "return" button or a seek back into the segment) and a forward seek right after a skip (the ad went on). Skips give undos a denominator: the judge reads "2 undos in 40 skips". For now these signals are only collected: with the <code>AI_JUDGE_UNDO_EVIDENCE=off</code> switch an undo alone does not call the judge; it is recorded and shown when something else does.</p>
   <div class="flow">
     <div class="node human"><b>Viewer signals</b><span>👎, undone skip, a markup saying "the ad is not here at all"</span></div>
     <div class="arrow">→</div>
@@ -163,7 +164,7 @@
       <ul>
         <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown; <code>source: "review"</code> means an assessor set the edges.</li>
         <li>Always send the video duration: without it no AI markup is served (we cannot tell which cut it is).</li>
-        <li>Undone skips and dislikes are valuable events; they reach the judge.</li>
+        <li>Skips, undone skips and dislikes are valuable events; they reach the judge.</li>
       </ul>
     </div>
     <div class="card"><h3>For the assessor</h3>

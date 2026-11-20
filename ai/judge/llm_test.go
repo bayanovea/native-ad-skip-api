@@ -91,6 +91,21 @@ func TestRenderRequest(t *testing.T) {
 	}
 }
 
+func TestRenderRequestUndoPerSkips(t *testing.T) {
+	views := int64(5000)
+	s := Signals{Counters: Counters{Skips: 40, Undo: 2}, ViewsMax: &views}
+	req := renderRequest(detector.Prompt{Text: "PROMPT"}, testVideo, s, testCategories, nil)
+	for _, want := range []string{"skips=40 (8.00 per 1k views)\n", "undo=2 (2 per 40 skips, 0.40 per 1k views)\n"} {
+		if !strings.Contains(req.User, want) {
+			t.Errorf("missing %q in\n%s", want, req.User)
+		}
+	}
+	s = Signals{Counters: Counters{Undo: 2}}
+	if req = renderRequest(detector.Prompt{Text: "PROMPT"}, testVideo, s, testCategories, nil); !strings.Contains(req.User, "skips=0\nundo=2\n") {
+		t.Errorf("no skips (an old client): no rate per skip, got\n%s", req.User)
+	}
+}
+
 func TestRenderRequestWithoutViews(t *testing.T) {
 	zero := int64(0)
 	for _, views := range []*int64{nil, &zero} {

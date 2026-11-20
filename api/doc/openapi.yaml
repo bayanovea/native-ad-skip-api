@@ -164,17 +164,51 @@ components:
         vote:        { type: integer, minimum: -1, maximum: 1 }
         duration:    { type: integer, minimum: 1, nullable: true }
 
+    EventIntervalSkip:
+      type: object
+      description: The player skipped the segment.
+      required: [type, user_id, video_native_id, category_id, start, end, via]
+      properties:
+        type:            { type: string, enum: [interval_skip] }
+        user_id:         { type: string, example: "uuid-abc" }
+        prv_user_id:      { type: integer, minimum: 1, nullable: true }
+        video_native_id: { type: string, example: "123_456" }
+        duration:        { type: integer, nullable: true, description: "Video duration, whole seconds" }
+        category_id:     { type: integer, minimum: 1 }
+        start:           { type: integer, minimum: 0 }
+        end:             { type: integer, minimum: 0 }
+        via:             { type: string, enum: [auto, suggested], description: "auto = the runner skipped it; suggested = the viewer took a suggestion" }
+
     EventIntervalUndo:
       type: object
+      description: The viewer returned into a skipped segment.
       required: [type, user_id, video_native_id, category_id, start, end]
       properties:
         type:            { type: string, enum: [interval_undo] }
         user_id:         { type: string, example: "uuid-abc" }
         prv_user_id:      { type: integer, minimum: 1, nullable: true }
         video_native_id: { type: string, example: "123_456" }
+        duration:        { type: integer, nullable: true, description: "Video duration, whole seconds" }
         category_id:     { type: integer, minimum: 1 }
         start:           { type: integer, minimum: 0 }
         end:             { type: integer, minimum: 0 }
+        via:             { type: string, enum: [button, seek], nullable: true, description: "Omitted by clients before 2026-11" }
+
+    EventIntervalOverrun:
+      type: object
+      description: The viewer seeked forward right after a skip landed (the ad went on past the segment's end).
+      required: [type, user_id, video_native_id, category_id, start, end, delta, after]
+      properties:
+        type:            { type: string, enum: [interval_overrun] }
+        user_id:         { type: string, example: "uuid-abc" }
+        prv_user_id:      { type: integer, minimum: 1, nullable: true }
+        video_native_id: { type: string, example: "123_456" }
+        duration:        { type: integer, nullable: true, description: "Video duration, whole seconds" }
+        category_id:     { type: integer, minimum: 1 }
+        start:           { type: integer, minimum: 0 }
+        end:             { type: integer, minimum: 0 }
+        delta:           { type: integer, minimum: 0, description: "Seconds seeked forward" }
+        after:           { type: integer, minimum: 0, description: "Seconds between the landing and the seek" }
 
     EventIntervalClick:
       type: object
@@ -453,7 +487,8 @@ paths:
       summary: Submit a batch of events
       description: |
         Accepts a JSON array of mixed event objects. Each event must have a `type` field.
-        Supported types: `interval_undo`, `interval_click`, `time_saved`, `client_failed`.
+        Supported types: `interval_skip`, `interval_undo`, `interval_overrun`, `interval_click`, `time_saved`,
+        `client_failed`. At most 100 events per request (`413` above, nothing stored).
         Invalid events are logged to stdout and skipped — the rest of the batch is still processed.
         If the batch contains at least one `time_saved` event, `data.time_saved` is included in the response.
       requestBody:
@@ -464,12 +499,16 @@ paths:
               type: array
               items:
                 oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalSkip' }
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalOverrun' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
                   - { $ref: '#/components/schemas/EventClientFailed' }
               example:
-                - { type: interval_undo, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5, end: 30 }
+                - { type: interval_skip, user_id: "uuid-abc", video_native_id: "123_456", duration: 600, category_id: 4, start: 5, end: 30, via: auto }
+                - { type: interval_undo, user_id: "uuid-abc", video_native_id: "123_456", duration: 600, category_id: 4, start: 5, end: 30, via: seek }
+                - { type: interval_overrun, user_id: "uuid-abc", video_native_id: "123_456", duration: 600, category_id: 4, start: 5, end: 30, delta: 25, after: 4 }
                 - { type: interval_click, user_id: "uuid-abc", video_native_id: "123_456", category_id: 1, start: 5, end: 30, click_time: 12 }
                 - { type: time_saved, user_id: "uuid-abc", prv_user_id: 789, inc: 25 }
                 - { type: client_failed, user_id: "uuid-abc", prv_user_id: 789, video_native_id: "123_456", reason: "segment_not_found", data: { attempts: 3 } }
@@ -480,6 +519,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventsResponse' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '413': { description: More than 100 events }
 
   # ── Admin ────────────────────────────────────────────────────────────────────
   /admin/video/{video_id}:
@@ -895,7 +935,9 @@ paths:
               type: array
               items:
                 oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalSkip' }
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalOverrun' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
                   - { $ref: '#/components/schemas/EventClientFailed' }
@@ -906,6 +948,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventsResponse' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '413': { description: More than 100 events }
 
   # ── YT ──────────────────────────────────────────────────────────────────────
   /yt/video-calculated:
@@ -1081,7 +1124,9 @@ paths:
               type: array
               items:
                 oneOf:
+                  - { $ref: '#/components/schemas/EventIntervalSkip' }
                   - { $ref: '#/components/schemas/EventIntervalUndo' }
+                  - { $ref: '#/components/schemas/EventIntervalOverrun' }
                   - { $ref: '#/components/schemas/EventIntervalClick' }
                   - { $ref: '#/components/schemas/EventTimeSaved' }
                   - { $ref: '#/components/schemas/EventClientFailed' }
@@ -1092,3 +1137,4 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventsResponse' }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '413': { description: More than 100 events }

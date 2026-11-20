@@ -17,7 +17,8 @@ import (
 type Counters struct {
 	VotesUp            int `json:"votes_up"`
 	VotesDown          int `json:"votes_down"`
-	Undo               int `json:"undo"`
+	Skips              int `json:"skips"` // the player skipped the entry: undo's denominator
+	Undo               int `json:"undo"`  // by any means (the notification's button, a seek back, an old client's NULL)
 	Clicks             int `json:"clicks"`
 	HumanMarkups       int `json:"human_markups"`
 	ConflictingMarkups int `json:"conflicting_markups"`
@@ -49,8 +50,9 @@ type Evidence struct {
 	DurationRecut      int `json:"duration_recut"` // re-cuts beyond the count the last judgement recorded
 }
 
-func (e Evidence) negative() bool {
-	return e.VotesDown > 0 || e.Undo > 0 || e.ConflictingMarkups > 0
+// negative: undo counts only as long as AI_JUDGE_UNDO_EVIDENCE is not off.
+func (e Evidence) negative(undo bool) bool {
+	return e.VotesDown > 0 || (undo && e.Undo > 0) || e.ConflictingMarkups > 0
 }
 
 // Entry is one AI segment of prv_ai_video_calculateds.data.
@@ -123,6 +125,9 @@ func collectSignals(db *sql.DB, v Video, categories map[int]string, since []time
 	if s.Clicks, _, err = events(db, "prv_events_interval_click", v.NativeID, bounds, asOf); err != nil {
 		return s, fmt.Errorf("clicks: %w", err)
 	}
+	if s.Skips, _, err = events(db, "prv_events_interval_skip", v.NativeID, bounds, asOf); err != nil {
+		return s, fmt.Errorf("skips: %w", err)
+	}
 	if s.humans, err = humanMarkups(db, v, categories, asOf); err != nil {
 		return s, fmt.Errorf("human markups: %w", err)
 	}
@@ -159,7 +164,7 @@ func votes(db *sql.DB, videoID int, bounds []byte, asOf time.Time) (up, down, ne
 	return
 }
 
-// events counts undo / click events on the AI entries, and those after the entry's baseline; events carry the native_id, not the videos row.
+// events counts skip / undo / click events on the AI entries, and those after the entry's baseline; events carry the native_id, not the videos row.
 func events(db *sql.DB, table, nativeID string, bounds []byte, asOf time.Time) (n, newN int, err error) {
 	err = db.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE ev."createdAt" > e.since) FROM `+table+` ev JOIN `+entryBounds+`
 		ON ev.category_id = e.category_id AND ev.start = e.start AND ev."end" = e."end"

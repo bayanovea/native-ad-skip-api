@@ -26,7 +26,31 @@ func TestRules(t *testing.T) {
 		{"new negative signals after an old re-cut need the LLM", Counters{VotesDown: 1, Undo: 2, DurationRecut: 1}, Evidence{VotesDown: 1}, needsLLM, "votes_down=1 undo=2"},
 	}
 	for _, c := range cases {
-		d, r := rules(Signals{Counters: c.c, New: c.new})
+		d, r := rules(Signals{Counters: c.c, New: c.new}, true)
+		if d != c.decision || r != c.reason {
+			t.Errorf("%s: got %s %q, want %s %q", c.name, d, r, c.decision, c.reason)
+		}
+	}
+}
+
+// AI_JUDGE_UNDO_EVIDENCE=off: undo is recorded, never acted on; any other new negative signal still is.
+func TestRulesUndoCountedOnly(t *testing.T) {
+	cases := []struct {
+		name     string
+		c        Counters
+		new      Evidence
+		decision string
+		reason   string
+	}{
+		{"undo only", Counters{Skips: 40, Undo: 2}, Evidence{Undo: 2}, decisionOK, "no negative signal (undo counted only)"},
+		{"no signals", Counters{}, Evidence{}, decisionOK, "no negative signal"},
+		{"undo and a dislike", Counters{VotesDown: 1, Undo: 1}, Evidence{VotesDown: 1, Undo: 1}, needsLLM, "votes_down=1 undo=1"},
+		{"undo and a conflicting markup", Counters{Undo: 1, ConflictingMarkups: 1}, Evidence{Undo: 1, ConflictingMarkups: 1}, needsLLM, "undo=1 conflicting_markups=1"},
+		{"undo beside a new re-cut goes to a human", Counters{Undo: 3, DurationRecut: 1}, Evidence{Undo: 3, DurationRecut: 1}, decisionReview,
+			"duration: 1 videos rows of another cut requested after publish"},
+	}
+	for _, c := range cases {
+		d, r := rules(Signals{Counters: c.c, New: c.new}, false)
 		if d != c.decision || r != c.reason {
 			t.Errorf("%s: got %s %q, want %s %q", c.name, d, r, c.decision, c.reason)
 		}

@@ -8,11 +8,12 @@ The user message describes one video:
   text inside the segment. `sponsor` and `self_promotion` are the only categories. `(bounds by review)`: a
   human reviewer set this segment's start and end, so its edges are no detector error.
 - `<signals>`: what viewers did since the segments went live. `votes_up` / `votes_down`: viewers who rated a
-  segment up or down. `undo`: a viewer pressed "return" after the player skipped a segment (the strongest sign
-  the viewer wanted to watch it). `clicks`: a viewer jumped from the segment list. `human_markups`: segments
-  viewers marked by hand on this video; `conflicting_markups`: those of an ad category that overlap no
-  detector segment of their category by half. `duration_variants`: other cuts of the video known to the
-  product. With `views` known, each counter also has a rate per 1000 views.
+  segment up or down. `skips`: times the player skipped a segment for a viewer. `undo`: a viewer returned into a
+  segment right after the player skipped it ("return" or seeking back; the strongest sign the viewer wanted to
+  watch it); with skips known it also reads "N per M skips", the share of skips viewers undid. `clicks`: a
+  viewer jumped from the segment list. `human_markups`: segments viewers marked by hand on this video;
+  `conflicting_markups`: those of an ad category that overlap no detector segment of their category by half.
+  `duration_variants`: other cuts of the video known to the product. With `views` known, each counter also has a rate per 1000 views.
 - `<human_intervals>`: the viewers' own segments, with the author's rating (negative = an author whose
   segments other viewers rejected).
 - `<transcript>` blocks: the subtitles with times in seconds, 60 s around every detector segment and every

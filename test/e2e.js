@@ -990,6 +990,109 @@ test('prv GET /video-calculated: falls back to any video when duration is far of
     assert.equal(res.status, 200, 'should fall back to any video with matching native_id');
 });
 
+// ── Events: viewer signals ────────────────────────────────────────────────────
+
+const eventRows = (table, nativeId) => dbQuery(
+    `SELECT TRIM(user_id) AS user_id, prv_user_id, video_native_id, category_id, start, "end", duration, ${
+        table.endsWith('overrun') ? 'delta, after' : 'via'}
+     FROM ${table} WHERE video_native_id = $1 ORDER BY id`, [nativeId]);
+
+test('events: a mixed batch stores skips, undos and overruns with duration, via, delta and after; an old client\'s undo has NULLs; an invalid event is skipped, the rest stored', async () => {
+    const vid = '-1_456000951';
+    const sp = cats.prv.sponsor;
+    const base = { user_id: 'e2e-signal-u1', prv_user_id: 777, video_native_id: vid, category_id: sp, duration: 600 };
+    const res = await request('POST', '/events?v=2.4.0', [
+        { ...base, type: 'interval_skip', start: 30, end: 70, via: 'auto' },
+        { ...base, type: 'interval_skip', start: 70, end: 90, via: 'suggested' },
+        { ...base, type: 'interval_undo', start: 30, end: 70, via: 'seek' },
+        { ...base, type: 'interval_overrun', start: 70, end: 90, delta: 25, after: 4 },
+        { type: 'interval_undo', user_id: 'e2e-signal-old', video_native_id: vid, category_id: sp, start: 200, end: 230 },
+        { ...base, type: 'interval_skip', start: 300, end: 310, via: 'manual' },
+        { ...base, type: 'interval_undo', start: 300, end: 310, via: 'scrub' },
+        { ...base, type: 'interval_overrun', start: 300, end: 310, delta: -1, after: 2 },
+        { ...base, type: 'interval_skip', start: 300, end: 310, via: 'auto', duration: 600.5 },
+    ]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body, { data: {} });
+
+    const ident = { user_id: 'e2e-signal-u1', prv_user_id: 777, video_native_id: vid, category_id: sp, duration: 600 };
+    assert.deepEqual(await eventRows('prv_events_interval_skip', vid), [
+        { ...ident, start: 30, end: 70, via: 'auto' },
+        { ...ident, start: 70, end: 90, via: 'suggested' },
+    ]);
+    assert.deepEqual(await eventRows('prv_events_interval_undo', vid), [
+        { ...ident, start: 30, end: 70, via: 'seek' },
+        { user_id: 'e2e-signal-old', prv_user_id: null, video_native_id: vid, category_id: sp, start: 200, end: 230, duration: null, via: null },
+    ]);
+    assert.deepEqual(await eventRows('prv_events_interval_overrun', vid), [
+        { ...ident, start: 70, end: 90, delta: 25, after: 4 },
+    ]);
+});
+
+test('events: more than 100 events is 413 and stores nothing; /yt/events writes yt_events_*', async () => {
+    const vid = '-1_456000952';
+    const skip = { type: 'interval_skip', user_id: 'e2e-signal-u2', video_native_id: vid, category_id: cats.yt.intro,
+        start: 0, end: 20, via: 'auto', duration: 300 };
+    const tooMany = await request('POST', '/events', Array.from({ length: 101 }, () => skip));
+    assert.equal(tooMany.status, 413, JSON.stringify(tooMany.body));
+    assert.equal((await eventRows('prv_events_interval_skip', vid)).length, 0);
+
+    const res = await request('POST', '/yt/events', [
+        skip,
+        { ...skip, type: 'interval_undo', via: 'button' },
+        { ...skip, type: 'interval_overrun', via: undefined, delta: 10, after: 1 },
+    ]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal((await eventRows('yt_events_interval_skip', vid)).length, 1);
+    assert.deepEqual((await eventRows('yt_events_interval_undo', vid)).map(r => r.via), ['button']);
+    assert.deepEqual((await eventRows('yt_events_interval_overrun', vid)).map(r => r.delta), [10]);
+    assert.equal((await eventRows('prv_events_interval_skip', vid)).length, 0, 'nothing on prv');
+});
+
+test('events: a DB from before the change gets the undo columns and indexes on the next boot', async () => {
+    const db = `${TEST_DB}_events`;
+    const env = { ...process.env, DB_NAME: db, DB_HOST, DB_PORT: String(DB_PORT) };
+    const sync = () => spawnSync('node', ['scripts/sync-db.js'], { cwd: APP_DIR, env, encoding: 'utf8' });
+    const admin = adminClient();
+    await admin.connect();
+    await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+    await admin.query(`CREATE DATABASE "${db}"`);
+    const c = adminClient(db);
+    let connected = false;
+    try {
+        let r = sync();
+        assert.equal(r.status, 0, `sync-db failed: ${r.stderr}`);
+        await c.connect();
+        connected = true;
+        const tables = ['prv_events_interval_undo', 'rt_events_interval_undo', 'yt_events_interval_undo'];
+        for (const t of tables) {
+            await c.query(`DROP INDEX ${t}_bounds, ${t}_created_at`);
+            await c.query(`ALTER TABLE ${t} DROP COLUMN via, DROP COLUMN duration`);
+        }
+        await c.query(`INSERT INTO prv_events_interval_undo (user_id, video_native_id, category_id, start, "end", "createdAt", "updatedAt")
+            VALUES ('e2e-old', '-1_456000953', 4, 0, 10, NOW(), NOW())`);
+        r = sync();
+        assert.equal(r.status, 0, `second sync-db failed: ${r.stderr}`);
+        for (const t of tables) {
+            const { rows: cols } = await c.query(`SELECT column_name FROM information_schema.columns
+                WHERE table_name = $1 AND column_name IN ('via', 'duration') ORDER BY column_name`, [t]);
+            assert.deepEqual(cols.map(x => x.column_name), ['duration', 'via'], t);
+            const { rows: idx } = await c.query(`SELECT indexname FROM pg_indexes WHERE tablename = $1 ORDER BY indexname`, [t]);
+            assert.deepEqual(idx.map(x => x.indexname), [`${t}_bounds`, `${t}_created_at`, `${t}_pkey`], t);
+        }
+        for (const t of ['prv_events_interval_skip', 'prv_events_interval_overrun', 'yt_events_interval_skip']) {
+            const { rows: idx } = await c.query(`SELECT indexname FROM pg_indexes WHERE tablename = $1 ORDER BY indexname`, [t]);
+            assert.deepEqual(idx.map(x => x.indexname), [`${t}_bounds`, `${t}_created_at`, `${t}_pkey`], t);
+        }
+        const { rows: [old] } = await c.query(`SELECT via, duration FROM prv_events_interval_undo WHERE user_id = 'e2e-old'`);
+        assert.deepEqual(old, { via: null, duration: null });
+    } finally {
+        if (connected) await c.end();
+        await admin.query(`DROP DATABASE IF EXISTS "${db}"`);
+        await admin.end();
+    }
+});
+
 // ── AI queue: views on the read path ──────────────────────────────────────────
 
 // The upsert runs after the response is sent, so the row is polled for.
@@ -2462,6 +2565,51 @@ test('ai judge: off by default; no signal → ok by rules, an undo → the LLM s
     const html = (await request('GET', `/admin/video/${undone.videoId}?verifyBearerToken=${VOTE_AUTH}`)).body;
     assert.equal((html.match(/class="ai-judgement"/g) || []).length, 2);
     assert.match(html, /<td><strong>review<\/strong><\/td>\s*<td>llm<\/td>/);
+});
+
+// AI_JUDGE_UNDO_EVIDENCE=off: undo is collected, not acted on (owner, 2026-11-20).
+test('ai judge: AI_JUDGE_UNDO_EVIDENCE=off records undo and skips but never acts on undo alone; a dislike beside it reaches the LLM; an invalid value is a startup error', async () => {
+    await aiFirstServer();
+    const nid = '-1_456000413';
+    const sp = cats.prv.sponsor;
+    const { videoId } = await aiPublished(nid);
+    const judge = (env = {}) => runAi(['judge'], { AI_JUDGE_ENABLED: 'on', AI_JUDGE_MIN_INTERVAL: '0', AI_JUDGE_UNDO_EVIDENCE: 'off', ...env });
+
+    let r = judge({ AI_JUDGE_UNDO_EVIDENCE: 'maybe' });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /AI_JUDGE_UNDO_EVIDENCE must be on or off, got "maybe"/);
+
+    const ev = { user_id: 'undo-off-u', video_native_id: nid, category_id: sp, duration: 600 };
+    const res = await request('POST', '/events', [
+        { ...ev, type: 'interval_skip', start: 30, end: 70, via: 'auto' },
+        { ...ev, type: 'interval_skip', start: 30, end: 70, via: 'auto' },
+        { ...ev, type: 'interval_skip', start: 30, end: 70, via: 'suggested' },
+        { ...ev, type: 'interval_skip', start: 100, end: 120, via: 'auto' }, // not an AI entry's bounds
+        { ...ev, type: 'interval_undo', start: 30, end: 70, via: 'button' },
+        { ...ev, type: 'interval_undo', start: 30, end: 70, via: 'seek' },
+    ]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    r = judge();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    let [j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.by, j.reason, j.model], ['ok', 'rules', 'no negative signal (undo counted only)', null]);
+    assert.deepEqual([j.signals.skips, j.signals.undo, j.signals.new.undo], [3, 2, 2]);
+    assert.deepEqual(await aiItems(videoId), [], 'no review item');
+    assert.equal((await aiVideo(nid)).judge_counters.skips, 3);
+
+    await postUndo(nid, 'undo-off-u2', 30, 70);
+    r = judge();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal((await judgements(videoId)).length, 1, 'a new undo alone makes the judged video due no more');
+
+    const vote = await requestOn(AI_PORT, 'POST', '/vote', {
+        video_id: nid, user_id: 'undo-off-v', category_id: sp, start: 30, end: 70, vote: -1, duration: 600 });
+    assert.equal(vote.status, 204, JSON.stringify(vote.body));
+    r = judge();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    [, j] = await judgements(videoId);
+    assert.deepEqual([j.decision, j.by, j.reason], ['ok', 'llm', fixtureReason(nid)]);
+    assert.deepEqual([j.signals.votes_down, j.signals.new.votes_down, j.signals.undo, j.signals.new.undo, j.signals.skips], [1, 1, 3, 1, 3]);
 });
 
 test('ai judge: the fixture LLM says ok on a conflicting markup → nothing changes; a videos row of another cut requested after publish goes to review, the row stays served to its own cut', async () => {

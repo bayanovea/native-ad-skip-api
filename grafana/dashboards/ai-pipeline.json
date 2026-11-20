@@ -5746,6 +5746,333 @@
       "description": "video_id ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv. Открытые вопросы — только от судьи: сегменты ниже порога на проверке — не сигнал против."
     },
     {
+      "id": 92,
+      "type": "timeseries",
+      "title": "Доля отмен по неделям: AI-сегменты и пользовательские",
+      "description": "Отмены / пропуски за неделю (prv_events_interval_undo / _skip, отмены любым via). Событие — AI-сегмента, если его границы точно совпадают с записью data не отозванной строки prv_ai_video_calculateds (то, что отдаётся сейчас), иначе пользовательского, если совпадают с prv_calculated_segments; события на границах, которых больше нет, не считаются. С AI_JUDGE_UNDO_EVIDENCE=off судья отмены только записывает.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 205,
+        "w": 12,
+        "h": 8
+      },
+      "timeFrom": "90d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL),\nhu AS (SELECT DISTINCT v.native_id AS n, cs.category_id AS cat, cs.start::numeric AS s, cs.\"end\"::numeric AS en\n       FROM prv_calculated_segments cs JOIN videos v ON v.id = cs.video_id),\nev AS (SELECT \"createdAt\" AS t, video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, 1 AS skip, 0 AS undo\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\")\n       UNION ALL SELECT \"createdAt\", video_native_id, category_id, start, \"end\", 0, 1 FROM prv_events_interval_undo WHERE $__timeFilter(\"createdAt\")),\nsrc AS (SELECT ev.t, ev.skip, ev.undo, CASE WHEN ai.n IS NOT NULL THEN 'AI-сегменты' WHEN hu.n IS NOT NULL THEN 'пользовательские' END AS source\n        FROM ev LEFT JOIN (SELECT DISTINCT n, cat, s, en FROM ai) ai ON ai.n = ev.n AND ai.cat = ev.cat AND ai.s = ev.s AND ai.en = ev.en\n        LEFT JOIN hu ON hu.n = ev.n AND hu.cat = ev.cat AND hu.s = ev.s AND hu.en = ev.en)\nSELECT date_trunc('week', t) AS time, source AS metric, SUM(undo)::float / NULLIF(SUM(skip), 0) AS value\nFROM src WHERE source IS NOT NULL GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 94,
+      "type": "table",
+      "title": "Заходы дальше конца: по AI-сегментам",
+      "description": "Записи data не отозванных AI-строк с overrun-событиями: сколько раз сегмент пропустили, сколько раз сразу после пропуска перемотали вперёд и медиана delta (на сколько секунд вперёд). Большая медиана при частых заходах — похоже, конец сегмента раньше конца рекламы. video_id ведёт на /admin/video (токен в переменной вверху).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 205,
+        "w": 12,
+        "h": 8
+      },
+      "timeFrom": "30d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${PROVIDER_VIDEO_URL}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "на пропуск"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL),\no AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS overruns,\n             percentile_cont(0.5) WITHIN GROUP (ORDER BY delta) AS delta_med\n      FROM prv_events_interval_overrun WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4),\nsk AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS skips\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4)\nSELECT ai.n AS native_id, ai.video_id, mc.category AS \"категория\", ai.s AS \"начало, с\", ai.en AS \"конец, с\",\n       COALESCE(sk.skips, 0) AS \"пропусков\", o.overruns AS \"заходов дальше конца\",\n       o.overruns::float / NULLIF(sk.skips, 0) AS \"на пропуск\", o.delta_med AS \"медиана delta, с\"\nFROM ai JOIN o ON o.n = ai.n AND o.cat = ai.cat AND o.s = ai.s AND o.en = ai.en\nLEFT JOIN sk ON sk.n = ai.n AND sk.cat = ai.cat AND sk.s = ai.s AND sk.en = ai.en\nLEFT JOIN markup_categories mc ON mc.id = ai.cat\nORDER BY o.overruns DESC, o.delta_med DESC LIMIT 50",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 93,
+      "type": "table",
+      "title": "Видео с наибольшей долей отмен (от 20 пропусков)",
+      "description": "Топ-20 видео за 30 дней по отменам на пропуск (все сегменты видео, AI и пользовательские). «сегменты» — есть ли у видео отдаваемая AI-строка. video_id — строка videos ближайшей длительности к той, что прислал клиент; ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 213,
+        "w": 24,
+        "h": 10
+      },
+      "timeFrom": "30d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${PROVIDER_VIDEO_URL}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "доля отмен"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ev AS (SELECT video_native_id AS n, duration AS d, 1 AS skip, 0 AS undo, 0 AS seek, 0 AS overrun FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\")\n       UNION ALL SELECT video_native_id, duration, 0, 1, (via = 'seek')::int, 0 FROM prv_events_interval_undo WHERE $__timeFilter(\"createdAt\")\n       UNION ALL SELECT video_native_id, duration, 0, 0, 0, 1 FROM prv_events_interval_overrun WHERE $__timeFilter(\"createdAt\")),\ng AS (SELECT n, mode() WITHIN GROUP (ORDER BY d) AS d, SUM(skip) AS skips, SUM(undo) AS undos, SUM(seek) AS seeks, SUM(overrun) AS overruns\n      FROM ev GROUP BY n HAVING SUM(skip) >= 20 ORDER BY SUM(undo)::float / SUM(skip) DESC, SUM(skip) DESC LIMIT 20)\nSELECT g.n AS native_id, v.id AS video_id,\n       CASE WHEN c.video_id IS NOT NULL THEN 'AI' ELSE 'пользователи' END AS \"сегменты\",\n       g.skips AS \"пропусков\", g.undos AS \"отмен\", g.seeks AS \"из них перемоткой\", g.undos::float / g.skips AS \"доля отмен\",\n       g.overruns AS \"заходов дальше конца\"\nFROM g\nLEFT JOIN LATERAL (SELECT id FROM videos WHERE native_id = g.n ORDER BY ABS(duration - g.d) NULLS LAST, id LIMIT 1) v ON TRUE\nLEFT JOIN prv_ai_video_calculateds c ON c.video_id = v.id AND c.withdrawn_at IS NULL AND jsonb_array_length(c.data) > 0\nORDER BY \"доля отмен\" DESC, g.skips DESC",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "type": "row",
       "collapsed": false,
       "panels": [],
@@ -5754,7 +6081,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 205
+        "y": 223
       },
       "id": 55
     },
@@ -5768,7 +6095,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 206,
+        "y": 224,
         "w": 12,
         "h": 8
       },
@@ -5843,7 +6170,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 206,
+        "y": 224,
         "w": 4,
         "h": 8
       },
@@ -5908,7 +6235,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 206,
+        "y": 224,
         "w": 4,
         "h": 8
       },
@@ -5971,7 +6298,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 206,
+        "y": 224,
         "w": 4,
         "h": 8
       },
@@ -6034,7 +6361,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 214,
+        "y": 232,
         "w": 6,
         "h": 8
       },
@@ -6101,7 +6428,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 214,
+        "y": 232,
         "w": 18,
         "h": 8
       },

@@ -196,6 +196,9 @@ opinion, chapters, `ai judge`, votes and verdicts, withdraw / restore, prompt, d
   detector model (a batch API), then the second model (`AI_SECOND_ENABLED`) and the chapter check (`AI_CHAPTERS_ENABLED`), publishes
   `prv_ai_video_calculateds` → served instead of `video_calculateds` with `AI_FIRST=on` on a `match` / `backfilled`
   lookup → `ai judge` reads new user signals and sends review items or withdraws.
+- Viewer signals (from the extension, under its statistics switch): `interval_skip` / `interval_undo` / `interval_overrun`
+  rows, analysed by SQL and panels only (owner, 2026-11-20: collect first, act in a later change). The judge counts
+  `skips` (undo's denominator) and, with `AI_JUDGE_UNDO_EVIDENCE=off`, records undo without acting on it alone.
 - Roles are fixed (owner, 2026-11-19): OpenAI detects, Anthropic gives the second opinion and runs the judge and the
   audit (vendor = model prefix, `claude-` = Anthropic: `budget.VendorOf`); a model changes only through the eval.
 - Spend budget (`AI_BUDGET_ENABLED`, read only by the `ai detect` cron tick; the manual run is never paced and always
@@ -238,8 +241,9 @@ Providers); `prv/` also mounts the prv-only admin pages. With `LEGACY_PRV` set, 
   ≤ −100); Grafana GET links for undo and rating override.
 - `videos.js` — `GET /video-calculated` through the read-only `findVideoForRead` (`(native_id, duration ± 2)`, then a
   null duration, then any row, else 204); prv serves the AI row when AI-first applies and records `views_text`.
-- `events.js` — `POST /events`: `interval_undo`, `interval_click`, `time_saved`, `client_failed`; an invalid event is
-  logged and skipped.
+- `events.js` — `POST /events`: `interval_skip`, `interval_undo` (`via` button / seek), `interval_overrun`,
+  `interval_click`, `time_saved`, `client_failed`; an invalid event is logged and skipped, > 100 events is `413`; one
+  insert per signal type, no other work at request time.
 - `admin.js` — `/admin/video/:video_id`: markups, the AI block, the withdraw and send-to-review links.
 - `admin-moderation.js` — worst users / markups, approve / reject, per-user view (by `users.id`, not `prv_user_id`).
 - `admin-review.js` — the assessor page: reviewer picker (`&reviewer=<code>`), ru/en (every string from
@@ -273,7 +277,7 @@ Fields and writers of every model: `docs/reference/models.md`.
 | `User` | `rating`, `time_saved`, `banned_at` (hard ban) |
 | `AdminDecision` | `prv_admin_decisions`, append-only, written only through `moderationRepository.recordDecision()` |
 | `CalculatorHeartbeat` | `calculator_heartbeats`: one row per provider and `ai_detect` / `ai_judge` / `ai_audit`; Node never writes it |
-| `IntervalUndo`, `IntervalClick`, `TimeSavedEvent`, `ClientFailed` | `{provider}_events_*` |
+| `IntervalSkip`, `IntervalUndo`, `IntervalOverrun`, `IntervalClick`, `TimeSavedEvent`, `ClientFailed` | `{provider}_events_*`; skip / undo / overrun carry `duration`, skip and undo `via` (undo's nullable: old clients) |
 | `ReviewItem`, `ReviewVerdict`, `ReviewReviewer`, `ReviewBatch`, `ReviewAudit` | `prv_review_*`: items (`kind` sheet / ai), append-only verdicts (latest wins, written through `reviewRepository.recordVerdict()`), reviewer codes, batches and their lock, batch audits |
 | `AiVideo`, `AiRun`, `AiVideoCalculated`, `AiJudgement`, `AiConfirmation`, `AiBudget`, `AiTimeline` | `prv_ai_*`: queue, detector runs (the budget counts them), served `data` / `hidden`, judgements, second-model calls, the spend budget's state per vendor (written by `ai detect` only), phase 3 (no writer) |
 
@@ -321,6 +325,8 @@ AI_FIRST (off)                            # on = serve prv_ai_video_calculateds 
 AI_DETECT_ENABLED (off)                   # on = the ai detect cron tick works
 AI_JUDGE_ENABLED (off)                    # on = the ai judge cron tick works
 AI_JUDGE_AUTO_WITHDRAW (on)               # off = an LLM withdraw only sends to review; no effect while the judge is off
+AI_JUDGE_UNDO_EVIDENCE (on)               # off = undo is counted in signals, never new evidence (alone no LLM call, item or
+                                          # withdraw); invalid = exit 1
 AI_JUDGE_MIN_INTERVAL (6h)                # Go duration: no LLM call within it of the video's last judgement (judged_at, any judgement)
 AI_JUDGE_MODEL, AI_MODEL (claude-sonnet-5-5)
 AI_MIN_VIEWS (500000), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
@@ -364,7 +370,7 @@ API_HOST, LANDING_HOST                    # the public host names (secrets); onl
                                           # bind-mounted prometheus.yml and dashboards (see Deployment → Render), never the containers
 ```
 
-Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_BUDGET_ENABLED` (`:-off`), `AI_BUDGET_OPENAI_USD`, `AI_BUDGET_OPENAI_RESET_DAY`, `AI_BUDGET_ANTHROPIC_USD`, `AI_BUDGET_ANTHROPIC_RESET_DAY`, `AI_BUDGET_RESERVE`, `AI_BUDGET_BACKLOG_USD`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
+Wiring: `docker-compose.yml` passes `AI_FIRST`, `AI_DETECT_ENABLED`, `AI_JUDGE_ENABLED` (`:-off`), `AI_JUDGE_AUTO_WITHDRAW` (`:-on`), `AI_JUDGE_UNDO_EVIDENCE`, `AI_JUDGE_MODEL`, `AI_JUDGE_MIN_INTERVAL`, `AI_MIN_VIEWS`, `AI_MIN_REQUESTS`, `AI_DAILY_BUDGET_VIDEOS`, `AI_BATCH_MAX`, `AI_FETCH_PAUSE`, `AI_MIN_SEGMENT_SECONDS`, `AI_MODEL`, `AI_DETECT_CLIENT`, `AI_SECOND_ENABLED` (`:-off`), `AI_SECOND_CLIENT`, `AI_SECOND_MODEL`, `AI_CHAPTERS_ENABLED` (`:-off`), `AI_CHAPTER_EDGE_SECONDS`, `AI_BUDGET_ENABLED` (`:-off`), `AI_BUDGET_OPENAI_USD`, `AI_BUDGET_OPENAI_RESET_DAY`, `AI_BUDGET_ANTHROPIC_USD`, `AI_BUDGET_ANTHROPIC_RESET_DAY`, `AI_BUDGET_RESERVE`, `AI_BUDGET_BACKLOG_USD`, `AI_AUDIT_ENABLED`, `AI_AUDIT_TELEGRAM` (`:-off`), `AI_AUDIT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (empty = code default) to `app`; the deploy workflow fills them from repository variables (`vars.AI_*`) and the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `TELEGRAM_*` secrets. Cron jobs see only `/app/.env`: `infrastructure/init/init_env.sh` appends every `AI_*`, `YTDLP_BIN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `TELEGRAM_*` of the container env there, and `prv/commands/ai/main.go` loads it (variables already set win). A new flag goes into the workflow's two lists (env and the `printf %q` exports) and `docker-compose.yml`; nothing else. The other variables above keep their code defaults on prod.
 
 ### Deployment
 

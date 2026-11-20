@@ -233,11 +233,18 @@ func renderRequest(p detector.Prompt, v Video, s Signals, categories map[int]str
 	for _, x := range []struct {
 		name string
 		n    int
-	}{{"votes_up", c.VotesUp}, {"votes_down", c.VotesDown}, {"undo", c.Undo}, {"clicks", c.Clicks},
+	}{{"votes_up", c.VotesUp}, {"votes_down", c.VotesDown}, {"skips", c.Skips}, {"undo", c.Undo}, {"clicks", c.Clicks},
 		{"human_markups", c.HumanMarkups}, {"conflicting_markups", c.ConflictingMarkups}, {"duration_variants", c.DurationVariants}} {
 		fmt.Fprintf(&b, "%s=%d", x.name, x.n)
+		var rates []string
+		if x.name == "undo" && c.Skips > 0 {
+			rates = append(rates, fmt.Sprintf("%d per %d skips", c.Undo, c.Skips))
+		}
 		if s.ViewsMax != nil && *s.ViewsMax > 0 {
-			fmt.Fprintf(&b, " (%.2f per 1k views)", float64(x.n)*1000/float64(*s.ViewsMax))
+			rates = append(rates, fmt.Sprintf("%.2f per 1k views", float64(x.n)*1000/float64(*s.ViewsMax)))
+		}
+		if len(rates) > 0 {
+			fmt.Fprintf(&b, " (%s)", strings.Join(rates, ", "))
 		}
 		b.WriteString("\n")
 	}

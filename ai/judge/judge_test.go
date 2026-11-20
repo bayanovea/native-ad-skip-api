@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func expectNewItems(mock sqlmock.Sqlmock, flagged string) {
 // expectCounters: judged_at moves to the tick's start, the counters (two undo events) are recorded.
 func expectCounters(mock sqlmock.Sqlmock, now time.Time) {
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE prv_ai_videos SET judged_at = $3, judge_counters = $2")).
-		WithArgs("-1_456000001", []byte(`{"votes_up":0,"votes_down":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":0,"duration_recut":0}`), now).
+		WithArgs("-1_456000001", []byte(`{"votes_up":0,"votes_down":0,"skips":0,"undo":2,"clicks":0,"human_markups":0,"conflicting_markups":0,"duration_variants":0,"duration_recut":0}`), now).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 }
@@ -231,6 +232,25 @@ func TestJudgeVideoCountsTheSignalsAfterAKeep(t *testing.T) {
 	}
 }
 
+// AI_JUDGE_UNDO_EVIDENCE=off: a new undo alone leaves a judged video alone (nothing recorded, judged_at
+// stays) and makes a first judgement ok by rules; the counters still carry it.
+func TestJudgeVideoUndoCountedOnly(t *testing.T) {
+	r, mock, v, llm := llmCaseNotKept(t, "", true)
+	r.cfg.UndoCountedOnly = true
+	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
+		t.Fatal(err, llm.calls)
+	}
+
+	db, mock := newMock(t)
+	r = &judgeRun{cfg: Config{AutoWithdraw: true, UndoCountedOnly: true}, db: db, categories: testCategories, prv: testPrv, llm: llm, now: reviewNow}
+	expectSignals(mock, time.Time{}, reviewNow, [2]int{}, [2]int{2, 2}, 0)
+	expectLockAndJudgement(mock, "ok", "rules", "no negative signal (undo counted only)", nil, nil)
+	expectCounters(mock, reviewNow)
+	if err := r.judgeVideo(testVideo); err != nil || llm.calls != 0 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
 func TestJudgeVideoSendsARecutToReviewWithoutTheLLMOrAWithdraw(t *testing.T) {
 	db, mock := newMock(t)
 	llm := &fakeLLM{}
@@ -290,11 +310,11 @@ func TestJudgeVideoNewRecutWithNegativeSignalsGoesToTheLLMAndAHuman(t *testing.T
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	for _, k := range []string{"AI_JUDGE_ENABLED", "AI_JUDGE_AUTO_WITHDRAW", "AI_JUDGE_MODEL", "AI_JUDGE_MIN_INTERVAL", "AI_CLIENT", "AI_JUDGE_PROMPT"} {
+	for _, k := range []string{"AI_JUDGE_ENABLED", "AI_JUDGE_AUTO_WITHDRAW", "AI_JUDGE_UNDO_EVIDENCE", "AI_JUDGE_MODEL", "AI_JUDGE_MIN_INTERVAL", "AI_CLIENT", "AI_JUDGE_PROMPT"} {
 		t.Setenv(k, "")
 	}
 	c, err := ConfigFromEnv()
-	if err != nil || c.Enabled || !c.AutoWithdraw || c.Model != "claude-sonnet-5-5" || c.MinInterval != 6*time.Hour ||
+	if err != nil || c.Enabled || !c.AutoWithdraw || c.UndoCountedOnly || c.Model != "claude-sonnet-5-5" || c.MinInterval != 6*time.Hour ||
 		c.Client != "anthropic" || c.PromptPath != "/app/ai/prompts/judge-v1.md" {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
@@ -306,6 +326,17 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("AI_JUDGE_MIN_INTERVAL", "6")
 	if _, err := ConfigFromEnv(); err == nil {
 		t.Fatal("a duration without a unit: want an error")
+	}
+	t.Setenv("AI_JUDGE_MIN_INTERVAL", "")
+	for v, want := range map[string]bool{"on": false, "off": true} {
+		t.Setenv("AI_JUDGE_UNDO_EVIDENCE", v)
+		if c, err = ConfigFromEnv(); err != nil || c.UndoCountedOnly != want {
+			t.Fatalf("AI_JUDGE_UNDO_EVIDENCE=%s: got %+v %v", v, c, err)
+		}
+	}
+	t.Setenv("AI_JUDGE_UNDO_EVIDENCE", "maybe")
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "AI_JUDGE_UNDO_EVIDENCE") {
+		t.Fatalf("an unknown value: want an error naming the variable, got %v", err)
 	}
 }
 
@@ -394,7 +425,7 @@ func TestJudgeVideoBaselineIsPerEntry(t *testing.T) {
 	bounds, _ := json.Marshal([]baseline{{Entry{CategoryID: 2, Start: 30, End: 70}, keptA}, {Entry{CategoryID: 2, Start: 200, End: 230}, keptB}})
 	mock.ExpectQuery("FROM votes").WithArgs(7, bounds, r.now).
 		WillReturnRows(sqlmock.NewRows([]string{"up", "down", "new_down"}).AddRow(0, 0, 0))
-	for _, table := range []string{"prv_events_interval_undo", "prv_events_interval_click"} {
+	for _, table := range []string{"prv_events_interval_undo", "prv_events_interval_click", "prv_events_interval_skip"} {
 		mock.ExpectQuery(table).WithArgs("-1_456000001", bounds, r.now).WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
 	}
 	mock.ExpectQuery("FROM markups").WithArgs(7, published, r.now).
@@ -423,6 +454,7 @@ func expectMovedSignals(mock sqlmock.Sqlmock, baselineAt, now time.Time, newUndo
 	mock.ExpectQuery("prv_events_interval_undo").WithArgs("-1_456000001", b, now).
 		WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(2, newUndo))
 	mock.ExpectQuery("prv_events_interval_click").WithArgs("-1_456000001", b, now).WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
+	mock.ExpectQuery("prv_events_interval_skip").WithArgs("-1_456000001", b, now).WillReturnRows(sqlmock.NewRows([]string{"count", "new"}).AddRow(0, 0))
 	mock.ExpectQuery("FROM markups").WithArgs(7, published, now).WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "dated"}))
 	mock.ExpectQuery("FROM videos").WillReturnRows(sqlmock.NewRows([]string{"variants", "recut"}).AddRow(0, 0))
 }

@@ -18,12 +18,17 @@ const (
 // is no proof; the AI row is served only to players of its own cut anyway); with them the
 // LLM judges as usual, so a bogus duration never keeps a row from the judge. No new
 // negative signal is ok (a judged video without new evidence never gets here), anything
-// else needs the LLM, which sees the totals.
-func rules(s Signals) (decision, reason string) {
-	if s.New.DurationRecut > 0 && !s.New.negative() {
+// else needs the LLM, which sees the totals. With undo not evidence (undoEvidence false) a new
+// undo is recorded and named in the reason, never acted on.
+func rules(s Signals, undoEvidence bool) (decision, reason string) {
+	negative := s.New.negative(undoEvidence)
+	if s.New.DurationRecut > 0 && !negative {
 		return decisionReview, fmt.Sprintf("duration: %d videos rows of another cut requested after publish", s.DurationRecut)
 	}
-	if !s.New.negative() {
+	if !negative && s.New.Undo > 0 {
+		return decisionOK, "no negative signal (undo counted only)"
+	}
+	if !negative {
 		return decisionOK, "no negative signal"
 	}
 	var neg []string

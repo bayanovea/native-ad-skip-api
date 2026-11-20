@@ -76,7 +76,39 @@ module.exports = function(sequelize) {
         category_id: DataTypes.INTEGER,
         start: DataTypes.INTEGER,
         end: DataTypes.INTEGER,
+        via: { type: DataTypes.TEXT, allowNull: true },
+        duration: { type: DataTypes.INTEGER, allowNull: true },
     }, { tableName: 'yt_events_interval_undo' });
+
+    // Named like the undo table's (lib/schema.js): the generated name passes Postgres' 63 characters, which
+    // truncates it, so the next sync() misses it and fails creating it again.
+    const signalIndexes = (table) => [
+        { name: `${table}_bounds`, fields: ['video_native_id', 'category_id', 'start', 'end'] },
+        { name: `${table}_created_at`, fields: ['createdAt'] },
+    ];
+
+    const IntervalSkip = sequelize.define('yt_interval_skip', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        duration: { type: DataTypes.INTEGER, allowNull: true },
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.INTEGER,
+        end: DataTypes.INTEGER,
+        via: DataTypes.TEXT,
+    }, { tableName: 'yt_events_interval_skip', indexes: signalIndexes('yt_events_interval_skip') });
+
+    const IntervalOverrun = sequelize.define('yt_interval_overrun', {
+        user_id: DataTypes.CHAR(36),
+        prv_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        video_native_id: DataTypes.STRING,
+        duration: { type: DataTypes.INTEGER, allowNull: true },
+        category_id: DataTypes.INTEGER,
+        start: DataTypes.INTEGER,
+        end: DataTypes.INTEGER,
+        delta: DataTypes.INTEGER,
+        after: DataTypes.INTEGER,
+    }, { tableName: 'yt_events_interval_overrun', indexes: signalIndexes('yt_events_interval_overrun') });
 
     const IntervalClick = sequelize.define('yt_interval_click', {
         user_id: DataTypes.CHAR(36),
@@ -119,5 +151,5 @@ module.exports = function(sequelize) {
         data: { type: DataTypes.JSON, allowNull: true },
     }, { tableName: 'yt_events_client_failed' });
 
-    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup };
+    return { Markup, MarkupCategory, MarkupTimeInterval, Video, VideoCalculated, Vote, User, IntervalUndo, IntervalSkip, IntervalOverrun, IntervalClick, TimeSavedEvent, ClientFailed, CalculatedSegment, CalculatedSegmentMarkup };
 };

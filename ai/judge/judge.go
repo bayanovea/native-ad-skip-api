@@ -18,15 +18,16 @@ import (
 )
 
 // Config is the judge's environment. Every switch defaults off, except the
-// auto withdraw, which has no effect while the judge is off.
+// auto withdraw and the undo evidence, which have no effect while the judge is off.
 type Config struct {
-	Enabled      bool          // AI_JUDGE_ENABLED=on
-	AutoWithdraw bool          // AI_JUDGE_AUTO_WITHDRAW, on unless "off": an LLM withdraw unpublishes at once
-	Model        string        // AI_JUDGE_MODEL
-	MinInterval  time.Duration // AI_JUDGE_MIN_INTERVAL: at most one LLM call per video per interval
-	Client       string        // AI_CLIENT: anthropic | messages (both the Messages API here) | fixture
-	FixtureDir   string        // AI_FIXTURE_DIR: <native_id>.judge.json for AI_CLIENT=fixture
-	PromptPath   string        // AI_JUDGE_PROMPT
+	Enabled         bool          // AI_JUDGE_ENABLED=on
+	AutoWithdraw    bool          // AI_JUDGE_AUTO_WITHDRAW, on unless "off": an LLM withdraw unpublishes at once
+	UndoCountedOnly bool          // AI_JUDGE_UNDO_EVIDENCE=off: undo is counted and shown, never new evidence
+	Model           string        // AI_JUDGE_MODEL
+	MinInterval     time.Duration // AI_JUDGE_MIN_INTERVAL: at most one LLM call per video per interval
+	Client          string        // AI_CLIENT: anthropic | messages (both the Messages API here) | fixture
+	FixtureDir      string        // AI_FIXTURE_DIR: <native_id>.judge.json for AI_CLIENT=fixture
+	PromptPath      string        // AI_JUDGE_PROMPT
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -38,6 +39,13 @@ func ConfigFromEnv() (Config, error) {
 		Client:       env("AI_CLIENT", "anthropic"),
 		FixtureDir:   env("AI_FIXTURE_DIR", "/app/test/fixtures/ai"),
 		PromptPath:   env("AI_JUDGE_PROMPT", "/app/ai/prompts/judge-v1.md"),
+	}
+	switch s := os.Getenv("AI_JUDGE_UNDO_EVIDENCE"); s {
+	case "", "on":
+	case "off":
+		c.UndoCountedOnly = true
+	default:
+		return c, fmt.Errorf("AI_JUDGE_UNDO_EVIDENCE must be on or off, got %q", s)
 	}
 	if s := os.Getenv("AI_JUDGE_MIN_INTERVAL"); s != "" {
 		d, err := time.ParseDuration(s)
@@ -199,14 +207,14 @@ func (r *judgeRun) judgeVideo(v Video) error {
 	if err != nil {
 		return err
 	}
-	if v.JudgedAt.Valid && !s.New.negative() && s.New.DurationRecut == 0 {
+	if v.JudgedAt.Valid && !s.New.negative(!r.cfg.UndoCountedOnly) && s.New.DurationRecut == 0 {
 		if !allKept {
 			return nil
 		}
 		// Recording it moves judged_at past the verdicts, so the next tick skips the video.
 		return r.record(v, s, judgement{Decision: decisionOK, By: "rules", Reason: "every entry kept on review since the last judgement"}, nil)
 	}
-	decision, reason := rules(s)
+	decision, reason := rules(s, !r.cfg.UndoCountedOnly)
 	j := judgement{Decision: decision, By: "rules", Reason: reason, Review: decision == decisionReview}
 	var cues []vtt.Cue
 	if decision == needsLLM {
