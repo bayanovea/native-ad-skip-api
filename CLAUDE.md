@@ -329,7 +329,7 @@ AI_JUDGE_UNDO_EVIDENCE (on)               # off = undo is counted in signals, ne
                                           # withdraw); invalid = exit 1
 AI_JUDGE_MIN_INTERVAL (6h)                # Go duration: no LLM call within it of the video's last judgement (judged_at, any judgement)
 AI_JUDGE_MODEL, AI_MODEL (claude-sonnet-5-5)
-AI_MIN_VIEWS (500000), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
+AI_MIN_VIEWS (500000; prod 300000 since 2026-11-21, the ops.md step rule), AI_MIN_REQUESTS (20)      # a seen video is taken at either threshold (was AI_FALLBACK_REQUESTS until 2026-10-28; the old variable is ignored)
 AI_DAILY_BUDGET_VIDEOS (300; prod 250 since 2026-11-09 ≈ $100/month of OpenAI at terra ~$0.0127 a video), AI_BATCH_MAX (5)
 AI_MIN_SEGMENT_SECONDS (5)                # int ≥ 1: shorter AI segments go to `hidden` (reason short); read by the ai command (invalid = exit 1) and Node (lib/ai-rules.js, once on load, invalid throws)
 AI_FETCH_PAUSE (40s)                      # Go duration: mean pause before each video's prv fetch on a cron tick, ± 50 % jitter; e2e sets 0
