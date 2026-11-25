@@ -26,8 +26,8 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai-judge-<date>` batches, `withdrawn` > 0 is expected and fine (a judge withdraw, restored by keep verdicts).
 - **Health**: `since_tick_s.ai_detect` < 600 (900 = CalculatorStale), `ai_judge` < 7200 when on; `fetching_stuck 0`;
   `detecting` oldest < 24 h (batch expiry).
-- **Cost**: `usd_24h` < 20 (AiCostDaily); `runs_24h` ≤ 250 (prod `AI_DAILY_BUDGET_VIDEOS` since 2026-11-09; code
-  default 300). Real price is ~$0.013/video (terra), plus ~$0.0035 (Haiku) while the second opinion is on. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
+- **Cost**: `usd_24h` < 20 (AiCostDaily); `runs_24h` ≤ 350 (prod `AI_DAILY_BUDGET_VIDEOS` since 2026-11-25; code
+  default 300). Real price is ~$0.012/video (terra), plus ~$0.007 (Haiku) while the second opinion is on. `runs_24h` above the budget (e.g. right after a cut) means ticks claim nothing, stale
   `fetching` rows included, until the rolling window drops under it.
 - **Capacity**: `queue_now` (eligible `seen` + due retries) growing from run to run while `budget_pct` sits
   at 100 means the eligible inflow exceeds the budget: raise `AI_DAILY_BUDGET_VIDEOS` or the thresholds.
@@ -41,7 +41,7 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   rows published by terra alone), on again since 2026-11-19 12:20 UTC; while off `second_*` stay flat and every entry publishes without a veto): `second_errors_24h` a few
   invalid answers at most (a burst = the Anthropic balance or API, videos then publish unconfirmed); `second_confirmed_pct`
   ~75 (2026-11-07); `second_waiting` = hidden `unconfirmed` entries and open `D` items in
-  `ai-second-<date>`; `second_cost` ~$0.0035 per video.
+  `ai-second-<date>`; `second_cost` ~$0.007 per video (long-input tier priced since 2026-11-19).
 - **Quality signals** (only meaningful once users see AI segments, i.e. `ai_first 1`): `votes` `< 0`,
   `against_table`, `withdrawn`, `verdicts not_ad`. `misses` = videos the model called clean but users marked.
 

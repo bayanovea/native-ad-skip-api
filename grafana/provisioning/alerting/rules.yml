@@ -232,7 +232,7 @@ groups:
         noDataState: OK
         execErrState: Error
         annotations:
-          summary: 'AI spent {{ $values.A }} USD in 24 h, above a full budget day (AI_DAILY_BUDGET_VIDEOS 250 × (~$0.013 terra + ~$0.0035 Haiku) ≈ $4): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
+          summary: 'AI spent {{ $values.A }} USD in 24 h, above a full budget day (AI_DAILY_BUDGET_VIDEOS 350 × (~$0.012 terra + ~$0.007 Haiku) ≈ $7): check prv_ai_runs / prv_ai_confirmations / prv_ai_judgements / prv_review_audits, AI_DETECT_ENABLED=off stops it'
         data:
           - refId: A
             relativeTimeRange:
