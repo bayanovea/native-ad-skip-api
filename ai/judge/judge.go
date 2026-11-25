@@ -182,8 +182,11 @@ type judgement struct {
 
 func (r *judgeRun) judgeVideo(v Video) error {
 	var err error
-	if v.Entries, err = parseEntries(v.Data); err != nil {
+	if v.Entries, v.Served, err = parseEntries(v.Data); err != nil {
 		return fmt.Errorf("data: %w", err)
+	}
+	if len(v.Entries) == 0 {
+		return nil // only user entries: nothing of the model's to judge
 	}
 	// Each entry's baseline: evidence on it created after it is new; zero for a first judgement.
 	since := make([]time.Time, len(v.Entries))

@@ -8,3 +8,6 @@
 30 * * * * flock -n /tmp/ai-judge.lock /app/prv/commands/ai/ai judge >> /proc/1/fd/1 2>&1
 # Review batch audit: exits at once unless AI_AUDIT_ENABLED=on (/app/.env)
 45 * * * * flock -n /tmp/ai-audit.lock /app/prv/commands/ai/ai audit >> /proc/1/fd/1 2>&1
+# Users' segments on AI-served videos: with AI_USER_SEGMENTS_ENABLED off (/app/.env) a tick only removes what
+# the pass wrote and clears its heartbeat
+* * * * * sleep 50 && flock -n /tmp/ai-users.lock /app/prv/commands/ai/ai users >> /proc/1/fd/1 2>&1

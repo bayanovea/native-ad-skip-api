@@ -13,8 +13,8 @@ The user message is JSON:
   them, do not contradict them, do not add their numbers to your findings.
 - `items`: per item its `code`, the `proposed` category, its `bounds` (m:ss), its `source` (`judge`: the
   automatic judge sent it after viewer signals; `served`: a sample of what viewers get; `hidden`: a segment
-  below the publish threshold; `second`: a second model did not find it; `admin`: the owner sent it; `sheet`:
-  an evaluation sheet), the first `flagged_by` line, the subtitle text `cues`, and every reviewer's latest
+  below the publish threshold; `second`: a second model did not find it; `admin`: the owner sent it; `user`: a
+  viewer's own segment the model's did not cover; `sheet`: an evaluation sheet), the first `flagged_by` line, the subtitle text `cues`, and every reviewer's latest
   verdict with their `comment` and the `bounds` they set.
 
 Verdicts: `sponsor` (an outside party paid for the piece), `self_promotion` (the speaker promotes themselves:

@@ -170,7 +170,7 @@ func TestAnthropicJudge(t *testing.T) {
 // An entry an assessor moved is read with its source and marked, so the judge does not take a
 // human-set edge for a detector error; the detector's own entries stay unmarked.
 func TestRenderRequestMarksReviewSetBounds(t *testing.T) {
-	entries, err := parseEntries([]byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"},
+	entries, _, err := parseEntries([]byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"},
 		{"category_id":3,"start":118,"end":150,"confidence":"high","source":"review"}]`))
 	if err != nil || entries[0].Source != "ai" || entries[1].Source != "review" {
 		t.Fatalf("got %+v %v", entries, err)

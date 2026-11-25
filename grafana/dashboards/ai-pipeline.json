@@ -791,10 +791,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE(SUM(jsonb_array_length(data)), 0) AS n FROM prv_ai_video_calculateds WHERE withdrawn_at IS NULL",
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nWHERE c.withdrawn_at IS NULL AND COALESCE(e ->> 'source', '') <> 'user'",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Записи data неотозванных строк без пользовательских (source user): их и сегменты модели, склеенные с пользовательскими (hidden glued), считает ряд 5б."
     },
     {
       "id": 62,
@@ -853,11 +854,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) FILTER (WHERE e ->> 'reason' = 'confidence') AS \"ниже порога\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'short') AS \"короткие\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'review') AS \"сняты асессором\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'unconfirmed') AS \"не подтверждены\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL",
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE e ->> 'reason' = 'confidence') AS \"ниже порога\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'short') AS \"короткие\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'review') AS \"сняты асессором\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'unconfirmed') AS \"не подтверждены\",\n       COUNT(*) FILTER (WHERE e ->> 'reason' = 'glued') AS \"склеены с пользовательским\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e WHERE c.withdrawn_at IS NULL",
           "refId": "A"
         }
       ],
-      "description": "Сегменты модели в hidden неотозванных строк, зрителям не отдаются: уверенность ниже порога (до вердикта асессора), короче AI_MIN_SEGMENT_SECONDS, асессор сказал not_ad / unclear, вторая модель не нашла (ждут асессора). Порог меняется переменной и ai regate."
+      "description": "Сегменты модели в hidden неотозванных строк, зрителям не отдаются: уверенность ниже порога (до вердикта асессора), короче AI_MIN_SEGMENT_SECONDS, асессор сказал not_ad / unclear, вторая модель не нашла (ждут асессора), склеены с пользовательским сегментом (отдаётся их объединение, source user; ряд 5б). Порог меняется переменной и ai regate."
     },
     {
       "id": 12,
@@ -3456,11 +3457,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT mc.category || ' / ' || (e ->> 'confidence') AS \"сегмент\", COUNT(*) AS \"шт.\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nJOIN markup_categories mc ON mc.id = (e ->> 'category_id')::int\nWHERE c.withdrawn_at IS NULL GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT mc.category || ' / ' || (e ->> 'confidence') AS \"сегмент\", COUNT(*) AS \"шт.\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nJOIN markup_categories mc ON mc.id = (e ->> 'category_id')::int\nWHERE c.withdrawn_at IS NULL AND COALESCE(e ->> 'source', '') <> 'user' GROUP BY 1 ORDER BY 1",
           "refId": "A"
         }
       ],
-      "description": "Записи data неотозванных строк. Категория могла быть исправлена вердиктом асессора."
+      "description": "Записи data неотозванных строк. Категория могла быть исправлена вердиктом асессора. Пользовательские записи (source user) не считаются: они в ряду 5б."
     },
     {
       "id": 43,
@@ -4551,11 +4552,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH pr AS (\n  SELECT c.video_id, c.data, f.confirmed, f.unconfirmed,\n         CASE WHEN f.run_id IS NULL THEN r.model || ' (без второй модели)' ELSE r.model || ' → ' || f.model END AS pair\n  FROM prv_ai_video_calculateds c JOIN prv_ai_runs r ON r.id = c.run_id LEFT JOIN prv_ai_confirmations f ON f.run_id = c.run_id),\nd AS (\n  SELECT DISTINCT ON (i.id) pr.pair, v.verdict\n  FROM prv_review_items i JOIN pr ON pr.video_id = i.video_id JOIN prv_review_verdicts v ON v.item_id = i.id\n  WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-second-%' ORDER BY i.id, v.decided_at DESC, v.id DESC),\ndp AS (SELECT pair, COUNT(*) AS decided, COUNT(*) FILTER (WHERE verdict IN ('not_ad', 'unclear')) AS hide FROM d GROUP BY 1),\njp AS (\n  SELECT pr.pair, COUNT(*) FILTER (WHERE j.decision = 'review') AS review, COUNT(*) FILTER (WHERE j.decision = 'withdraw') AS withdraw\n  FROM prv_ai_judgements j JOIN pr ON pr.video_id = j.video_id GROUP BY 1),\nlv AS (\n  SELECT DISTINCT ON (user_id, video_id, category_id, start, \"end\") video_id, category_id, start, \"end\", vote\n  FROM votes WHERE video_id IN (SELECT video_id FROM prv_ai_video_calculateds)\n  ORDER BY user_id, video_id, category_id, start, \"end\", \"createdAt\" DESC, id DESC),\nnp AS (\n  SELECT pr.pair, COUNT(*) AS minus FROM pr CROSS JOIN LATERAL jsonb_array_elements(pr.data) e\n  JOIN lv ON lv.video_id = pr.video_id AND lv.category_id = (e ->> 'category_id')::int\n    AND lv.start = (e ->> 'start')::float AND lv.\"end\" = (e ->> 'end')::float\n  WHERE lv.vote = -1 GROUP BY 1)\nSELECT pr.pair AS \"пара\", COUNT(*) AS \"строк\", AVG(jsonb_array_length(pr.data)) AS \"сегментов на строку\",\n       100.0 * SUM(pr.unconfirmed) / NULLIF(SUM(pr.confirmed) + SUM(pr.unconfirmed), 0) AS \"не подтверждено, %\",\n       MAX(dp.decided) AS \"D решено\", 100.0 * MAX(dp.hide) / NULLIF(MAX(dp.decided), 0) AS \"D not_ad / unclear, %\",\n       100.0 * COALESCE(MAX(jp.review), 0) / COUNT(*) AS \"судья review на 100 строк\",\n       100.0 * COALESCE(MAX(jp.withdraw), 0) / COUNT(*) AS \"судья withdraw на 100 строк\",\n       100.0 * COALESCE(MAX(np.minus), 0) / NULLIF(SUM(jsonb_array_length(pr.data)), 0) AS \"−1 на 100 сегментов\"\nFROM pr LEFT JOIN dp ON dp.pair = pr.pair LEFT JOIN jp ON jp.pair = pr.pair LEFT JOIN np ON np.pair = pr.pair\nGROUP BY pr.pair ORDER BY COUNT(*) DESC",
+          "rawSql": "WITH pr AS (\n  SELECT c.video_id, m.data, f.confirmed, f.unconfirmed,\n         CASE WHEN f.run_id IS NULL THEN r.model || ' (без второй модели)' ELSE r.model || ' → ' || f.model END AS pair\n  FROM prv_ai_video_calculateds c CROSS JOIN LATERAL (SELECT COALESCE(jsonb_agg(e), '[]') AS data FROM jsonb_array_elements(c.data) e WHERE COALESCE(e ->> 'source', '') <> 'user') m\n  JOIN prv_ai_runs r ON r.id = c.run_id LEFT JOIN prv_ai_confirmations f ON f.run_id = c.run_id),\nd AS (\n  SELECT DISTINCT ON (i.id) pr.pair, v.verdict\n  FROM prv_review_items i JOIN pr ON pr.video_id = i.video_id JOIN prv_review_verdicts v ON v.item_id = i.id\n  WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-second-%' ORDER BY i.id, v.decided_at DESC, v.id DESC),\ndp AS (SELECT pair, COUNT(*) AS decided, COUNT(*) FILTER (WHERE verdict IN ('not_ad', 'unclear')) AS hide FROM d GROUP BY 1),\njp AS (\n  SELECT pr.pair, COUNT(*) FILTER (WHERE j.decision = 'review') AS review, COUNT(*) FILTER (WHERE j.decision = 'withdraw') AS withdraw\n  FROM prv_ai_judgements j JOIN pr ON pr.video_id = j.video_id GROUP BY 1),\nlv AS (\n  SELECT DISTINCT ON (user_id, video_id, category_id, start, \"end\") video_id, category_id, start, \"end\", vote\n  FROM votes WHERE video_id IN (SELECT video_id FROM prv_ai_video_calculateds)\n  ORDER BY user_id, video_id, category_id, start, \"end\", \"createdAt\" DESC, id DESC),\nnp AS (\n  SELECT pr.pair, COUNT(*) AS minus FROM pr CROSS JOIN LATERAL jsonb_array_elements(pr.data) e\n  JOIN lv ON lv.video_id = pr.video_id AND lv.category_id = (e ->> 'category_id')::int\n    AND lv.start = (e ->> 'start')::float AND lv.\"end\" = (e ->> 'end')::float\n  WHERE lv.vote = -1 GROUP BY 1)\nSELECT pr.pair AS \"пара\", COUNT(*) AS \"строк\", AVG(jsonb_array_length(pr.data)) AS \"сегментов на строку\",\n       100.0 * SUM(pr.unconfirmed) / NULLIF(SUM(pr.confirmed) + SUM(pr.unconfirmed), 0) AS \"не подтверждено, %\",\n       MAX(dp.decided) AS \"D решено\", 100.0 * MAX(dp.hide) / NULLIF(MAX(dp.decided), 0) AS \"D not_ad / unclear, %\",\n       100.0 * COALESCE(MAX(jp.review), 0) / COUNT(*) AS \"судья review на 100 строк\",\n       100.0 * COALESCE(MAX(jp.withdraw), 0) / COUNT(*) AS \"судья withdraw на 100 строк\",\n       100.0 * COALESCE(MAX(np.minus), 0) / NULLIF(SUM(jsonb_array_length(pr.data)), 0) AS \"−1 на 100 сегментов\"\nFROM pr LEFT JOIN dp ON dp.pair = pr.pair LEFT JOIN jp ON jp.pair = pr.pair LEFT JOIN np ON np.pair = pr.pair\nGROUP BY pr.pair ORDER BY COUNT(*) DESC",
           "refId": "A"
         }
       ],
-      "description": "Строка таблицы — пара: модель запуска AI-строки (prv_ai_runs.model) → модель второго мнения (prv_ai_confirmations.model); AI-строки без второго мнения — отдельно, «(без второй модели)». Все AI-строки, и отозванные. Сегментов на строку — отдаваемые (data). Не подтверждено — из строк prv_ai_confirmations: unconfirmed / (confirmed + unconfirmed) на момент вызова (hidden с reason unconfirmed потом меняют вердикты асессоров). D — вопросы листов ai-second-<дата> по видео пары, последний вердикт. Судья — решения prv_ai_judgements по видео пары. −1 — последние голоса пользователей −1 за сегменты data (точное совпадение category_id, start, end). Только чтение: таблица не создаёт вопросов."
+      "description": "Строка таблицы — пара: модель запуска AI-строки (prv_ai_runs.model) → модель второго мнения (prv_ai_confirmations.model); AI-строки без второго мнения — отдельно, «(без второй модели)». Все AI-строки, и отозванные. Сегментов на строку — отдаваемые (data) без пользовательских (source user). Не подтверждено — из строк prv_ai_confirmations: unconfirmed / (confirmed + unconfirmed) на момент вызова (hidden с reason unconfirmed потом меняют вердикты асессоров). D — вопросы листов ai-second-<дата> по видео пары, последний вердикт. Судья — решения prv_ai_judgements по видео пары. −1 — последние голоса пользователей −1 за те же сегменты (точное совпадение category_id, start, end). Только чтение: таблица не создаёт вопросов."
     },
     {
       "type": "row",
@@ -5357,11 +5358,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT k.name AS \"рейтинг\", COUNT(e.*) AS \"сегментов\" FROM (VALUES\n  (1, '< 0 (против)'), (2, '= 0 (голосов нет или поровну)'), (3, '> 0 (за)')) AS k(ord, name)\nLEFT JOIN (SELECT COALESCE((e ->> 'rating')::int, 0) AS rating FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL) e\n  ON k.ord = CASE WHEN e.rating < 0 THEN 1 WHEN e.rating = 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
+          "rawSql": "SELECT k.name AS \"рейтинг\", COUNT(e.*) AS \"сегментов\" FROM (VALUES\n  (1, '< 0 (против)'), (2, '= 0 (голосов нет или поровну)'), (3, '> 0 (за)')) AS k(ord, name)\nLEFT JOIN (SELECT COALESCE((e ->> 'rating')::int, 0) AS rating FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL AND COALESCE(e ->> 'source', '') <> 'user') e\n  ON k.ord = CASE WHEN e.rating < 0 THEN 1 WHEN e.rating = 0 THEN 2 ELSE 3 END\nGROUP BY k.ord, k.name ORDER BY k.ord",
           "refId": "A"
         }
       ],
-      "description": "rating записи = сумма последних голосов пользователей за этот интервал (один интервал — один голос). Отрицательный — главный сигнал судье."
+      "description": "rating записи = сумма последних голосов пользователей за этот интервал (один интервал — один голос). Отрицательный — главный сигнал судье. Только записи модели и асессоров: голоса за пользовательские записи (source user) не считаются."
     },
     {
       "id": 51,
@@ -5739,17 +5740,17 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT c.native_id, c.video_id, jsonb_array_length(c.data) AS \"сегментов\",\n       (SELECT MIN(COALESCE((e ->> 'rating')::int, 0)) FROM jsonb_array_elements(c.data) e) AS \"мин. рейтинг\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS \"открытых вопросов\",\n       (SELECT j.decision || ' / ' || j.\"by\" || ': ' || COALESCE(j.reason, '') FROM prv_ai_judgements j WHERE j.video_id = c.video_id ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS \"последнее судейство\",\n       c.withdrawn_by AS \"отозвано\", c.withdrawn_reason AS \"почему\", c.updated_at AS \"изменено\"\nFROM prv_ai_video_calculateds c\nWHERE c.withdrawn_at IS NOT NULL OR EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id))\n   OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.data) e WHERE (e ->> 'rating')::int < 0)\nORDER BY c.updated_at DESC LIMIT 50",
+          "rawSql": "SELECT c.native_id, c.video_id, jsonb_array_length(m.data) AS \"сегментов\",\n       (SELECT MIN(COALESCE((e ->> 'rating')::int, 0)) FROM jsonb_array_elements(m.data) e) AS \"мин. рейтинг\",\n       (SELECT COUNT(*) FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id)) AS \"открытых вопросов\",\n       (SELECT j.decision || ' / ' || j.\"by\" || ': ' || COALESCE(j.reason, '') FROM prv_ai_judgements j WHERE j.video_id = c.video_id ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS \"последнее судейство\",\n       c.withdrawn_by AS \"отозвано\", c.withdrawn_reason AS \"почему\", c.updated_at AS \"изменено\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL (SELECT COALESCE(jsonb_agg(e), '[]') AS data FROM jsonb_array_elements(c.data) e WHERE COALESCE(e ->> 'source', '') <> 'user') m\nWHERE c.withdrawn_at IS NOT NULL OR EXISTS (SELECT 1 FROM prv_review_items i WHERE i.kind = 'ai' AND i.video_id = c.video_id AND i.flagged_by ->> 0 LIKE 'judge %' AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts rv WHERE rv.item_id = i.id))\n   OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.data) e WHERE (e ->> 'rating')::int < 0)\nORDER BY c.updated_at DESC LIMIT 50",
           "refId": "A"
         }
       ],
-      "description": "video_id ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv. Открытые вопросы — только от судьи: сегменты ниже порога на проверке — не сигнал против."
+      "description": "video_id ведёт на /admin/video (нужен токен в переменной вверху), native_id — на prv. Открытые вопросы — только от судьи: сегменты ниже порога на проверке — не сигнал против. Сегментов и минусовый рейтинг — по записям модели и асессоров, без пользовательских (source user)."
     },
     {
       "id": 92,
       "type": "timeseries",
       "title": "Доля отмен по неделям: AI-сегменты и пользовательские",
-      "description": "Отмены / пропуски за неделю (prv_events_interval_undo / _skip, отмены любым via). Событие — AI-сегмента, если его границы точно совпадают с записью data не отозванной строки prv_ai_video_calculateds (то, что отдаётся сейчас), иначе пользовательского, если совпадают с prv_calculated_segments; события на границах, которых больше нет, не считаются. С AI_JUDGE_UNDO_EVIDENCE=off судья отмены только записывает.",
+      "description": "Отмены / пропуски за неделю (prv_events_interval_undo / _skip, отмены любым via). Событие — AI-сегмента, если его границы точно совпадают с записью data не отозванной строки prv_ai_video_calculateds (то, что отдаётся сейчас) и запись не пользовательская, иначе пользовательского, если совпадают с prv_calculated_segments или с пользовательской записью data (source user, в том числе склеенной); события на границах, которых больше нет, не считаются. С AI_JUDGE_UNDO_EVIDENCE=off судья отмены только записывает.",
       "datasource": {
         "type": "postgres",
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
@@ -5817,7 +5818,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL),\nhu AS (SELECT DISTINCT v.native_id AS n, cs.category_id AS cat, cs.start::numeric AS s, cs.\"end\"::numeric AS en\n       FROM prv_calculated_segments cs JOIN videos v ON v.id = cs.video_id),\nev AS (SELECT \"createdAt\" AS t, video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, 1 AS skip, 0 AS undo\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\")\n       UNION ALL SELECT \"createdAt\", video_native_id, category_id, start, \"end\", 0, 1 FROM prv_events_interval_undo WHERE $__timeFilter(\"createdAt\")),\nsrc AS (SELECT ev.t, ev.skip, ev.undo, CASE WHEN ai.n IS NOT NULL THEN 'AI-сегменты' WHEN hu.n IS NOT NULL THEN 'пользовательские' END AS source\n        FROM ev LEFT JOIN (SELECT DISTINCT n, cat, s, en FROM ai) ai ON ai.n = ev.n AND ai.cat = ev.cat AND ai.s = ev.s AND ai.en = ev.en\n        LEFT JOIN hu ON hu.n = ev.n AND hu.cat = ev.cat AND hu.s = ev.s AND hu.en = ev.en)\nSELECT date_trunc('week', t) AS time, source AS metric, SUM(undo)::float / NULLIF(SUM(skip), 0) AS value\nFROM src WHERE source IS NOT NULL GROUP BY 1, 2 ORDER BY 1",
+          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en,\n                   COALESCE(e ->> 'source', '') = 'user' AS usr\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL),\nhu AS (SELECT v.native_id AS n, cs.category_id AS cat, cs.start::numeric AS s, cs.\"end\"::numeric AS en\n       FROM prv_calculated_segments cs JOIN videos v ON v.id = cs.video_id\n       UNION SELECT n, cat, s, en FROM ai WHERE usr),\nev AS (SELECT \"createdAt\" AS t, video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, 1 AS skip, 0 AS undo\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\")\n       UNION ALL SELECT \"createdAt\", video_native_id, category_id, start, \"end\", 0, 1 FROM prv_events_interval_undo WHERE $__timeFilter(\"createdAt\")),\nsrc AS (SELECT ev.t, ev.skip, ev.undo, CASE WHEN ai.n IS NOT NULL THEN 'AI-сегменты' WHEN hu.n IS NOT NULL THEN 'пользовательские' END AS source\n        FROM ev LEFT JOIN (SELECT DISTINCT n, cat, s, en FROM ai WHERE NOT usr) ai ON ai.n = ev.n AND ai.cat = ev.cat AND ai.s = ev.s AND ai.en = ev.en\n        LEFT JOIN hu ON hu.n = ev.n AND hu.cat = ev.cat AND hu.s = ev.s AND hu.en = ev.en)\nSELECT date_trunc('week', t) AS time, source AS metric, SUM(undo)::float / NULLIF(SUM(skip), 0) AS value\nFROM src WHERE source IS NOT NULL GROUP BY 1, 2 ORDER BY 1",
           "refId": "A"
         }
       ]
@@ -5826,7 +5827,7 @@
       "id": 94,
       "type": "table",
       "title": "Заходы дальше конца: по AI-сегментам",
-      "description": "Записи data не отозванных AI-строк с overrun-событиями: сколько раз сегмент пропустили, сколько раз сразу после пропуска перемотали вперёд и медиана delta (на сколько секунд вперёд). Большая медиана при частых заходах — похоже, конец сегмента раньше конца рекламы. video_id ведёт на /admin/video (токен в переменной вверху).",
+      "description": "Записи data не отозванных AI-строк, кроме пользовательских (source user), с overrun-событиями: сколько раз сегмент пропустили, сколько раз сразу после пропуска перемотали вперёд и медиана delta (на сколько секунд вперёд). Большая медиана при частых заходах — похоже, конец сегмента раньше конца рекламы. video_id ведёт на /admin/video (токен в переменной вверху).",
       "datasource": {
         "type": "postgres",
         "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
@@ -5942,7 +5943,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL),\no AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS overruns,\n             percentile_cont(0.5) WITHIN GROUP (ORDER BY delta) AS delta_med\n      FROM prv_events_interval_overrun WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4),\nsk AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS skips\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4)\nSELECT ai.n AS native_id, ai.video_id, mc.category AS \"категория\", ai.s AS \"начало, с\", ai.en AS \"конец, с\",\n       COALESCE(sk.skips, 0) AS \"пропусков\", o.overruns AS \"заходов дальше конца\",\n       o.overruns::float / NULLIF(sk.skips, 0) AS \"на пропуск\", o.delta_med AS \"медиана delta, с\"\nFROM ai JOIN o ON o.n = ai.n AND o.cat = ai.cat AND o.s = ai.s AND o.en = ai.en\nLEFT JOIN sk ON sk.n = ai.n AND sk.cat = ai.cat AND sk.s = ai.s AND sk.en = ai.en\nLEFT JOIN markup_categories mc ON mc.id = ai.cat\nORDER BY o.overruns DESC, o.delta_med DESC LIMIT 50",
+          "rawSql": "WITH ai AS (SELECT c.video_id, c.native_id AS n, (e ->> 'category_id')::int AS cat, (e ->> 'start')::numeric AS s, (e ->> 'end')::numeric AS en\n            FROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e WHERE c.withdrawn_at IS NULL AND COALESCE(e ->> 'source', '') <> 'user'),\no AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS overruns,\n             percentile_cont(0.5) WITHIN GROUP (ORDER BY delta) AS delta_med\n      FROM prv_events_interval_overrun WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4),\nsk AS (SELECT video_native_id AS n, category_id AS cat, start::numeric AS s, \"end\"::numeric AS en, COUNT(*) AS skips\n       FROM prv_events_interval_skip WHERE $__timeFilter(\"createdAt\") GROUP BY 1, 2, 3, 4)\nSELECT ai.n AS native_id, ai.video_id, mc.category AS \"категория\", ai.s AS \"начало, с\", ai.en AS \"конец, с\",\n       COALESCE(sk.skips, 0) AS \"пропусков\", o.overruns AS \"заходов дальше конца\",\n       o.overruns::float / NULLIF(sk.skips, 0) AS \"на пропуск\", o.delta_med AS \"медиана delta, с\"\nFROM ai JOIN o ON o.n = ai.n AND o.cat = ai.cat AND o.s = ai.s AND o.en = ai.en\nLEFT JOIN sk ON sk.n = ai.n AND sk.cat = ai.cat AND sk.s = ai.s AND sk.en = ai.en\nLEFT JOIN markup_categories mc ON mc.id = ai.cat\nORDER BY o.overruns DESC, o.delta_med DESC LIMIT 50",
           "refId": "A"
         }
       ]
@@ -6076,12 +6077,618 @@
       "type": "row",
       "collapsed": false,
       "panels": [],
-      "title": "6. Отдача клиентам",
+      "title": "5б. Разметка пользователей на AI-видео (ai users раз в минуту, AI_USER_SEGMENTS_ENABLED)",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 223
+      },
+      "id": 95
+    },
+    {
+      "id": 96,
+      "type": "stat",
+      "title": "Пользовательских сегментов отдаётся сейчас",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 224,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE (e ->> 'category_id')::int IN (4, 5)) AS \"реклама\",\n       COUNT(*) FILTER (WHERE (e ->> 'category_id')::int IN (3, 6)) AS \"заставки и титры\",\n       COUNT(DISTINCT c.video_id) AS \"видео\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nWHERE c.withdrawn_at IS NULL AND e ->> 'source' = 'user'",
+          "refId": "A"
+        }
+      ],
+      "description": "Записи data неотозванных AI-строк с source user: сегменты пользователей, которые отдаются вместо или рядом с сегментами модели до вердикта асессора. Реклама (sponsor / self_promotion) — показанные сразу и склеенные с сегментом модели; заставки и титры (intro / credits) отдаются как есть, без вопроса асессору. Видео — строк хотя бы с одной такой записью. Вердикт keep делает запись асессорской (source review), и она отсюда уходит."
+    },
+    {
+      "id": 97,
+      "type": "stat",
+      "title": "Склеено с сегментом модели",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 224,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"сегментов модели\", COUNT(DISTINCT c.video_id) AS \"видео\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.hidden) e\nWHERE c.withdrawn_at IS NULL AND e ->> 'reason' = 'glued'",
+          "refId": "A"
+        }
+      ],
+      "description": "Сегменты модели в hidden с reason glued: пользователь продлил или дополнил их не больше чем на AI_USER_GLUE_SECONDS, и отдаётся объединение (source user) без вопроса асессору. Склейку асессор не смотрит; удалённая разметка или вердикт возвращают сегмент модели в data на следующем тике."
+    },
+    {
+      "id": 98,
+      "type": "stat",
+      "title": "Открытых вопросов U",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 224,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS n FROM prv_review_items i\nWHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-user-%'\n  AND NOT EXISTS (SELECT 1 FROM prv_review_verdicts v WHERE v.item_id = i.id)",
+          "refId": "A"
+        }
+      ],
+      "description": "Вопросы U<n> листов ai-user-<дата> (priority urgent) без вердикта. Показанный (shown) сегмент отдаётся, пока вопрос открыт; отложенный (held) не отдаётся до keep."
+    },
+    {
+      "id": 99,
+      "type": "bargauge",
+      "title": "Вопросы U: вердикт / показан или отложен",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 224,
+        "w": 10,
+        "h": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "namePlacement": "top",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH u AS (\n  SELECT i.id, CASE WHEN i.flagged_by ->> 1 LIKE 'held%' THEN 'held' ELSE 'shown' END AS how,\n         (SELECT v.verdict FROM prv_review_verdicts v WHERE v.item_id = i.id ORDER BY v.decided_at DESC, v.id DESC LIMIT 1) AS verdict\n  FROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-user-%')\nSELECT k.name || ' / ' || h.how AS \"вердикт\", COUNT(u.id) AS \"вопросов\" FROM (VALUES\n  (1, 'sponsor', '1. sponsor'), (2, 'self_promotion', '2. self_promotion'), (3, 'not_ad', '3. not_ad'),\n  (4, 'unclear', '4. unclear'), (5, NULL, '5. без вердикта')) AS k(ord, code, name)\nCROSS JOIN (VALUES (1, 'shown'), (2, 'held')) AS h(ord, how)\nLEFT JOIN u ON u.how = h.how AND u.verdict IS NOT DISTINCT FROM k.code\nGROUP BY k.ord, k.name, h.ord, h.how ORDER BY k.ord, h.ord",
+          "refId": "A"
+        }
+      ],
+      "description": "Последний вердикт по каждому вопросу U. shown — сегмент не пересекал отдаваемые и отдавался сразу; held — пересекал запись модели и ждал асессора (вторая строка flagged_by). sponsor / self_promotion: сегмент отдаётся как асессорский (source review); not_ad / unclear: скрыт, новых вопросов по нему не будет. Много not_ad среди shown — пользователи ошибаются чаще, чем ожидали."
+    },
+    {
+      "id": 100,
+      "type": "timeseries",
+      "title": "Вопросов U по дням (created_at)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 229,
+        "w": 14,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(i.created_at, '1d'), CASE WHEN i.flagged_by ->> 1 LIKE 'held%' THEN 'held' ELSE 'shown' END AS metric,\n       COUNT(*) AS value\nFROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-user-%' AND $__timeFilter(i.created_at)\nGROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "description": "Новые вопросы U в день: shown (сегмент отдаётся сразу) и held (ждёт асессора). Ожидаемо около 2 в день."
+    },
+    {
+      "id": 101,
+      "type": "table",
+      "title": "Отдаваемая реклама пользователей: какие видео",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 234,
+        "w": 24,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${PROVIDER_VIDEO_URL}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "длина"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "возраст вопроса"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "SELECT c.native_id, c.video_id, mc.category AS \"категория\",\n       to_char(make_interval(secs => floor((e ->> 'start')::float)), 'FMHH24:MI:SS') || '–' ||\n         to_char(make_interval(secs => ceil((e ->> 'end')::float)), 'FMHH24:MI:SS') AS \"начало–конец\",\n       (e ->> 'end')::float - (e ->> 'start')::float AS \"длина\",\n       COALESCE((e ->> 'rating')::int, 0) AS \"рейтинг\",\n       CASE WHEN g.n > 0 THEN 'склеено с сегментом модели' WHEN u.code IS NULL THEN 'нет вопроса'\n            ELSE u.code || ' (' || COALESCE(u.verdict, 'открыт') || ')' END AS \"вопрос\",\n       EXTRACT(EPOCH FROM NOW() - u.created_at) AS \"возраст вопроса\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nJOIN markup_categories mc ON mc.id = (e ->> 'category_id')::int\nLEFT JOIN LATERAL (\n  SELECT i.batch || ' ' || i.item_code AS code, i.created_at,\n         (SELECT v.verdict FROM prv_review_verdicts v WHERE v.item_id = i.id ORDER BY v.decided_at DESC, v.id DESC LIMIT 1) AS verdict\n  FROM prv_review_items i WHERE i.kind = 'ai' AND COALESCE(i.sheet, i.batch) LIKE 'ai-user-%' AND i.video_id = c.video_id\n    AND i.start < (e ->> 'end')::float AND i.\"end\" > (e ->> 'start')::float\n  ORDER BY i.created_at DESC, i.id DESC LIMIT 1) u ON TRUE\nCROSS JOIN LATERAL (\n  SELECT COUNT(*) AS n FROM jsonb_array_elements(c.hidden) h WHERE h ->> 'reason' = 'glued'\n    AND (h ->> 'start')::float < (e ->> 'end')::float AND (h ->> 'end')::float > (e ->> 'start')::float) g\nWHERE c.withdrawn_at IS NULL AND e ->> 'source' = 'user' AND (e ->> 'category_id')::int IN (4, 5)\nORDER BY u.created_at DESC NULLS LAST, c.video_id, (e ->> 'start')::float LIMIT 100"
+        }
+      ],
+      "description": "Записи data с source user категорий sponsor / self_promotion: что зрители видят без проверки асессором. Вопрос — последний вопрос U, пересекающий запись (лист и код, вердикт или «открыт»); склеенные с сегментом модели вопроса не имеют. native_id ведёт на prv, video_id — на /admin/video (нужен токен в переменной вверху)."
+    },
+    {
+      "id": 102,
+      "type": "table",
+      "title": "Отдаваемые заставки и титры пользователей",
+      "datasource": {
+        "type": "postgres",
+        "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 243,
+        "w": 24,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "native_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "${PROVIDER_VIDEO_URL}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "video_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "",
+                    "url": "https://${API_HOST}/admin/video/${__data.fields.video_id}?verifyBearerToken=${verifyBearerToken}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "длина"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ce68e9be-35fa-4d6a-8f59-35f03dae1d52"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "SELECT c.native_id, c.video_id, mc.category AS \"категория\",\n       to_char(make_interval(secs => floor((e ->> 'start')::float)), 'FMHH24:MI:SS') || '–' ||\n         to_char(make_interval(secs => ceil((e ->> 'end')::float)), 'FMHH24:MI:SS') AS \"начало–конец\",\n       (e ->> 'end')::float - (e ->> 'start')::float AS \"длина\",\n       COALESCE((e ->> 'rating')::int, 0) AS \"рейтинг\"\nFROM prv_ai_video_calculateds c CROSS JOIN LATERAL jsonb_array_elements(c.data) e\nJOIN markup_categories mc ON mc.id = (e ->> 'category_id')::int\nWHERE c.withdrawn_at IS NULL AND e ->> 'source' = 'user' AND (e ->> 'category_id')::int IN (3, 6)\nORDER BY \"длина\" DESC, c.video_id LIMIT 200"
+        }
+      ],
+      "description": "Записи data с source user категорий intro / credits: отдаются как есть, любого возраста и длины, без вопроса асессору (кроме тех, что пересекают отдаваемую запись). Самые длинные сверху: длинная «заставка» — повод проверить видео вручную. native_id ведёт на prv, video_id — на /admin/video (нужен токен в переменной вверху)."
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "title": "6. Отдача клиентам",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 252
       },
       "id": 55
     },
@@ -6095,7 +6702,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 224,
+        "y": 253,
         "w": 12,
         "h": 8
       },
@@ -6170,7 +6777,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 224,
+        "y": 253,
         "w": 4,
         "h": 8
       },
@@ -6235,7 +6842,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 224,
+        "y": 253,
         "w": 4,
         "h": 8
       },
@@ -6298,7 +6905,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 224,
+        "y": 253,
         "w": 4,
         "h": 8
       },
@@ -6361,7 +6968,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 232,
+        "y": 261,
         "w": 6,
         "h": 8
       },
@@ -6428,7 +7035,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 232,
+        "y": 261,
         "w": 18,
         "h": 8
       },

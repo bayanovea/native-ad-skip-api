@@ -7,6 +7,7 @@ const { findAiCalculated } = require('../../lib/find-ai-calculated');
 const SOURCE_BADGES = {
     review: ' <span class="badge review-badge" title="Bounds set by an assessor on /admin/review" style="background:#15803d">review</span>',
     chapter: ' <span class="badge chapter-badge" title="Bounds from the video\'s own chapter (ai detect, AI_CHAPTERS_ENABLED)" style="background:#7c3aed">chapter</span>',
+    user: ' <span class="badge user-badge" title="A user segment not yet checked by an assessor (ai users, AI_USER_SEGMENTS_ENABLED)" style="background:#b45309">user</span>',
 };
 
 // `videoId` is matched against native_id, which any client sets through

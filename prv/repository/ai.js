@@ -11,11 +11,18 @@ const PRV_NATIVE_ID = /^-?\d+_\d+$/;
 // A keep verdict never restores a row withdrawn by `admin` (the operator's switch).
 const RESTORABLE_BY = new Set(['judge', 'review']);
 const byStart = (a, b) => a.start - b.start;
+// An entry the ai users pass wrote from the users' segments (ai/pipeline/publish.go sourceUser): unverified, so it
+// counts for neither withdraw nor restore and gives way to a keep.
+const isUser = e => e.source === 'user';
+const overlaps = (e, b) => e.start < b.end && b.start < e.end;
+const inside = (e, b) => b.start <= e.start && e.end <= b.end;
+// The sheet of a user segment's items (ai/pipeline/users.go): a keep there with no entry is the reviewer's.
+const USER_SHEET = /^ai-user-/;
 // An entry without what its place derives: `rating` (served only) and `reason` (hidden only).
 const stripDerived = ({ rating, reason, ...rest }) => rest;
 
 module.exports = function createAiRepository(models, sequelize) {
-    // Every entry of the row has a keep verdict as its latest one, decided after the row was withdrawn.
+    // Every entry of `data` has a keep verdict as its latest one, decided after the row was withdrawn.
     // An item refers to the entry at its effective bounds (those of its latest verdict with bounds, else its own;
     // prv/repository/review.js effectiveOf), and of several items on one entry the latest verdict counts.
     async function allKept(row, data, transaction) {
@@ -81,9 +88,14 @@ module.exports = function createAiRepository(models, sequelize) {
          * `short` when under MIN_SEGMENT_SECONDS. Served entries of the same category lying entirely inside `to`
          * are absorbed (the pieces of one ad become this entry; their votes and items are left behind); a partial
          * overlap or a covered entry of another category is refused (ReviewInputError, nothing written), except a keep
-         * on an entry that is not served, whose `to` lies inside a wider served entry: that changes nothing. A row
-         * withdrawn by judge or review is served again once every served entry has a keep verdict. Idempotent;
-         * returns `{ changed, absorbed }`.
+         * on an entry that is not served, whose `to` lies inside a wider served entry: that changes nothing.
+         * User entries (`source: 'user'`, unverified): a keep first removes every other one its `to` overlaps, a
+         * covered one of its category counting as absorbed; a keep on one makes it `source: 'review'` even unmoved,
+         * as does a keep on an `ai-user-*` item that finds no entry; the entries hidden as `glued` inside a decided
+         * user entry are dropped on a keep and hidden as `review` otherwise. Withdraw and restore count the entries
+         * that are not user entries: a not_ad / unclear leaving none withdraws the row by `review`, and a row
+         * withdrawn by judge or review is served again once there is at least one and each has a keep verdict.
+         * Idempotent; returns `{ changed, absorbed }`.
          */
         async applyVerdict(item, verdict, { from = item, to = from, transaction }) {
             const none = { changed: false, absorbed: 0 };
@@ -97,30 +109,42 @@ module.exports = function createAiRepository(models, sequelize) {
             const inHidden = inData === -1 ? row.hidden.findIndex(atFrom) : -1;
             const old = inData !== -1 ? row.data[inData] : row.hidden[inHidden];
             const others = { data: row.data.filter((_, i) => i !== inData), hidden: row.hidden.filter((_, i) => i !== inHidden) };
-            let toData = null, toHidden = null;
+            const keep = KEEP_VERDICTS.has(verdict);
+            let toData = null, toHidden = null, absorbedUser = 0;
+            const gaveWay = keep ? others.data.filter(e => isUser(e) && overlaps(e, to)) : [];
+            if (gaveWay.length) others.data = others.data.filter(e => !gaveWay.includes(e));
+            // The model's entries glued into a decided user entry follow its verdict.
+            const glued = old && isUser(old) ? others.hidden.filter(e => e.reason === HIDDEN_REASONS.GLUED && inside(e, from)) : [];
+            if (glued.length) {
+                others.hidden = others.hidden.filter(e => !glued.includes(e));
+                if (!keep) others.hidden = [...others.hidden, ...glued.map(e => ({ ...e, reason: HIDDEN_REASONS.REVIEW }))].sort(byStart);
+            }
             // An entry absorbed by a merge sits inside a served one: its item is history, a verdict on it changes nothing.
-            if (!old && others.data.some(e => e.start <= from.start && from.end <= e.end)) return { changed: false, absorbed: 0 };
-            if (KEEP_VERDICTS.has(verdict)) {
+            if (!old && others.data.some(e => inside(from, e))) return { changed: false, absorbed: 0 };
+            if (keep) {
                 const category = await models.MarkupCategory.findOne({ where: { category: verdict }, transaction });
-                // An entry put back at bounds a reviewer set is theirs, not the detector's.
-                const base = old || { start: from.start, end: from.end, source: from.start === item.start && from.end === item.end ? 'ai' : 'review' };
+                // An entry put back at bounds a reviewer set is theirs, not the detector's; so is a user segment's stretch.
+                const base = old || { start: from.start, end: from.end,
+                    source: from.start === item.start && from.end === item.end && !USER_SHEET.test(item.batch || '') ? 'ai' : 'review' };
                 const moved = to.start !== base.start || to.end !== base.end;
                 const same = !moved && base.category_id === category.id;
                 const alreadyShort = same && old.reason === HIDDEN_REASONS.SHORT;
-                const alreadyServed = same && inData !== -1;
-                const entry = { ...stripDerived(base), category_id: category.id, start: to.start, end: to.end, ...(moved && { source: 'review' }) };
+                const alreadyServed = same && inData !== -1 && !isUser(base);
+                absorbedUser = gaveWay.filter(e => e.category_id === category.id && inside(e, to)).length;
+                const entry = { ...stripDerived(base), category_id: category.id, start: to.start, end: to.end,
+                    ...((moved || isUser(base)) && { source: 'review' }) };
                 // Items find their entry by bounds: a keep onto a hidden entry's exact bounds takes its place.
                 others.hidden = others.hidden.filter(e => e.start !== to.start || e.end !== to.end);
                 if (to.end - to.start < MIN_SEGMENT_SECONDS) {
                     if (!alreadyShort) toHidden = { ...entry, reason: HIDDEN_REASONS.SHORT };
                 } else if (!alreadyServed) {
                     // The stretch is served already by a wider entry, and this entry stays where it is.
-                    if (inData === -1 && others.data.some(e => e.start <= to.start && to.end <= e.end && e.end - e.start > to.end - to.start)) return none;
-                    const overlapping = others.data.filter(e => e.start < to.end && to.start < e.end);
-                    if (overlapping.some(e => e.category_id !== category.id || e.start < to.start || to.end < e.end)) {
+                    if (inData === -1 && others.data.some(e => inside(to, e) && e.end - e.start > to.end - to.start)) return none;
+                    const overlapping = others.data.filter(e => overlaps(e, to));
+                    if (overlapping.some(e => e.category_id !== category.id || !inside(e, to))) {
                         throw new ReviewInputError(`bounds ${to.start}-${to.end} overlap another AI segment of the video`, 'bounds_overlap');
                     }
-                    absorbed = overlapping.length;
+                    absorbed = overlapping.length + absorbedUser;
                     others.data = others.data.filter(e => !overlapping.includes(e));
                     const rating = await voteRating(models, { videoId: row.video_id, categoryId: category.id, start: to.start, end: to.end }, { transaction });
                     toData = { ...entry, ...(rating ? { rating } : {}) };
@@ -129,18 +153,21 @@ module.exports = function createAiRepository(models, sequelize) {
                 const moved = to.start !== old.start || to.end !== old.end;
                 toHidden = { ...stripDerived(old), start: to.start, end: to.end, ...(moved && { source: 'review' }), reason: HIDDEN_REASONS.REVIEW };
             }
-            let changed = toData !== null || toHidden !== null;
+            let changed = toData !== null || toHidden !== null || gaveWay.length > 0 || glued.length > 0;
             const data = !changed ? row.data : toData ? [...others.data, toData].sort(byStart) : others.data;
             if (changed) {
                 const hidden = toHidden ? [...others.hidden, toHidden].sort(byStart) : others.hidden;
                 await row.update({ data, hidden, updated_at: sequelize.fn('NOW') }, { transaction });
             }
 
-            if (!row.withdrawn_at && !KEEP_VERDICTS.has(verdict) && inData !== -1 && data.length === 0) {
+            const own = data.filter(e => !isUser(e));
+            // The verdict took a model's or reviewer's entry out of what is served (a glued one counts as served).
+            const wasOwn = (inData !== -1 && !isUser(old)) || glued.length > 0 || (old && old.reason === HIDDEN_REASONS.GLUED);
+            if (!row.withdrawn_at && !keep && wasOwn && own.length === 0) {
                 const withdrawn = await this.withdraw(row.video_id, 'review', `review: ${verdict} on ${item.batch} ${item.item_code}`, { transaction });
                 return { changed: withdrawn || changed, absorbed };
             }
-            if (row.withdrawn_at && RESTORABLE_BY.has(row.withdrawn_by) && data.length > 0 && await allKept(row, data, transaction)) {
+            if (row.withdrawn_at && RESTORABLE_BY.has(row.withdrawn_by) && own.length > 0 && await allKept(row, own, transaction)) {
                 await row.update({ withdrawn_at: null, withdrawn_by: null, withdrawn_reason: null, updated_at: sequelize.fn('NOW') }, { transaction });
                 await sequelize.query(
                     `UPDATE prv_ai_videos SET status = 'published', updated_at = NOW() WHERE native_id = :nativeId`,
@@ -177,7 +204,7 @@ module.exports = function createAiRepository(models, sequelize) {
                     item_code: `M${position}`, position, native_id: row.native_id, start, end, proposed: category.category,
                     cues: cuesOver(run && run.transcript && run.transcript.cues, entry), link: linkAt(row.native_id, start - 2),
                     flagged_by: ['admin: sent to review',
-                        `entry: ${category.category} ${entry.confidence}, ${end - start} s, ${entry.served ? 'served' : `hidden: ${entry.reason}`}`],
+                        `entry: ${category.category} ${entry.confidence || entry.source}, ${end - start} s, ${entry.served ? 'served' : `hidden: ${entry.reason}`}`],
                     kind: 'ai', video_id: videoId,
                 };
                 await reviewRepository.insertItems(sheet, batch, [item], { transaction });

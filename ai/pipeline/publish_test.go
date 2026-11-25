@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"reflect"
 	"regexp"
 	"strings"
@@ -151,5 +152,20 @@ func TestPublishRatesTheEntriesFromTheVotesUnderTheVideoCalculatedLock(t *testin
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEntryMarshalsConfidenceOnlyWhenSet(t *testing.T) {
+	for _, c := range []struct {
+		e    Entry
+		want string
+	}{
+		{re(4, 10, 40, "", sourceUser, "", 2), `{"category_id":4,"start":10,"end":40,"source":"user","rating":2}`},
+		{re(4, 10, 40, "high", "ai", "", 0), `{"category_id":4,"start":10,"end":40,"confidence":"high","source":"ai"}`},
+	} {
+		b, err := json.Marshal(c.e)
+		if err != nil || string(b) != c.want {
+			t.Fatalf("got %s (%v), want %s", b, err, c.want)
+		}
 	}
 }

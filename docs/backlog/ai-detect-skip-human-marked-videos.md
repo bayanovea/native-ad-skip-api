@@ -5,8 +5,12 @@ added: 2026-10-28
 ---
 # Should the detector skip videos that already have good human markups?
 
-With `AI_FIRST=on` a video with an AI row serves the AI segments only; its human markups stay as the judge's
-signal and the fallback after a withdraw (21 of the 297 serving rows on 2026-10-28 have one). Open since the
+With `AI_FIRST=on` a video with an AI row serves the AI segments; its human markups stay as the judge's
+signal and the fallback after a withdraw (21 of the 297 serving rows on 2026-10-28 have one). Since change
+`ai-user-segments` (`ai users`, `AI_USER_SEGMENTS_ENABLED`) the users' segments are served on AI rows too: new ad
+segments shown, glued or held for an assessor, intro / credits as they are (ai-first.md → User segments); only
+ad markups older than `AI_USER_SEGMENTS_SINCE` and segments the AI entries mostly cover are still replaced by
+the model's, which narrows what skipping such videos would save. Open since the
 2026-10-22 plan: whether `queueRule` should leave out videos with ≥ 2 live sponsor / self_promotion markups by
 authors with rating ≥ 0, so a working human markup is never replaced by the model. Decide on the read side's
 numbers once AI-first has run a few weeks: how often the judge gets a conflicting markup on such rows

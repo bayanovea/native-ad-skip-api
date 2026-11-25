@@ -1480,7 +1480,8 @@ test('import-below-threshold --served: a seeded blind sample of served entries, 
         await dbQuery(`DELETE FROM prv_review_batches WHERE batch LIKE 'served-%'`);
     });
     const entry = (category_id, start, end, source = 'ai') => ({ category_id, start, end, confidence: 'high', source });
-    await setData(a, [...a.data, entry(cats.prv.sponsor, 400, 420, 'review')]);
+    const user = { category_id: cats.prv.sponsor, start: 500, end: 520, source: 'user' };
+    await setData(a, [...a.data, entry(cats.prv.sponsor, 400, 420, 'review'), user]);
     await setData(b, [entry(cats.prv.sponsor, 20, 30), entry(cats.prv.self_promotion, 40, 50)]);
 
     assert.equal(run('--served', '2', '--empty-only').status, 2);
@@ -1494,7 +1495,7 @@ test('import-below-threshold --served: a seeded blind sample of served entries, 
     const picks = lines.slice(1).map((l) => l.split('\t'));
     assert.deepEqual(picks.map((p) => p[0]), ['S1', 'S2']);
     assert.deepEqual(picks.map((p) => p[1]).sort(), ['-1_456000201', '-1_456000206'], 'one entry per video');
-    assert.deepEqual(picks.find((p) => p[1] === '-1_456000201').slice(2, 5), ['30', '70', 'sponsor'], 'an entry a verdict moved is never sent again');
+    assert.deepEqual(picks.find((p) => p[1] === '-1_456000201').slice(2, 5), ['30', '70', 'sponsor'], 'an entry a verdict moved or a user entry is never sent');
     assert.match(picks[0][5], /^detect run \d+: \w+ high, \d+ s, served$/);
     assert.equal((await dbQuery(`SELECT COUNT(*)::int AS n FROM prv_review_items WHERE sheet LIKE 'served-%'`))[0].n, 0, 'dry run writes nothing');
 
@@ -1993,6 +1994,7 @@ test('ai detect: "its creator has been blocked" fails the video at the first att
 test('ai detect: the image\'s crontab keeps two ticks apart with flock -n', () => {
     const tab = fs.readFileSync('/etc/cron.d/my-crontab', 'utf8');
     assert.match(tab, /^\*\/5 \* \* \* \* flock -n \/tmp\/ai-detect\.lock \/app\/prv\/commands\/ai\/ai detect >> \/proc\/1\/fd\/1 2>&1$/m);
+    assert.match(tab, /^\* \* \* \* \* sleep 50 && flock -n \/tmp\/ai-users\.lock \/app\/prv\/commands\/ai\/ai users >> \/proc\/1\/fd\/1 2>&1$/m);
 });
 
 test('ai detect: a tick whose every fetch fails while a published video still fetches is the videos’: attempts spent, no failed tick', async () => {
@@ -3456,6 +3458,308 @@ test('ai judge: review items go to the day’s newest part that nobody holds or 
         await dbQuery(`DELETE FROM prv_review_items WHERE COALESCE(sheet, batch) = $1 AND item_code LIKE 'F%'`, [sheet]);
         await dbQuery(`UPDATE prv_review_batches SET locked_by = NULL, locked_at = NULL WHERE batch = ANY($1)`, [held]);
     }
+});
+
+// ── Users' segments on AI-served videos (ai users, AI_USER_SEGMENTS_ENABLED) ──
+
+const userEntry = (category_id, start, end) => ({ category_id, start, end, source: 'user' });
+const modelEntry = (category_id, start, end, extra = {}) => ({ category_id, start, end, confidence: 'high', source: 'ai', ...extra });
+const setAiRow = (videoId, data, hidden = []) => dbQuery(`UPDATE prv_ai_video_calculateds SET data = $2, hidden = $3 WHERE video_id = $1`,
+    [videoId, JSON.stringify(data), JSON.stringify(hidden)]);
+const aiHidden = async videoId => (await dbQuery(`SELECT hidden FROM prv_ai_video_calculateds WHERE video_id = $1`, [videoId]))[0].hidden
+    .map(({ category_id, start, end, source, reason }) => [category_id, start, end, source, reason]);
+
+async function addAiItem(batch, code, nativeId, videoId, start, end) {
+    await dbQuery('INSERT INTO prv_review_batches (batch) VALUES ($1) ON CONFLICT DO NOTHING', [batch]);
+    const [it] = await dbQuery(
+        `INSERT INTO prv_review_items (sheet, batch, item_code, position, native_id, start, "end", proposed, link, flagged_by, kind, video_id)
+         VALUES ($1, $1, $2, $3, $4, $5, $6, 'sponsor', $7, $8, 'ai', $9) RETURNING id, item_code`,
+        [batch, code, Number(code.slice(1)), nativeId, start, end, `https://example.invalid/video${nativeId}?t=${start - 2}s`,
+            JSON.stringify(['user markup: 1 authors, best rating 0', 'shown']), videoId]);
+    return it;
+}
+
+test('ai review user: a keep makes a user entry the reviewer\'s, not_ad hides it; a keep on a held U item absorbs the AI entry', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001321';
+    const batch = 'ai-user-e2e-a';
+    const { videoId } = await aiReviewSeed(vid, 'e2e-user-a-model', [[30, 70]]);
+    await setAiRow(videoId, [modelEntry(sp, 30, 70), userEntry(sp, 400, 440), userEntry(sp, 500, 540)]);
+    const u2 = await addAiItem(batch, 'U2', vid, videoId, 400, 440);
+    const u3 = await addAiItem(batch, 'U3', vid, videoId, 500, 540);
+    await takeReview(batch);
+
+    assert.equal((await decideAi(u2, 'sponsor')).ai_applied, true, 'a keep without bounds still changes the entry');
+    assert.deepEqual(await aiEntries(videoId), [[sp, 30, 70, 'ai', undefined], [sp, 400, 440, 'review', undefined], [sp, 500, 540, 'user', undefined]]);
+    assert.equal((await decideAi(u2, 'sponsor', 'again')).ai_applied, false, 'idempotent');
+    assert.equal((await decideAi(u3, 'not_ad')).ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 400, 440]]);
+    assert.deepEqual(await aiHidden(videoId), [[sp, 500, 540, 'user', 'review']]);
+    assert.equal((await aiCalculated(vid)).withdrawn_at, null, 'a model entry is still served');
+
+    // Held: the AI entry 219–292 stays served, the U item sits on the union 219–334.
+    const held = '-1_456001322';
+    const h = await aiReviewSeed(held, 'e2e-user-b-model', [[219, 292]]);
+    const u1 = await addAiItem('ai-user-e2e-b', 'U1', held, h.videoId, 219, 334);
+    await takeReview('ai-user-e2e-b');
+    const res = await decideAi(u1, 'sponsor');
+    assert.deepEqual([res.ai_applied, res.absorbed], [true, 1]);
+    assert.deepEqual(await aiEntries(h.videoId), [[sp, 219, 334, 'review', undefined]]);
+});
+
+test('ai review user: a keep elsewhere takes precedence over an overlapping user entry of any category; a keep on the model\'s hidden entry under a wider user entry serves it', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const self = cats.prv.self_promotion;
+    const c = await aiReviewSeed('-1_456001323', 'e2e-user-c', [[1237, 1250]]);
+    await setAiRow(c.videoId, [modelEntry(sp, 1237, 1250), userEntry(self, 1260, 1300)]);
+    await takeReview('e2e-user-c');
+    const res = await decideBounds(c.items[0], 'sponsor', { start: 1237, end: 1270, source: 'typed' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual([res.body.ai_applied, res.body.absorbed], [true, 0]);
+    assert.deepEqual(await aiEntries(c.videoId), [[sp, 1237, 1270, 'review', undefined]], 'the unchecked user entry gave way');
+
+    const d = await aiReviewSeed('-1_456001324', 'e2e-user-d', [[30, 70], [105, 150]]);
+    await setAiRow(d.videoId, [modelEntry(sp, 30, 70), userEntry(sp, 100, 160)], [modelEntry(sp, 105, 150, { reason: 'unconfirmed' })]);
+    await takeReview('e2e-user-d');
+    assert.equal((await decideAi(d.items[1], 'sponsor')).ai_applied, true, 'not a no-op under the wider user entry');
+    assert.deepEqual(await servedBounds('-1_456001324'), [[sp, 30, 70], [sp, 105, 150]]);
+});
+
+test('ai review user: verdicts on a glued entry settle its pieces; not_ad on the last model entry withdraws although a user entry remains; restore counts the model\'s entries only', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const intro = cats.prv.intro;
+    const glue = async (vid, batch) => {
+        const s = await aiReviewSeed(vid, `${batch}-model`, [[219, 292]]);
+        await setAiRow(s.videoId, [userEntry(sp, 219, 308)], [modelEntry(sp, 219, 292, { reason: 'glued' })]);
+        const item = await addAiItem(batch, 'U1', vid, s.videoId, 219, 308);
+        await takeReview(batch);
+        return { ...s, item };
+    };
+    const no = await glue('-1_456001325', 'ai-user-e2e-glue-no');
+    assert.equal((await decideAi(no.item, 'not_ad')).ai_applied, true);
+    assert.deepEqual(await aiHidden(no.videoId), [[sp, 219, 292, 'ai', 'review'], [sp, 219, 308, 'user', 'review']]);
+    assert.equal((await aiCalculated('-1_456001325')).withdrawn_by, 'review', 'nothing of the model left to serve');
+    const yes = await glue('-1_456001326', 'ai-user-e2e-glue-yes');
+    assert.equal((await decideAi(yes.item, 'sponsor')).ai_applied, true);
+    assert.deepEqual([await aiEntries(yes.videoId), await aiHidden(yes.videoId)], [[[sp, 219, 308, 'review', undefined]], []]);
+
+    const last = await aiReviewSeed('-1_456001327', 'e2e-user-last', [[30, 70]]);
+    await setAiRow(last.videoId, [userEntry(intro, 0, 20), modelEntry(sp, 30, 70)]);
+    await takeReview('e2e-user-last');
+    assert.equal((await decideAi(last.items[0], 'not_ad')).ai_applied, true);
+    assert.equal((await aiCalculated('-1_456001327')).withdrawn_by, 'review');
+    assert.equal((await getCalculatedOn(AI_PORT, '-1_456001327', { v: '1', duration: 600 })).status, 204, 'no human segment: nothing served');
+
+    const back = await aiReviewSeed('-1_456001328', 'e2e-user-restore', [[30, 70], [200, 230]], { withdrawnBy: 'judge' });
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET data = data || $2::jsonb WHERE video_id = $1`, [back.videoId, JSON.stringify([userEntry(intro, 0, 20)])]);
+    await takeReview('e2e-user-restore');
+    assert.equal((await decideAi(back.items[0], 'sponsor')).ai_applied, false);
+    assert.equal((await decideAi(back.items[1], 'sponsor')).ai_applied, true, 'the user entry needs no verdict');
+    assert.equal((await aiCalculated('-1_456001328')).withdrawn_at, null);
+
+    const only = await aiReviewSeed('-1_456001329', 'e2e-user-only', [[30, 70]], { withdrawnBy: 'judge' });
+    await setAiRow(only.videoId, [userEntry(sp, 300, 340)]);
+    await takeReview('e2e-user-only');
+    const res = await decideBounds(only.items[0], 'sponsor', { start: 30, end: 33, source: 'typed' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.ok((await aiCalculated('-1_456001329')).withdrawn_at, 'user entries alone never restore a row');
+});
+
+let usersSince; // set by the first ai users test: only markups of these tests count as new
+const usersEnv = (extra = {}) => ({ AI_DETECT_ENABLED: undefined, AI_USER_SEGMENTS_ENABLED: 'on', AI_USER_SEGMENTS_SINCE: usersSince, ...extra });
+function runUsers(extra) {
+    const r = runAi(['users'], usersEnv(extra));
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return r.stderr;
+}
+const userSheet = () => `ai-user-${new Date().toISOString().slice(0, 10)}`;
+const markupOn = (vid, userId, categoryId, start, end) => postMarkup('',
+    { video_id: vid, v: '1', user_id: userId, category_id: categoryId, duration: 600, data: { intervals: [{ start, end }] } });
+async function deleteMarkupsOf(userId) {
+    for (const { id } of (await markupRowsByUser('', userId)).markups) {
+        assert.equal((await request('GET', `/markups/${id}/delete?verifyBearerToken=${VOTE_AUTH}`, null)).status, 201);
+    }
+    runCalc('prv');
+}
+const ageMarkupsOf = userId => dbQuery(`WITH m AS (UPDATE markups SET "createdAt" = NOW() - INTERVAL '2 days' WHERE user_id = $1 RETURNING id)
+    UPDATE markup_time_intervals SET "updatedAt" = NOW() - INTERVAL '2 days' WHERE markup_id IN (SELECT id FROM m)`, [userId]);
+
+test('ai users: off by default (no entry, no item, no heartbeat); on without AI_USER_SEGMENTS_SINCE or with a bad glue limit exits 1 naming it', async () => {
+    usersSince = new Date(Date.now() - 1000).toISOString();
+    const vid = '-1_456001301';
+    const { videoId, data } = await aiPublished(vid, 1);
+    await markupOn(vid, `${vid}-a`, cats.prv.sponsor, 400, 440);
+    runCalc('prv');
+    await dbQuery(`INSERT INTO calculator_heartbeats (provider, last_run_at, last_success_at, failed_videos)
+        VALUES ('ai_users', NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day', 0) ON CONFLICT (provider) DO NOTHING`);
+
+    let r = runAi(['users'], { AI_DETECT_ENABLED: undefined });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /ai users: off, \d+ rows cleared/);
+    assert.equal(await heartbeat('ai_users'), null, 'off clears the heartbeat');
+    assert.deepEqual([await aiData(videoId), await aiItems(videoId)], [data, []]);
+
+    r = runAi(['users'], usersEnv({ AI_USER_SEGMENTS_SINCE: undefined }));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /AI_USER_SEGMENTS_SINCE/);
+    r = runAi(['users'], usersEnv({ AI_USER_GLUE_SECONDS: 'abc' }));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /AI_USER_GLUE_SECONDS/);
+    assert.deepEqual([await aiData(videoId), await aiItems(videoId)], [data, []]);
+});
+
+test('ai users: a new sponsor markup far from the AI entry is served within a tick with an open U item; a second tick adds nothing; a vote rates the author; not_ad hides it for good; a deleted markup takes its entry along', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001302';
+    const { videoId } = await aiPublished(vid, 1);
+    const author = `${vid}-author`;
+    await markupOn(vid, author, sp, 400, 440);
+    await markupOn(vid, `${vid}-other`, sp, 500, 540);
+    runCalc('prv');
+
+    let log = runUsers();
+    assert.match(log, new RegExp(`ai users: video ${videoId}: \\+2 shown, 0 glued, 0 held, -0 removed`));
+    assert.match(log, /ai users: \d+ rows, \d+ changed, 0 failed/);
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 400, 440], [sp, 500, 540]]);
+    assert.deepEqual((await aiData(videoId))[1], userEntry(sp, 400, 440), 'source user, no confidence');
+    const items = (await aiItems(videoId)).sort((a, b) => a.start - b.start);
+    assert.deepEqual(items.map(i => [i.sheet, i.item_code[0], i.start, i.end, i.proposed, i.flagged_by]),
+        [[userSheet(), 'U', 400, 440, 'sponsor', ['user markup: 1 authors, best rating 0', 'shown']],
+            [userSheet(), 'U', 500, 540, 'sponsor', ['user markup: 1 authors, best rating 0', 'shown']]]);
+    assert.equal((await dbQuery('SELECT priority FROM prv_review_batches WHERE batch = $1', [items[0].batch]))[0].priority, 'urgent');
+    const hb = await heartbeat('ai_users');
+    assert.ok(hb.last_success_at && hb.failed_videos === 0);
+    assert.match(await fetchMetrics(), /calculator_last_success_timestamp_seconds\{provider="ai_users"\}/);
+
+    log = runUsers();
+    assert.doesNotMatch(log, new RegExp(`video ${videoId}:`), 'nothing to change');
+    assert.equal((await aiItems(videoId)).length, 2);
+
+    const before = await userRating('', author);
+    const vote = await requestOn(AI_PORT, 'POST', '/vote', { video_id: vid, user_id: 'users-voter', category_id: sp, start: 400, end: 440, vote: 1, duration: 600 });
+    assert.equal(vote.status, 204);
+    assert.equal((await aiData(videoId))[1].rating, 1);
+    assert.equal(await userRating('', author), before + 1, 'the author is rated as on the human path');
+
+    await takeReview(items[0].batch);
+    assert.equal((await decideAi(items[0], 'not_ad')).ai_applied, true);
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 500, 540]]);
+    runUsers();
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 500, 540]], 'never added again');
+    assert.equal((await aiItems(videoId)).length, 2, 'no second item');
+
+    await deleteMarkupsOf(`${vid}-other`);
+    log = runUsers();
+    assert.match(log, new RegExp(`ai users: video ${videoId}: \\+0 shown, 0 glued, 0 held, -1 removed`));
+    assert.deepEqual(await servedBounds(vid), [[sp, 30, 70]]);
+});
+
+test('ai users: a +16 s tail is glued (one entry, the AI entry hidden as glued, no item, badge and reason on /admin/video); deleting the markup serves the AI entry again; with AI_USER_GLUE_SECONDS=0 it is held', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001303';
+    const { videoId } = await aiPublished(vid, 1);
+    await markupOn(vid, `${vid}-tail`, sp, 68, 86);
+    runCalc('prv');
+    assert.match(runUsers(), new RegExp(`ai users: video ${videoId}: \\+0 shown, 1 glued, 0 held, -0 removed`));
+    assert.deepEqual(await aiEntries(videoId), [[sp, 30, 86, 'user', undefined]]);
+    assert.deepEqual(await aiHidden(videoId), [[sp, 30, 70, 'ai', 'glued']]);
+    assert.deepEqual(await aiItems(videoId), []);
+    const html = (await request('GET', `/admin/video/${videoId}?verifyBearerToken=${VOTE_AUTH}`, null)).body;
+    assert.ok(html.includes('user-badge'), 'the user badge');
+    assert.match(html, /<td class="muted">glued<\/td>/, 'the hidden entry\'s reason');
+
+    await deleteMarkupsOf(`${vid}-tail`);
+    runUsers();
+    assert.deepEqual([await aiEntries(videoId), await aiHidden(videoId)], [[[sp, 30, 70, 'ai', undefined]], []]);
+
+    const held = '-1_456001304';
+    const h = await aiPublished(held, 1);
+    await markupOn(held, `${held}-tail`, sp, 68, 86);
+    runCalc('prv');
+    assert.match(runUsers({ AI_USER_GLUE_SECONDS: '0' }), new RegExp(`ai users: video ${h.videoId}: \\+0 shown, 0 glued, 1 held, -0 removed`));
+    assert.deepEqual(await aiEntries(h.videoId), [[sp, 30, 70, 'ai', undefined]]);
+    assert.deepEqual((await aiItems(h.videoId)).map(i => [i.start, i.end, i.flagged_by[1]]), [[30, 86, 'held: overlaps sponsor 30-70']]);
+});
+
+test('ai users: a segment far longer than the AI entry is held at the union; an old markup, a rated-down author, a short segment and a mostly covered one give nothing; near-duplicates give one item', async () => {
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001305';
+    const { videoId } = await aiPublished(vid, 1, [modelEntry(sp, 17, 24), modelEntry(sp, 500, 560)]);
+    await markupOn(vid, `${vid}-long`, sp, 0, 55);
+    await markupOn(vid, `${vid}-old`, sp, 200, 240);
+    await markupOn(vid, `${vid}-down`, sp, 300, 340);
+    await markupOn(vid, `${vid}-short`, sp, 400, 403);
+    await markupOn(vid, `${vid}-covered`, sp, 505, 565);
+    for (const [user, start, end] of [['dup1', 600, 650], ['dup2', 600, 650], ['dup3', 604, 656]]) await markupOn(vid, `${vid}-${user}`, sp, start, end);
+    runCalc('prv');
+    assert.ok((await prvSegmentRows(videoId)).filter(s => s.start >= 600).length >= 2, 'two buckets, one ad');
+    await ageMarkupsOf(`${vid}-old`);
+    await setUserRating(await getAuthorInternalId(`${vid}-down`), -1);
+
+    runUsers();
+    assert.deepEqual(await aiEntries(videoId), [[sp, 17, 24, 'ai', undefined], [sp, 500, 560, 'ai', undefined], [sp, 600, 650, 'user', undefined]]);
+    assert.deepEqual((await aiItems(videoId)).map(i => [i.start, i.end, i.flagged_by]).sort((a, b) => a[0] - b[0]), [
+        [0, 55, ['user markup: 1 authors, best rating 0', 'held: overlaps sponsor 17-24']],
+        [600, 650, ['user markup: 3 authors, best rating 0', 'shown']]]);
+});
+
+test('ai users: user intro and credits are served with no item, not over an AI entry; withdrawn and empty rows get nothing; ai regate and ai judge leave user entries alone', async () => {
+    await aiFirstServer();
+    const { intro, credits, sponsor: sp } = cats.prv;
+    const vid = '-1_456001306';
+    const { videoId } = await aiPublished(vid, 1, [modelEntry(sp, 219, 292)]);
+    await markupOn(vid, `${vid}-intro`, intro, 0, 20);
+    await markupOn(vid, `${vid}-over`, intro, 210, 230);
+    await markupOn(vid, `${vid}-credits`, credits, 580, 600);
+    const withdrawn = await aiPublished('-1_456001307', 1);
+    await dbQuery(`UPDATE prv_ai_video_calculateds SET withdrawn_at = NOW(), withdrawn_by = 'admin' WHERE video_id = $1`, [withdrawn.videoId]);
+    await markupOn('-1_456001307', '-1_456001307-intro', intro, 0, 20);
+    const empty = await aiPublished('-1_456001308', 1, []);
+    await markupOn('-1_456001308', '-1_456001308-intro', intro, 0, 20);
+    runCalc('prv');
+    await ageMarkupsOf(`${vid}-intro`);
+
+    runUsers();
+    const served = [[intro, 0, 20, 'user', undefined], [sp, 219, 292, 'ai', undefined], [credits, 580, 600, 'user', undefined]];
+    assert.deepEqual(await aiEntries(videoId), served, 'any age, never over the AI entry');
+    assert.deepEqual(await aiItems(videoId), []);
+    assert.deepEqual([await aiData(withdrawn.videoId), await aiData(empty.videoId)], [withdrawn.data, []]);
+
+    const r = runAi(['regate'], { AI_DETECT_ENABLED: undefined });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(await aiEntries(videoId), served, 'regate leaves user entries served');
+
+    await dbQuery(`UPDATE prv_ai_videos SET judged_at = NOW() - INTERVAL '7 hours' WHERE native_id = $1`, [vid]);
+    assert.equal((await requestOn(AI_PORT, 'POST', '/vote', { video_id: vid, user_id: 'users-hater', category_id: intro, start: 0, end: 20, vote: -1, duration: 600 })).status, 204);
+    const j = runAi(['judge'], { AI_DETECT_ENABLED: undefined, AI_JUDGE_ENABLED: 'on' });
+    assert.doesNotMatch(j.stdout + j.stderr, new RegExp(`ai judge: ${videoId} `));
+    assert.deepEqual(await judgements(videoId), [], 'a dislike on a user entry is no evidence');
+});
+
+test('ai users: switching off removes user entries and un-glues within one tick, kept (review) entries stay, the heartbeat row is gone', async () => {
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001309';
+    const kept = { category_id: sp, start: 500, end: 540, source: 'review' };
+    const { videoId } = await aiPublished(vid, 1, [modelEntry(sp, 219, 292), kept]);
+    await markupOn(vid, `${vid}-tail`, sp, 290, 308);
+    await markupOn(vid, `${vid}-far`, sp, 400, 440);
+    runCalc('prv');
+    runUsers();
+    assert.deepEqual(await aiEntries(videoId), [[sp, 219, 308, 'user', undefined], [sp, 400, 440, 'user', undefined], [sp, 500, 540, 'review', undefined]]);
+    assert.ok(await heartbeat('ai_users'));
+
+    const r = runAi(['users'], { AI_DETECT_ENABLED: undefined });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /ai users: off, [1-9]\d* rows cleared/);
+    assert.deepEqual([await aiEntries(videoId), await aiHidden(videoId)], [[[sp, 219, 292, 'ai', undefined], [sp, 500, 540, 'review', undefined]], []]);
+    assert.equal(await heartbeat('ai_users'), null);
+    assert.deepEqual(await dbQuery(`SELECT video_id FROM prv_ai_video_calculateds WHERE data @> '[{"source":"user"}]' OR hidden @> '[{"reason":"glued"}]'`), [],
+        'no row anywhere keeps a user or glued entry');
 });
 
 // Every AI_* variable (and the yt-dlp / key ones) dropped, as on a deploy that sets none of them.

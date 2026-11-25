@@ -17,7 +17,7 @@ type Entry struct {
 	CategoryID int    `json:"category_id"`
 	Start      int    `json:"start"`
 	End        int    `json:"end"`
-	Confidence string `json:"confidence"`
+	Confidence string `json:"confidence,omitempty"` // none on a user entry
 	Source     string `json:"source"`
 	Reason     string `json:"reason,omitempty"`
 	Rating     int    `json:"rating,omitempty"`
@@ -25,14 +25,21 @@ type Entry struct {
 
 // Reasons of a hidden entry: below accepted() (the truth layer, no verdict yet),
 // shorter than AI_MIN_SEGMENT_SECONDS (the serving filter), not an ad on
-// review (prv/repository/ai.js applyVerdict; no rule ever serves it again), or
-// not found by the second model (confirm.go; only a keep verdict serves it).
+// review (prv/repository/ai.js applyVerdict; no rule ever serves it again),
+// not found by the second model (confirm.go; only a keep verdict serves it), or
+// absorbed into a user segment glued at the union's bounds (users.go; served
+// again when the segment goes).
 const (
 	reasonConfidence  = "confidence"
 	reasonShort       = "short"
 	reasonReview      = "review"
 	reasonUnconfirmed = "unconfirmed"
+	reasonGlued       = "glued"
 )
+
+// sourceUser marks an entry the ai users pass wrote from the users' segments: unverified,
+// owned by that pass, which alone adds, moves and removes it (users.go).
+const sourceUser = "user"
 
 // accepted is the product threshold the held-out SCORE was measured with:
 // sponsor from medium confidence, self-promotion only at high.

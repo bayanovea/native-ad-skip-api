@@ -262,3 +262,13 @@ func TestRegateRowBackfillSkipsAFilledHiddenAndARunWithoutOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// User entries and the model entries glued into them belong to the ai users pass.
+func TestPlaceLeavesUserAndGluedEntriesAlone(t *testing.T) {
+	data := []Entry{re(2, 30, 90, "", sourceUser, "", 1), re(1, 300, 302, "", sourceUser, "", 0)}
+	hidden := []Entry{re(2, 30, 70, "high", "ai", reasonGlued, 0), re(2, 500, 540, "high", "ai", reasonGlued, 0)}
+	served, hid, in, moved := place(data, hidden, nil, regateCats, 5)
+	if !reflect.DeepEqual(served, data) || !reflect.DeepEqual(hid, hidden) || in != 0 || moved {
+		t.Fatalf("got %+v / %+v in %d moved %v", served, hid, in, moved)
+	}
+}

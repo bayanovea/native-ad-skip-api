@@ -60,8 +60,13 @@ type Entry struct {
 	CategoryID int    `json:"category_id"`
 	Start      int    `json:"start"`
 	End        int    `json:"end"`
-	Source     string `json:"source,omitempty"` // "ai", or "review" once an assessor set the bounds
+	Source     string `json:"source,omitempty"` // "ai", "review" once an assessor set the bounds, "user" (sourceUser)
 }
+
+// sourceUser is ai/pipeline's: an unverified entry the ai users pass wrote from the users' segments.
+// The judge neither counts signals on it nor sends it to review; it only keeps its markups from
+// counting as conflicts.
+const sourceUser = "user"
 
 // EntryKey is an entry's bounds, by which review items and their verdicts find it.
 type EntryKey struct{ Start, End int }
@@ -72,8 +77,9 @@ func (e Entry) key() EntryKey { return EntryKey{e.Start, e.End} }
 type Video struct {
 	VideoID       int
 	NativeID      string
-	Data          []byte // the row's data as stored; the queries read the entries' bounds from it
-	Entries       []Entry
+	Data          []byte  // the row's data as stored; the queries read the entries' bounds from it
+	Entries       []Entry // the entries judged: data without user entries
+	Served        []Entry // every entry of data, what a human markup is compared with
 	PublishedAt   time.Time
 	Duration      sql.NullInt64 // the AI row's videos.duration
 	JudgedAt      sql.NullTime
@@ -194,7 +200,7 @@ func humanMarkups(db *sql.DB, v Video, categories map[int]string, asOf time.Time
 		if err := rows.Scan(&h.CategoryID, &h.Start, &h.End, &h.AuthorRating, &dated); err != nil {
 			return nil, err
 		}
-		out = append(out, humanNote{h, conflicts(h, v.Entries, categories), dated})
+		out = append(out, humanNote{h, conflicts(h, v.Served, categories), dated})
 	}
 	return out, rows.Err()
 }
@@ -212,7 +218,7 @@ type humanNote struct {
 }
 
 // conflicts: a human interval of a category the detector produces whose IoU is
-// below 0.5 with every AI entry of that category, by an author not rated down.
+// below 0.5 with every served entry of that category, by an author not rated down.
 // Intro / credits markups are no disagreement, the detector never marks them.
 func conflicts(h humanInterval, entries []Entry, categories map[int]string) bool {
 	if h.AuthorRating < 0 {
@@ -305,9 +311,16 @@ func keepVerdicts(q querier, videoID int, entries []byte, after time.Time) (map[
 	return keeps, rows.Err()
 }
 
-// parseEntries reads the bounds of the row's data.
-func parseEntries(data []byte) ([]Entry, error) {
-	var out []Entry
-	err := json.Unmarshal(data, &out)
-	return out, err
+// parseEntries reads the bounds of the row's data: own = the entries the judge judges (no user
+// entries), served = all of them.
+func parseEntries(data []byte) (own, served []Entry, err error) {
+	if err := json.Unmarshal(data, &served); err != nil {
+		return nil, nil, err
+	}
+	for _, e := range served {
+		if e.Source != sourceUser {
+			own = append(own, e)
+		}
+	}
+	return own, served, nil
 }

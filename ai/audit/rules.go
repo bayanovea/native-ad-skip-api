@@ -66,7 +66,7 @@ func markNew(findings, previous []Finding) {
 func isKeep(v string) bool { return v == "sponsor" || v == "self_promotion" }
 
 // Item sources, from the first flagged_by line (the lines ai/judge, import-below-threshold.js,
-// the second opinion and the admin link write) or the item kind.
+// the second opinion, the admin link and the ai users pass write) or the item kind.
 const (
 	sourceSheet  = "sheet"
 	sourceJudge  = "judge"
@@ -74,6 +74,7 @@ const (
 	sourceHidden = "hidden"
 	sourceSecond = "second"
 	sourceAdmin  = "admin"
+	sourceUser   = "user"
 	sourceOther  = "other"
 )
 
@@ -94,6 +95,8 @@ func itemSource(it item) string {
 		return sourceSecond
 	case strings.HasPrefix(line, "admin:"):
 		return sourceAdmin
+	case strings.HasPrefix(line, "user markup:"):
+		return sourceUser
 	case strings.HasPrefix(line, "detect run ") && strings.HasSuffix(line, ", served"):
 		return sourceServed
 	case strings.HasPrefix(line, "detect run ") && strings.Contains(line, ", hidden: "):

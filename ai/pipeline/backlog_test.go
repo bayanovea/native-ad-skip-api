@@ -234,3 +234,20 @@ func TestBacklogOfAnOpenAISecondModel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A user entry over the 60–90 prediction the second model did not find stays served and is
+// counted neither way.
+func TestBacklogLeavesUserEntries(t *testing.T) {
+	r, mock, _ := backlogRun(t, 1)
+	user := `{"category_id":2,"start":55,"end":95,"source":"user"}`
+	expectBacklog(mock, 7)
+	expectLockedRow(mock, `[`+sponsor1040+`,`+user+`]`, `[]`, nil)
+	expectKeeps(mock)
+	expectConfirmation(mock, nil, 1, 0, 0)
+	mock.ExpectCommit()
+	expectBacklogLeft(mock, 0)
+
+	if _, err := r.confirmBacklog(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

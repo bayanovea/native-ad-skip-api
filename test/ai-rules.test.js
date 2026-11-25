@@ -30,6 +30,6 @@ test('MIN_SEGMENT_SECONDS is read once on require; an invalid value throws there
     assert.match(r.stderr, /AI_MIN_SEGMENT_SECONDS must be an integer of at least 1/);
 });
 
-test('HIDDEN_REASONS are the Go pipeline\'s reasons, unconfirmed (the second model\'s veto) included', () => {
-    assert.deepEqual(Object.values(HIDDEN_REASONS).sort(), ['confidence', 'review', 'short', 'unconfirmed']);
+test('HIDDEN_REASONS are the Go pipeline\'s reasons, unconfirmed (the second model\'s veto) and glued (the ai users pass) included', () => {
+    assert.deepEqual(Object.values(HIDDEN_REASONS).sort(), ['confidence', 'glued', 'review', 'short', 'unconfirmed']);
 });

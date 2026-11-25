@@ -139,7 +139,9 @@ func regateRow(db *sql.DB, cats map[string]int, minSeconds, videoID int, backfil
 // confidence before short as in entries(). in counts the entries entering data, moved
 // is any change (a hidden entry whose reason changed too). An entry leaving data drops
 // its rating: hidden ratings are not maintained. Served entries never overlap (applyVerdict
-// refuses that), so a hidden one overlapping a served one stays where it is.
+// refuses that), so a hidden one overlapping a served one stays where it is. A served
+// user entry and a hidden glued one belong to the ai users pass (users.go): they stay
+// where they are, untouched by the confidence and length rules.
 func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, categories map[string]int, minSeconds int) (served, hid []Entry, in int, moved bool) {
 	names := map[int]string{}
 	for name, id := range categories {
@@ -148,6 +150,14 @@ func place(data, hidden []Entry, pinned map[judge.EntryKey]time.Time, categories
 	served, hid = []Entry{}, []Entry{}
 	for i, e := range append(append([]Entry{}, data...), hidden...) {
 		wasServed := i < len(data)
+		if wasServed && e.Source == sourceUser {
+			served = append(served, e)
+			continue
+		}
+		if !wasServed && e.Reason == reasonGlued {
+			hid = append(hid, e)
+			continue
+		}
 		_, kept := pinned[judge.EntryKey{Start: e.Start, End: e.End}]
 		if !wasServed && (e.Reason == reasonReview || e.Reason == reasonUnconfirmed && !kept || overlapsAny(e, served)) {
 			hid = append(hid, e)

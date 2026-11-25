@@ -145,7 +145,7 @@ func (r *detectRun) confirmLater(ctx context.Context, b backlogRow) error {
 			i := r.prediction(e, preds)
 			_, kept := keeps[judge.EntryKey{Start: e.Start, End: e.End}]
 			switch {
-			case i < 0:
+			case e.Source == sourceUser, i < 0: // a user entry is no first-model claim
 			case c.confirmed[i]:
 				confirmed++
 			case kept || e.Source == sourceReview:

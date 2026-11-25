@@ -134,7 +134,12 @@ put('second_errors_24h', lambda: single('Ошибок второго вызов�
 put('second_only', lambda: query(by_title['Нашла только вторая модель'])[0][-1])
 put('second_cost', lambda: {k: round(v, 4) for k, v in query(by_title['Цена второго мнения'])[0][-1].items()})
 put('second_error_reasons', lambda: bar('Ошибки второго вызова: причины', 'причина', 'видео'))
-put('retry_table', lambda: query(by_title['Ждут повторной попытки: когда и почему'])[0])
+put('user_served', lambda: query(by_title['Пользовательских сегментов отдаётся сейчас'])[0][-1])
+put('user_glued', lambda: query(by_title['Склеено с сегментом модели'])[0][-1])
+put('user_open', lambda: single('Открытых вопросов U'))
+put('user_verdicts', lambda: {k: v for k, v in bar('Вопросы U: вердикт / показан или отложен', 'вердикт', 'вопросов').items() if v})
+put('user_table', lambda: query(by_title['Отдаваемая реклама пользователей: какие видео'])[0])
+put('retry_table',lambda: query(by_title['Ждут повторной попытки: когда и почему'])[0])
 put('dropped_table', lambda: query(by_title['Последние отсеянные видео'])[0])
 put('against_table', lambda: query(by_title['Видео с сигналами против: отозванные, с открытыми вопросами или минусовым сегментом'])[0])
 put('misses_table', lambda: query(by_title['Пропуски модели: какие видео'])[0])
@@ -162,9 +167,11 @@ print('--- judge / assessors / users')
 for k in ['judgements', 'review_open', 'withdrawn', 'verdicts', 'votes', 'misses', 'with_human', 'ai_only']: print(' ', fmt(k))
 print('--- second opinion (AI_SECOND_ENABLED)')
 for k in ['second_calls', 'second_confirmed_pct', 'second_waiting', 'second_errors_24h', 'second_only', 'second_cost', 'second_error_reasons', 'hidden_by_reason']: print(' ', fmt(k))
+print('--- user segments on AI videos (AI_USER_SEGMENTS_ENABLED)')
+for k in ['user_served', 'user_glued', 'user_open', 'user_verdicts']: print(' ', fmt(k))
 print('--- serving')
 for k in ['lookups_per_h', 'ai_share_24h']: print(' ', fmt(k))
-for k in ['retry_table', 'dropped_table', 'against_table', 'misses_table', 'prompt_model']:
+for k in ['retry_table', 'dropped_table', 'against_table', 'misses_table', 'user_table', 'prompt_model']:
     rows = snap.get(k) or []
     print(f"--- {k} ({len(rows)} rows)")
     for r in (rows if show_all else rows[:8]):

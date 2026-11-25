@@ -62,6 +62,10 @@ services:
       - AI_AUDIT_ENABLED=${AI_AUDIT_ENABLED:-off}
       - AI_AUDIT_TELEGRAM=${AI_AUDIT_TELEGRAM:-off}
       - AI_AUDIT_MODEL=${AI_AUDIT_MODEL:-}
+      # Users' segments on AI-served videos (ai users): off unless the deploy env turns it on with the cut-off date
+      - AI_USER_SEGMENTS_ENABLED=${AI_USER_SEGMENTS_ENABLED:-off}
+      - AI_USER_SEGMENTS_SINCE=${AI_USER_SEGMENTS_SINCE:-}
+      - AI_USER_GLUE_SECONDS=${AI_USER_GLUE_SECONDS:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       # The video platform: URL templates ({id}, {t}) and the earlier prefix of its DB objects / API field (see CLAUDE.md)

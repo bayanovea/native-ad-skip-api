@@ -83,3 +83,20 @@ func TestAddReviewItemsAppendsToAnUntouchedPartWithRoom(t *testing.T) {
 		t.Fatalf("got %q %d %v", batch, n, err)
 	}
 }
+
+// Items go to the judged entries only: a user entry beside an AI entry that already waits gets none.
+func TestAddReviewItemsSkipsUserEntries(t *testing.T) {
+	db, mock := newMock(t)
+	v := testVideo
+	var err error
+	if v.Entries, v.Served, err = parseEntries([]byte(`[{"category_id":2,"start":30,"end":70,"source":"ai"},{"category_id":2,"start":100,"end":120,"source":"user"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT i.start, i."end"`)).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"start", "end"}).AddRow(30, 70))
+	mock.ExpectRollback()
+	batch, n, err := addReviewItems(begin(t, db), testPrv, v, judgement{Decision: "review", By: "llm", Reason: "r"}, Signals{}, nil, testCategories, reviewNow)
+	if err != nil || batch != "" || n != 0 {
+		t.Fatalf("got %q %d %v", batch, n, err)
+	}
+}

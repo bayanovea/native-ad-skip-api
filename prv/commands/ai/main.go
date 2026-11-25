@@ -12,7 +12,7 @@ import (
 	"odedohbest/video-calculate/ai/pipeline"
 )
 
-const usage = "usage: ai detect [native_id] | ai judge | ai regate [--backfill] | ai audit [batch]"
+const usage = "usage: ai detect [native_id] | ai judge | ai regate [--backfill] | ai audit [batch] | ai users"
 
 func main() {
 	godotenv.Load("/app/.env") // cron's only source of env; variables already set win
@@ -53,6 +53,14 @@ func main() {
 		}
 		if err := audit.Run(audit.ConfigFromEnv(), batch); err != nil {
 			log.Fatalf("ai audit: %v", err)
+		}
+	case len(args) == 1 && args[0] == "users":
+		cfg, err := pipeline.UsersConfigFromEnv()
+		if err != nil {
+			log.Fatalf("ai users: %v", err)
+		}
+		if err := pipeline.Users(cfg); err != nil {
+			log.Fatalf("ai users: %v", err)
 		}
 	default:
 		fmt.Fprintln(os.Stderr, usage)

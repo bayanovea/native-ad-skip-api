@@ -494,3 +494,25 @@ func TestJudgeVideoAMovedEntryWithoutANewKeepReachesTheLLM(t *testing.T) {
 		t.Fatal(err, llm.calls)
 	}
 }
+
+// A row serving only user entries has nothing of the model's to judge: no query, no judgement.
+func TestJudgeVideoSkipsARowWithOnlyUserEntries(t *testing.T) {
+	r, _, v, llm := llmCase(t, "", true)
+	v.Data = []byte(`[{"category_id":2,"start":100,"end":120,"source":"user"}]`)
+	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
+		t.Fatal(err, llm.calls)
+	}
+}
+
+// A dislike on a user entry is not counted: the signal queries get the AI entry's bounds only,
+// so a quiet AI entry leaves the video skipped.
+func TestJudgeVideoIgnoresSignalsOnUserEntries(t *testing.T) {
+	r, mock, v, llm := llmCase(t, "", true)
+	v.Data = []byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"},{"category_id":2,"start":100,"end":120,"source":"user","rating":-1}]`)
+	mock.ExpectQuery(`k.verdict IN \('sponsor', 'self_promotion'\)`).WithArgs(7, v.Data, since).
+		WillReturnRows(sqlmock.NewRows([]string{"start", "end", "decided_at"}))
+	expectSignals(mock, since, r.now, [2]int{}, [2]int{}, 0)
+	if err := r.judgeVideo(v); err != nil || llm.calls != 0 {
+		t.Fatal(err, llm.calls)
+	}
+}

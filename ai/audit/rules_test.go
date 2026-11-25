@@ -176,3 +176,18 @@ func TestWilsonLower(t *testing.T) {
 		t.Fatal("0/0")
 	}
 }
+
+func TestItemSource(t *testing.T) {
+	for line, want := range map[string]string{
+		"user markup: 2 authors, best rating 0":          sourceUser,
+		"judge review by llm: r":                         sourceJudge,
+		"admin: sent to review":                          sourceAdmin,
+		"detect run 1: sponsor high, 10 s, served":       sourceServed,
+		"detect run 1: sponsor low, 10 s, hidden: short": sourceHidden,
+		"something else":                                 sourceOther,
+	} {
+		if got := itemSource(aiItems("U", line, 1, "sponsor")[0]); got != want {
+			t.Errorf("%q: got %s, want %s", line, got, want)
+		}
+	}
+}

@@ -44,6 +44,16 @@ Read the output top-down and report in the usual Verdict / Why blocks. What "ok"
   `ai-second-<date>`; `second_cost` ~$0.007 per video (long-input tier priced since 2026-11-19).
 - **Quality signals** (only meaningful once users see AI segments, i.e. `ai_first 1`): `votes` `< 0`,
   `against_table`, `withdrawn`, `verdicts not_ad`. `misses` = videos the model called clean but users marked.
+- **User segments on AI videos** (row 5б, `AI_USER_SEGMENTS_ENABLED`; change `ai-user-segments`): while the switch is
+  off every `user_*` value is 0 and `user_table` empty, and `hidden_by_reason` shows no `склеены с пользовательским`.
+  After the switch-on: `user_served` `заставки и титры` ≈ 141 entries on ≈ 125 videos within a tick (old intro / credits
+  come back whatever their age); `реклама` and `user_glued` grow slowly from 0 (only markups after
+  `AI_USER_SEGMENTS_SINCE`); `U` items ≈ 2 a day, so `user_open` stays in single digits (urgent items; 10+ = assessors
+  are behind); `user_verdicts` mostly sponsor / self_promotion, many `not_ad / shown` = users err more than assumed.
+  `user_table` lists the ad entries viewers get unchecked: a row with `нет вопроса` (neither an item nor a glue) is a
+  bug. The table "Отдаваемые заставки и титры пользователей" (dashboard only, longest first) lists the ≈ 141 intro /
+  credits entries: one about 20 min long is known (design.md Risks); a new very long one is worth a look. `ready_segments`, `segments_by_conf`, `votes`, `against_table` and the undo / overrun panels count the model's
+  (and reviewers') entries only, so they do not jump at the switch-on.
 
 The gate and budget thresholds are inlined in the panels' SQL (`500000 /* AI_MIN_VIEWS */`, …): public
 dashboards do not expand dashboard variables, so before 2026-10-28 the funnel, "Ждут порога", "В очереди

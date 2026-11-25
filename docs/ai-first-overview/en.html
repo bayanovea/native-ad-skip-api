@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">adskip · how it works · updated 2026-11-20 · <a href="ru.html">Русский</a></p>
+  <p class="eyebrow">adskip · how it works · updated 2026-11-26 · <a href="ru.html">Русский</a></p>
   <h1>Segments: today and once AI-first is on</h1>
   <p class="lead">A conceptual picture for a frontend developer and an assessor. No internals. Two phases, one shared principle: viewers get only the segments we are sure of, even if that means missing some ads.</p>
 
@@ -18,6 +18,142 @@
     <span><i class="dot ai"></i>AI (detector, judge)</span>
     <span><i class="dot warn"></i>stop / doubt</span>
     <span><i class="dot ok"></i>live for viewers</span>
+  </div>
+
+  <!-- ===================== SERVING RULES ===================== -->
+  <h2>What the viewer gets: every rule on one screen</h2>
+  <p>Each row is a situation and what the extension then shows. The cards below say, per rule, who decided it and when, which switch controls it and where it is specified. The sections after them explain how it works.</p>
+  <div class="tablewrap">
+  <table class="rules">
+    <thead><tr><th>#</th><th>Situation</th><th>What the viewer gets</th></tr></thead>
+    <tbody>
+      <tr><th colspan="3">Which markup a video gets</th></tr>
+      <tr><td class="n"><a href="#r1">1</a></td><td>AI-first is off, the video has no AI markup, or its AI markup is withdrawn</td><td>the human segments: people's markups, merged once a minute</td></tr>
+      <tr><td class="n"><a href="#r2">2</a></td><td>the extension sends no duration, or the duration belongs to another cut of the video</td><td>the human segments</td></tr>
+      <tr><td class="n"><a href="#r3">3</a></td><td>the video has a ready AI markup for this cut</td><td>the AI segments instead of the human ones, plus users' segments by rules 15–22</td></tr>
+      <tr><td class="n"><a href="#r4">4</a></td><td>the subtitles do not match the video's length</td><td>no AI markup at all: the human segments</td></tr>
+    </tbody>
+    <tbody>
+      <tr><th colspan="3">Which AI segments are shown</th></tr>
+      <tr><td class="n"><a href="#r5">5</a></td><td>the model is not sure enough (a sponsor below medium confidence, self-promotion below high)</td><td>not shown, until an assessor says it is an ad</td></tr>
+      <tr><td class="n"><a href="#r6">6</a></td><td>the segment is shorter than 5 seconds</td><td>not shown, verdict or not</td></tr>
+      <tr><td class="n"><a href="#r7">7</a></td><td>the second model did not find it</td><td>not shown; goes to an assessor (item <code>D</code>, up to 30 a day)</td></tr>
+      <tr><td class="n"><a href="#r8">8</a></td><td>the second model's check is postponed (the day's money is spent)</td><td>shown from the first model alone until the late check</td></tr>
+      <tr><td class="n"><a href="#r9">9</a></td><td>an author's chapter matches both edges within 10 seconds</td><td>shown with the chapter's edges</td></tr>
+      <tr><td class="n"><a href="#r10">10</a></td><td>an ad-like chapter matches one edge only</td><td>shown with the AI's edges; goes to an assessor (item <code>T</code>)</td></tr>
+    </tbody>
+    <tbody>
+      <tr><th colspan="3">Assessors, judge, admin</th></tr>
+      <tr><td class="n"><a href="#r11">11</a></td><td>an assessor says sponsor / self-promotion, maybe with times</td><td>shown, with the assessor's edges when given; same-category pieces those edges cover merge into one</td></tr>
+      <tr><td class="n"><a href="#r12">12</a></td><td>an assessor says not an ad / unclear</td><td>removed for good; when no AI or assessor segment is left, the whole video gets the human segments</td></tr>
+      <tr><td class="n"><a href="#r13">13</a></td><td>the judge withdraws the AI markup</td><td>the human segments, until assessors confirm every AI segment left</td></tr>
+      <tr><td class="n"><a href="#r14">14</a></td><td>an admin withdraws the AI markup of one video</td><td>the human segments, for good</td></tr>
+    </tbody>
+    <tbody>
+      <tr><th colspan="3">Users' own segments on a video with an AI markup (decided 2026-11-26)</th></tr>
+      <tr class="user"><td class="n"><a href="#r15">15</a></td><td>a new user ad (sponsor / self-promotion) where the AI shows nothing</td><td>shown at once with the user's edges; goes to an assessor (item <code>U</code>, urgent)</td></tr>
+      <tr class="user"><td class="n"><a href="#r16">16</a></td><td>a new user ad that extends an AI segment of the same category, or lies next to it, adding at most 20 seconds</td><td>one segment over both; no assessor</td></tr>
+      <tr class="user"><td class="n"><a href="#r17">17</a></td><td>a new user ad that overlaps an AI segment and is not glued (more than 20 seconds added, another category, or an AI segment an assessor confirmed)</td><td>the AI segment as it is; the user's stretch waits for an assessor (item <code>U</code> over both)</td></tr>
+      <tr class="user"><td class="n"><a href="#r18">18</a></td><td>a user ad the AI segments already cover by half or more</td><td>the AI's edges, nothing changes</td></tr>
+      <tr class="user"><td class="n"><a href="#r19">19</a></td><td>a user ad from markups older than the switch-on date, only by authors rated below zero, or shorter than 5 seconds</td><td>not shown on that video</td></tr>
+      <tr class="user"><td class="n"><a href="#r20">20</a></td><td>a user intro or credits</td><td>shown as it is, unless it overlaps an AI segment; never sent to an assessor</td></tr>
+      <tr class="user"><td class="n"><a href="#r21">21</a></td><td>an assessor's verdict on a <code>U</code> item</td><td>sponsor / self-promotion: shown as the assessor's segment (a waiting one too); not an ad / unclear: removed and never added again</td></tr>
+      <tr class="user"><td class="n"><a href="#r22">22</a></td><td>the user deletes the markup before a verdict</td><td>its segment goes within a minute; an AI segment it extended comes back with its own edges</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Each rule: who decided, which switch, where it lives</h3>
+  <p class="caption">Paths are in the backend repository: <code>ai-first.md</code> = <code>docs/reference/ai-first.md</code>, specs = <code>openspec/specs/</code>, changes = <code>openspec/changes/</code>. "Owner" is the product owner.</p>
+  <div class="two">
+    <div class="card rule" id="r1"><h3>1. The human path is the default</h3>
+      <p><b>Decided:</b> owner, 2026-10-22 (AI-first plan): human markups stay the fallback; AI-first on since 2026-10-28.</p>
+      <p><b>Switch:</b> <code>AI_FIRST</code> (off = the kill switch, nothing deleted).</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Serving.</p></div>
+    <div class="card rule" id="r2"><h3>2. The cut must match</h3>
+      <p><b>Decided:</b> owner, 2026-10-22: a re-cut video never gets another cut's segments.</p>
+      <p><b>Switch:</b> none, always on.</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Serving; <code>docs/reference/routes.md</code> → videos.js.</p></div>
+    <div class="card rule" id="r3"><h3>3. An AI markup replaces the human one</h3>
+      <p><b>Decided:</b> owner, 2026-10-28 (AI segments only); amended 2026-11-26 by the users' segments, rules 15–22.</p>
+      <p><b>Switch:</b> <code>AI_FIRST</code>.</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Serving.</p></div>
+    <div class="card rule" id="r4"><h3>4. Shifted subtitles stop the AI</h3>
+      <p><b>Decided:</b> owner, 2026-10-21 (the precision rule: missing an ad beats cutting the wrong thing).</p>
+      <p><b>Switch:</b> none, always on.</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → ai detect (timeline gate).</p></div>
+    <div class="card rule" id="r5"><h3>5. Confidence thresholds</h3>
+      <p><b>Decided:</b> measured on reviewed examples before the launch (2026-10-24); owner, 2026-10-27: every finding is kept, the rest set aside with its reason.</p>
+      <p><b>Switch:</b> none; a change is a code change plus a recompute of every AI markup.</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Served vs hidden.</p></div>
+    <div class="card rule" id="r6"><h3>6. Minimum length</h3>
+      <p><b>Decided:</b> owner, 2026-10-27, 5 seconds.</p>
+      <p><b>Switch:</b> <code>AI_MIN_SEGMENT_SECONDS</code> (a change recomputes every AI markup once).</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Served vs hidden.</p></div>
+    <div class="card rule" id="r7"><h3>7. Second opinion</h3>
+      <p><b>Decided:</b> owner, 2026-10-30; 30 items a day 2026-11-05; OpenAI finds, Anthropic checks 2026-11-19.</p>
+      <p><b>Switch:</b> <code>AI_SECOND_ENABLED</code>.</p>
+      <p><b>Where:</b> specs <code>ai-second-opinion</code>; <code>ai-first.md</code> → Second opinion.</p></div>
+    <div class="card rule" id="r8"><h3>8. The check waits, the video does not</h3>
+      <p><b>Decided:</b> owner, 2026-11-19: never hold a video back for the second opinion.</p>
+      <p><b>Switch:</b> <code>AI_BUDGET_ENABLED</code>.</p>
+      <p><b>Where:</b> change <code>ai-model-budget-controller</code>; <code>ai-first.md</code> → Spend budget.</p></div>
+    <div class="card rule" id="r9"><h3>9. Chapter edges</h3>
+      <p><b>Decided:</b> owner, 2026-11-02.</p>
+      <p><b>Switch:</b> <code>AI_CHAPTERS_ENABLED</code>, the 10 seconds <code>AI_CHAPTER_EDGE_SECONDS</code>.</p>
+      <p><b>Where:</b> specs <code>ai-chapter-bounds</code>; <code>ai-first.md</code> → Chapters.</p></div>
+    <div class="card rule" id="r10"><h3>10. One chapter edge: an assessor looks</h3>
+      <p><b>Decided:</b> owner, 2026-11-02: a chapter alone is never trusted.</p>
+      <p><b>Switch:</b> <code>AI_CHAPTERS_ENABLED</code>.</p>
+      <p><b>Where:</b> specs <code>ai-chapter-bounds</code>; <code>ai-first.md</code> → Chapters.</p></div>
+    <div class="card rule" id="r11"><h3>11. An assessor's "ad" and edges</h3>
+      <p><b>Decided:</b> owner, 2026-10-24 (the assessor's edges), 2026-10-29 (merging pieces).</p>
+      <p><b>Switch:</b> none.</p>
+      <p><b>Where:</b> specs <code>ai-verdict-application</code>; <code>ai-first.md</code> → Votes / Verdicts.</p></div>
+    <div class="card rule" id="r12"><h3>12. An assessor's "not an ad"</h3>
+      <p><b>Decided:</b> owner, 2026-10-22 (a human has the last word); 2026-11-26: users' segments alone never keep an AI markup on the air.</p>
+      <p><b>Switch:</b> none.</p>
+      <p><b>Where:</b> specs <code>ai-verdict-application</code>; <code>ai-first.md</code> → Withdraw / restore.</p></div>
+    <div class="card rule" id="r13"><h3>13. The judge's withdraw</h3>
+      <p><b>Decided:</b> owner, 2026-10-22 (AI-first plan); live since 2026-10-28.</p>
+      <p><b>Switch:</b> <code>AI_JUDGE_ENABLED</code>; <code>AI_JUDGE_AUTO_WITHDRAW</code> (off = the judge only sends to an assessor).</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → ai judge.</p></div>
+    <div class="card rule" id="r14"><h3>14. The admin's withdraw</h3>
+      <p><b>Decided:</b> owner, 2026-10-22 (AI-first plan): the operator's switch per video.</p>
+      <p><b>Switch:</b> the withdraw link on the admin page of the video.</p>
+      <p><b>Where:</b> <code>ai-first.md</code> → Withdraw / restore; <code>docs/reference/routes.md</code> → admin.js.</p></div>
+    <div class="card rule" id="r15"><h3>15. A user's ad where the AI has nothing</h3>
+      <p><b>Decided:</b> owner, 2026-11-25 (a user's markup is the clearest sign the model may have got the video wrong) and 2026-11-26 (shown until an assessor has checked it).</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>; off removes every unchecked user segment within a minute.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code> (spec <code>ai-user-segments</code>); <code>ai-first.md</code> → User segments.</p></div>
+    <div class="card rule" id="r16"><h3>16. A short addition is glued</h3>
+      <p><b>Decided:</b> owner, 2026-11-26: glue automatically when the difference is small, at most 20 seconds; the model reads subtitles, users see the picture. Never on a segment an assessor confirmed.</p>
+      <p><b>Switch:</b> <code>AI_USER_GLUE_SECONDS</code> (0 = never glue).</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
+    <div class="card rule" id="r17"><h3>17. A larger overlap waits for an assessor</h3>
+      <p><b>Decided:</b> left to the design by the owner, 2026-11-26: replacing an AI segment with an unchecked stretch of any length is what the 20-second limit prevents.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
+    <div class="card rule" id="r18"><h3>18. Mostly covered: the AI's edges stay</h3>
+      <p><b>Decided:</b> owner, 2026-11-26 (scope of the change); other edges on the same ad are a later question.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; backlog <code>ai-user-edge-disagreement-untested</code>.</p></div>
+    <div class="card rule" id="r19"><h3>19. Only new markups by authors in good standing</h3>
+      <p><b>Decided:</b> owner, 2026-11-26: the older markups wait for a blind test of 30.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_SINCE</code> (the date), <code>AI_MIN_SEGMENT_SECONDS</code>.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; backlog <code>ai-uncovered-user-segments-queue</code>.</p></div>
+    <div class="card rule" id="r20"><h3>20. Intro and credits as they are</h3>
+      <p><b>Decided:</b> owner, 2026-11-26: included, as they are (assessors have no such verdict).</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
+    <div class="card rule" id="r21"><h3>21. A verdict settles a user's segment</h3>
+      <p><b>Decided:</b> owner, 2026-11-26 (shown until checked); an assessor's edges take precedence over an unchecked user segment.</p>
+      <p><b>Switch:</b> none beyond <code>AI_USER_SEGMENTS_ENABLED</code>; a confirmed segment stays when it is switched off.</p>
+      <p><b>Where:</b> specs <code>ai-verdict-application</code> (change <code>ai-user-segments</code>); <code>ai-first.md</code> → Votes / Verdicts.</p></div>
+    <div class="card rule" id="r22"><h3>22. An unchecked segment follows its markup</h3>
+      <p><b>Decided:</b> design of the change, 2026-11-26: nothing is remembered, every minute the segments are worked out again from the markups.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
   </div>
 
   <!-- ===================== PHASE 1 ===================== -->
@@ -125,7 +261,7 @@
     <div class="node warn"><b>Is there an AI markup for this cut of the video?</b><span>durations compared: another cut → another markup</span></div>
   </div>
   <div class="branch">
-    <div class="node ai"><b>Yes → AI segments</b><span>same format, plus <code>source: "ai"</code> and <code>confidence</code>. The extension needs no change.</span></div>
+    <div class="node ai"><b>Yes → AI segments</b><span>same format, plus <code>source: "ai"</code> and <code>confidence</code>; next to them the users' own segments the AI missed (<code>source: "user"</code>, see below). The extension needs no change.</span></div>
     <div class="node human"><b>No → human segments</b><span>as in phase 1. People keep marking AI videos too: that is the judge's strongest hint and the fallback when a markup is withdrawn.</span></div>
   </div>
 
@@ -134,8 +270,18 @@
   </div>
   <p class="caption">One interval, one vote. When a human segment has the same bounds as an AI one, the viewer's vote counts for both and for the markup authors too. The viewer does not care who drew the segment.</p>
 
+  <h3>Users' own segments on an AI video</h3>
+  <p>Decided by the owner on 2026-11-25 and 11-26, a switch of its own. Until then a video with an AI markup showed only the AI's segments: a viewer's new markup was saved and shown to nobody. The model reads subtitles and does not see the picture, so it is there to fill what users did not mark, not to correct what they did. Once a minute the users' segments are written into the AI markup, each marked <code>source: "user"</code> until an assessor has checked it. Only ads marked after the switch-on date count, by authors in good standing and at least 5 seconds long; intro and credits count whatever their age.</p>
+  <div class="branch">
+    <div class="node ok"><b>Nothing of the AI's there → shown at once</b><span>with the user's edges; an assessor gets it right away (item <code>U</code>, priority Urgent). "Ad" makes it the assessor's segment, "not an ad" removes it for good.</span></div>
+    <div class="node ok"><b>A short addition → glued</b><span>the user extended an AI segment of the same category, or marked right next to it, adding at most 20 seconds: viewers get one segment over both, no assessor. The AI's own segment waits aside and comes back if the user deletes the markup.</span></div>
+    <div class="node warn"><b>A larger overlap → waits</b><span>the AI segment stays as it is; the user's stretch goes to an assessor (item <code>U</code> over both), whose "ad" merges them into one.</span></div>
+    <div class="node human"><b>Intro and credits → shown as they are</b><span>unless they overlap an AI segment; assessors have no such verdict, so no item.</span></div>
+  </div>
+  <p class="caption">A user's ad that the AI segments already cover by half or more changes nothing: the AI's edges stay. A user's segment alone never keeps an AI markup on the air: when an assessor removes the AI's last segment, the whole video goes back to the human segments. Switched off, every unchecked user segment is gone within a minute and the glued AI segments are back with their own edges.</p>
+
   <h3>The judge: who watches for AI mistakes</h3>
-  <p>Once an hour the judge checks the published AI markups that got <b>new negative signals</b>: dislikes, undone skips, human markups elsewhere, a new cut of the video. Likes and agreeing markups give no reason to look.</p>
+  <p>Once an hour the judge checks the published AI markups that got <b>new negative signals</b>: dislikes, undone skips, human markups elsewhere, a new cut of the video. Likes and agreeing markups give no reason to look. It judges the AI's segments only: votes and undos on a user's segment do not call it (a user's ad already has its assessor item), and a markup that is already shown as a user's segment is no disagreement.</p>
   <p>The extension also reports every skip it made, every undo (the "return" button or a seek back into the segment) and a forward seek right after a skip (the ad went on). Skips give undos a denominator: the judge reads "2 undos in 40 skips". For now these signals are only collected: with the <code>AI_JUDGE_UNDO_EVIDENCE=off</code> switch an undo alone does not call the judge; it is recorded and shown when something else does.</p>
   <div class="flow">
     <div class="node human"><b>Viewer signals</b><span>👎, undone skip, a markup saying "the ad is not here at all"</span></div>
@@ -152,17 +298,17 @@
   <div class="note ok">The judge never closes a case on its own: a human has the last word. It only pulls doubtful segments and calls an assessor.</div>
 
   <h3>The assessor in phase 2: a verdict changes what is live</h3>
-  <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason, optional batches of the segments the AI was not sure of (<code>ai-below-threshold-&lt;date&gt;</code>), batches of the segments the second model did not find (<code>ai-second-&lt;date&gt;</code>, items <code>D</code>), segments an admin sent by hand (<code>ai-admin-&lt;date&gt;</code>, items <code>M</code>), blind samples of what viewers get now (<code>ai-served-&lt;date&gt;</code>, items <code>S</code>) and batches of the segments where an author's chapter matches the AI on one edge only (<code>ai-chapter-&lt;date&gt;</code>, items <code>T</code>). The decision is the same as before, but now it acts at once:</p>
+  <p>Next to the usual sheets come batches from the judge (<code>ai-judge-&lt;date&gt;</code>), marked "AI segment" with the judge's reason, optional batches of the segments the AI was not sure of (<code>ai-below-threshold-&lt;date&gt;</code>), batches of the segments the second model did not find (<code>ai-second-&lt;date&gt;</code>, items <code>D</code>), segments an admin sent by hand (<code>ai-admin-&lt;date&gt;</code>, items <code>M</code>), blind samples of what viewers get now (<code>ai-served-&lt;date&gt;</code>, items <code>S</code>) batches of the segments where an author's chapter matches the AI on one edge only (<code>ai-chapter-&lt;date&gt;</code>, items <code>T</code>) and the users' own ads on AI videos (<code>ai-user-&lt;date&gt;</code>, items <code>U</code>, priority Urgent). The decision is the same as before, but now it acts at once:</p>
   <div class="branch">
     <div class="node ok"><b>sponsor / self_promotion</b><span>the segment stays live (or comes back, or goes live for the first time if the AI was not sure of it) with that category; when the assessor gave times, those edges go live (under 5 seconds: saved, not served); times that cover neighbouring segments of the same category merge them into one (the detector sometimes cuts one ad into pieces; the page says how many it covers). If the judge withdrew the whole markup and every segment still in it is confirmed, the markup is live again.</span></div>
-    <div class="node warn"><b>not_ad / unclear</b><span>the segment is taken off the AI markup and set aside for good: no rule brings it back, only a later verdict. Once all are removed, the markup is withdrawn and viewers get the human segments.</span></div>
+    <div class="node warn"><b>not_ad / unclear</b><span>the segment is taken off the AI markup and set aside for good: no rule brings it back, only a later verdict. Once all the AI's and assessors' segments are removed, the markup is withdrawn and viewers get the human segments (users' unchecked segments do not hold it).</span></div>
   </div>
   <p>The "subtitles ≠ video" flag is set as before, separately from the verdict. It accumulates as knowledge about the video and feeds the later work on shifted tracks.</p>
 
   <div class="two">
     <div class="card"><h3>For the frontend</h3>
       <ul>
-        <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown; <code>source: "review"</code> means an assessor set the edges.</li>
+        <li>Same format, same voting. The new <code>source</code> and <code>confidence</code> fields can be ignored or shown; <code>source: "review"</code> means an assessor set the edges, <code>source: "user"</code> a user's segment nobody has checked yet (it has no <code>confidence</code>).</li>
         <li>Always send the video duration: without it no AI markup is served (we cannot tell which cut it is).</li>
         <li>Skips, undone skips and dislikes are valuable events; they reach the judge.</li>
       </ul>
@@ -175,6 +321,7 @@
         <li>In the batches of doubtful segments a sponsor / self-promotion verdict puts the segment on the air although the AI was not sure (unless it is shorter than 5 seconds: then set the real times).</li>
         <li>In the <code>ai-second</code> batches the first model found the segment and the second did not; it is off the air until you say sponsor / self-promotion. Some come from a late check of a video that was already live: the segment was on the air until that check.</li>
         <li>In the <code>ai-chapter</code> batches the video's chapters are shown above the subtitles, each with a "use the chapter's times" button that fills the verdict's start and end with that chapter's times. Use it only when the chapter matches what you see in the player; otherwise type or select the right times, or answer not an ad as usual.</li>
+        <li>In the <code>ai-user</code> batches (<code>U</code>) the stretch is a viewer's own ad on a video the AI already marked. Some are on the air until you decide; others overlap an AI segment and the item covers both, so "ad" without times merges them (the page lists the video's other segments). Judge the text as always; set times when the viewer's edges are visibly off.</li>
         <li>The track flag is a separate checkbox; it never replaces the verdict.</li>
       </ul>
     </div>
@@ -188,6 +335,7 @@
     <li><b>Rules are changed by a recompute.</b> The confidence thresholds and the minimum length are the owner's to change; a change recomputes every AI markup once, and verdicts stay the last word.</li>
     <li><b>Second opinion.</b> Its own switch: turning it off publishes new videos from one model again; segments already set aside wait for a verdict.</li>
     <li><b>Budget.</b> The detector handles a limited number of videos per day; with the budget switch on, also no more than each vendor's share for the day. Overspend raises an alert.</li>
+    <li><b>Users' segments.</b> Their own switch: turning it off takes every unchecked user segment off the AI markups within a minute and puts glued AI segments back; segments an assessor confirmed stay.</li>
   </ul>
 </div>
 </body>

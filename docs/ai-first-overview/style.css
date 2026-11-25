@@ -78,5 +78,18 @@ ul.plain li{margin:6px 0}
 .track.over{border-color:var(--warn)}
 .track .extra{background:var(--warn-soft);border:1px dashed var(--warn)}
 
+/* serving rules: one table, then one card per rule */
+.tablewrap{overflow-x:auto;margin:18px 0}
+table.rules{border-collapse:collapse;width:100%;min-width:480px;font-size:14px;background:var(--card);border:1px solid var(--line)}
+table.rules th,table.rules td{text-align:left;vertical-align:top;padding:8px 12px;border-top:1px solid var(--line)}
+table.rules thead th{font-family:var(--display);font-weight:500;color:var(--muted);border-top:0}
+table.rules tbody th{font-family:var(--display);font-weight:500;background:var(--bg);color:var(--fg)}
+table.rules td.n{font-family:var(--mono);width:2.5em;white-space:nowrap}
+table.rules td.n a{color:var(--muted)}
+table.rules tr.user td:first-child{box-shadow:inset 3px 0 0 var(--human)}
+.rule h3{font-size:15px}
+.rule p{margin:4px 0;font-size:14px;color:var(--muted)}
+.rule p b{color:var(--fg);font-weight:500}
+
 .note{border-left:3px solid var(--warn);padding:8px 14px;margin:16px 0;color:var(--fg);background:var(--warn-soft);border-radius:0 8px 8px 0;max-width:72ch}
 .note.ok{border-color:var(--ok);background:var(--ok-soft)}

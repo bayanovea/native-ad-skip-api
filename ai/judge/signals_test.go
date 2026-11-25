@@ -17,6 +17,7 @@ var (
 		NativeID:    "-1_456000001",
 		Data:        []byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"}]`),
 		Entries:     []Entry{{CategoryID: 2, Start: 30, End: 70}},
+		Served:      []Entry{{CategoryID: 2, Start: 30, End: 70}},
 		PublishedAt: published,
 		Duration:    sql.NullInt64{Int64: 600, Valid: true},
 		ViewsMax:    sql.NullInt64{Int64: 25000, Valid: true},
@@ -205,5 +206,24 @@ func TestEntryKeepsALaterKeepWithoutBoundsStaysOnTheMovedEntry(t *testing.T) {
 	keeps, err := entryKeeps(db, v)
 	if err != nil || !keeps[EntryKey{25, 75}].Equal(keptAt) {
 		t.Fatalf("got %v %v", keeps, err)
+	}
+}
+
+// A user entry is served but not judged; a markup that became one is no conflict.
+func TestUserEntriesAreServedNotJudged(t *testing.T) {
+	own, served, err := parseEntries([]byte(`[{"category_id":2,"start":30,"end":70,"confidence":"high","source":"ai"},
+		{"category_id":2,"start":100,"end":120,"source":"user"}]`))
+	if err != nil || len(own) != 1 || own[0].Start != 30 || len(served) != 2 {
+		t.Fatalf("got %+v / %+v %v", own, served, err)
+	}
+	db, mock := newMock(t)
+	mock.ExpectQuery("FROM markups").WillReturnRows(sqlmock.NewRows([]string{"category_id", "start", "end", "rating", "created"}).
+		AddRow(2, 100.0, 121.0, 0, published). // the markup behind the user entry
+		AddRow(2, 300.0, 320.0, 0, published)) // a sponsor nobody serves
+	v := testVideo
+	v.Entries, v.Served = own, served
+	hs, err := humanMarkups(db, v, testCategories, asOf)
+	if err != nil || len(hs) != 2 || hs[0].Conflicting || !hs[1].Conflicting {
+		t.Fatalf("got %+v %v", hs, err)
 	}
 }

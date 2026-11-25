@@ -19,7 +19,8 @@
 // --empty-only: only videos whose AI row serves nothing and is not withdrawn (the funnel's stage 9).
 // --dry-run: print the items, write nothing.
 // --served: default sheet ai-served-<YYYY-MM-DD>, default priority urgent; --seed (default 1) makes the pick
-//   reproducible; entries already in review and entries whose bounds a verdict set (`source: review`) are left out.
+//   reproducible; entries already in review, entries whose bounds a verdict set (`source: review`) and users' entries
+//   (`source: user`, the ai users pass: not the model's, and already sent to review) are left out.
 
 const { splitSheet, rng, shuffle, cuesOver } = require('../lib/review-sheet');
 const { linkAt } = require('../lib/player-link');
@@ -119,7 +120,7 @@ async function servedItems(sequelize, review, categories, opts) {
         if (videos.has(row.native_id)) continue;
         const fresh = [];
         for (const e of row.data) {
-            if (e.source === 'review') continue;
+            if (e.source === 'review' || e.source === 'user') continue;
             const c = {
                 native_id: row.native_id, video_id: row.video_id, run_id: row.run_id, kind: 'ai', start: e.start, end: e.end, proposed: categories.get(e.category_id),
                 link: linkAt(row.native_id, e.start - 2),
