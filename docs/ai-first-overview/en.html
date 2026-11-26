@@ -124,7 +124,7 @@
       <p><b>Where:</b> <code>ai-first.md</code> → Withdraw / restore; <code>docs/reference/routes.md</code> → admin.js.</p></div>
     <div class="card rule" id="r15"><h3>15. A user's ad where the AI has nothing</h3>
       <p><b>Decided:</b> owner, 2026-11-25 (a user's markup is the clearest sign the model may have got the video wrong) and 2026-11-26 (shown until an assessor has checked it).</p>
-      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>; off removes every unchecked user segment within a minute.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code> (on since 2026-11-26); off removes every unchecked user segment within a minute.</p>
       <p><b>Where:</b> change <code>ai-user-segments</code> (spec <code>ai-user-segments</code>); <code>ai-first.md</code> → User segments.</p></div>
     <div class="card rule" id="r16"><h3>16. A short addition is glued</h3>
       <p><b>Decided:</b> owner, 2026-11-26: glue automatically when the difference is small, at most 20 seconds; the model reads subtitles, users see the picture. Never on a segment an assessor confirmed.</p>
@@ -132,11 +132,11 @@
       <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
     <div class="card rule" id="r17"><h3>17. A larger overlap waits for an assessor</h3>
       <p><b>Decided:</b> left to the design by the owner, 2026-11-26: replacing an AI segment with an unchecked stretch of any length is what the 20-second limit prevents.</p>
-      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code> (on since 2026-11-26).</p>
       <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
     <div class="card rule" id="r18"><h3>18. Mostly covered: the AI's edges stay</h3>
       <p><b>Decided:</b> owner, 2026-11-26 (scope of the change); other edges on the same ad are a later question.</p>
-      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code> (on since 2026-11-26).</p>
       <p><b>Where:</b> change <code>ai-user-segments</code>; backlog <code>ai-user-edge-disagreement-untested</code>.</p></div>
     <div class="card rule" id="r19"><h3>19. Only new markups by authors in good standing</h3>
       <p><b>Decided:</b> owner, 2026-11-26: the older markups wait for a blind test of 30.</p>
@@ -144,7 +144,7 @@
       <p><b>Where:</b> change <code>ai-user-segments</code>; backlog <code>ai-uncovered-user-segments-queue</code>.</p></div>
     <div class="card rule" id="r20"><h3>20. Intro and credits as they are</h3>
       <p><b>Decided:</b> owner, 2026-11-26: included, as they are (assessors have no such verdict).</p>
-      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code> (on since 2026-11-26).</p>
       <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
     <div class="card rule" id="r21"><h3>21. A verdict settles a user's segment</h3>
       <p><b>Decided:</b> owner, 2026-11-26 (shown until checked); an assessor's edges take precedence over an unchecked user segment.</p>
@@ -152,7 +152,7 @@
       <p><b>Where:</b> specs <code>ai-verdict-application</code> (change <code>ai-user-segments</code>); <code>ai-first.md</code> → Votes / Verdicts.</p></div>
     <div class="card rule" id="r22"><h3>22. An unchecked segment follows its markup</h3>
       <p><b>Decided:</b> design of the change, 2026-11-26: nothing is remembered, every minute the segments are worked out again from the markups.</p>
-      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code>.</p>
+      <p><b>Switch:</b> <code>AI_USER_SEGMENTS_ENABLED</code> (on since 2026-11-26).</p>
       <p><b>Where:</b> change <code>ai-user-segments</code>; <code>ai-first.md</code> → User segments.</p></div>
   </div>
 
@@ -271,7 +271,7 @@
   <p class="caption">One interval, one vote. When a human segment has the same bounds as an AI one, the viewer's vote counts for both and for the markup authors too. The viewer does not care who drew the segment.</p>
 
   <h3>Users' own segments on an AI video</h3>
-  <p>Decided by the owner on 2026-11-25 and 11-26, a switch of its own. Until then a video with an AI markup showed only the AI's segments: a viewer's new markup was saved and shown to nobody. The model reads subtitles and does not see the picture, so it is there to fill what users did not mark, not to correct what they did. Once a minute the users' segments are written into the AI markup, each marked <code>source: "user"</code> until an assessor has checked it. Only ads marked after the switch-on date count, by authors in good standing and at least 5 seconds long; intro and credits count whatever their age.</p>
+  <p>Decided by the owner on 2026-11-25 and 11-26, a switch of its own; on since 2026-11-26. Until then a video with an AI markup showed only the AI's segments: a viewer's new markup was saved and shown to nobody. The model reads subtitles and does not see the picture, so it is there to fill what users did not mark, not to correct what they did. Once a minute the users' segments are written into the AI markup, each marked <code>source: "user"</code> until an assessor has checked it. Only ads marked after the switch-on date count, by authors in good standing and at least 5 seconds long; intro and credits count whatever their age.</p>
   <div class="branch">
     <div class="node ok"><b>Nothing of the AI's there → shown at once</b><span>with the user's edges; an assessor gets it right away (item <code>U</code>, priority Urgent). "Ad" makes it the assessor's segment, "not an ad" removes it for good.</span></div>
     <div class="node ok"><b>A short addition → glued</b><span>the user extended an AI segment of the same category, or marked right next to it, adding at most 20 seconds: viewers get one segment over both, no assessor. The AI's own segment waits aside and comes back if the user deletes the markup.</span></div>
