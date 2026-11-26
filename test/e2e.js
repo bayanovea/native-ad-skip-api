@@ -3741,6 +3741,133 @@ test('ai users: user intro and credits are served with no item, not over an AI e
     assert.deepEqual(await judgements(videoId), [], 'a dislike on a user entry is no evidence');
 });
 
+test('ai users: an old markup edited after the cut-off counts; a small gap is glued with it; another category is never glued; of two overlapping user segments the one with more authors is shown, the other waits', async () => {
+    const { sponsor: sp, self_promotion: self } = cats.prv;
+    const vid = '-1_456001311';
+    const { videoId } = await aiPublished(vid, 1);
+    const old = `${vid}-old`;
+    await markupOn(vid, old, sp, 400, 440);
+    runCalc('prv');
+    await ageMarkupsOf(old);
+    runUsers();
+    assert.deepEqual(await aiEntries(videoId), [[sp, 30, 70, 'ai', undefined]], 'old: not taken');
+    const put = await putMarkup('', { video_id: vid, user_id: old, category_id: sp, start: 400, end: 440, new_end: 445 });
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    runCalc('prv');
+    runUsers();
+    assert.deepEqual(await aiEntries(videoId), [[sp, 30, 70, 'ai', undefined], [sp, 400, 445, 'user', undefined]], 'edited: taken');
+
+    const gap = '-1_456001312';
+    const g = await aiPublished(gap, 1);
+    await markupOn(gap, `${gap}-u`, sp, 73, 88);
+    const other = '-1_456001313';
+    const o = await aiPublished(other, 1, [modelEntry(self, 30, 70)]);
+    await markupOn(other, `${other}-u`, sp, 70, 86);
+    const two = '-1_456001314';
+    const t2 = await aiPublished(two, 1);
+    for (const u of ['a', 'b']) await markupOn(two, `${two}-${u}`, sp, 300, 360);
+    await markupOn(two, `${two}-c`, self, 320, 380);
+    runCalc('prv');
+    runUsers();
+    assert.deepEqual([await aiEntries(g.videoId), await aiHidden(g.videoId), await aiItems(g.videoId)],
+        [[[sp, 30, 88, 'user', undefined]], [[sp, 30, 70, 'ai', 'glued']], []], '18 s with the gap');
+    assert.deepEqual(await aiEntries(o.videoId), [[self, 30, 70, 'ai', undefined], [sp, 70, 86, 'user', undefined]]);
+    assert.deepEqual((await aiItems(o.videoId)).map(i => [i.start, i.end, i.flagged_by[1]]), [[70, 86, 'shown']]);
+    assert.deepEqual(await aiEntries(t2.videoId), [[sp, 30, 70, 'ai', undefined], [sp, 300, 360, 'user', undefined]]);
+    assert.deepEqual((await aiItems(t2.videoId)).map(i => [i.start, i.end, i.flagged_by[0]]), [[300, 360, 'user markup: 2 authors, best rating 0']]);
+});
+
+test('ai users: an entry an assessor kept is never glued (held); a keep arriving while glued serves the model entry and the tail gets a U item; a keep at smaller bounds and a not_ad under the segment close it; a second user\'s shifted markup adds no item', async () => {
+    await aiFirstServer();
+    const sp = cats.prv.sponsor;
+    const keepModel = async (vid, videoId, batch) => {
+        const item = await addAiItem(batch, 'A1', vid, videoId, 30, 70);
+        await takeReview(batch);
+        return item;
+    };
+    const kept = '-1_456001315';
+    const k = await aiPublished(kept, 1);
+    await decideAi(await keepModel(kept, k.videoId, 'e2e-users-kept'), 'sponsor');
+    await markupOn(kept, `${kept}-tail`, sp, 68, 86);
+    const later = '-1_456001316';
+    const l = await aiPublished(later, 1);
+    await markupOn(later, `${later}-tail`, sp, 68, 86);
+    runCalc('prv');
+    runUsers();
+    assert.deepEqual(await aiEntries(k.videoId), [[sp, 30, 70, 'ai', undefined]]);
+    assert.deepEqual((await aiItems(k.videoId)).filter(i => i.item_code.startsWith('U')).map(i => [i.start, i.end, i.flagged_by[1]]),
+        [[30, 86, 'held: overlaps sponsor 30-70']]);
+    assert.deepEqual(await aiEntries(l.videoId), [[sp, 30, 86, 'user', undefined]], 'glued');
+    assert.equal((await decideAi(await keepModel(later, l.videoId, 'e2e-users-later'), 'sponsor')).ai_applied, true);
+    assert.deepEqual([await aiEntries(l.videoId), await aiHidden(l.videoId)], [[[sp, 30, 70, 'ai', undefined]], []], 'the keep took precedence');
+    assert.match(runUsers(), new RegExp(`ai users: video ${l.videoId}: \\+0 shown, 0 glued, 1 held, -0 removed`));
+    assert.deepEqual(await aiEntries(l.videoId), [[sp, 30, 70, 'ai', undefined]]);
+
+    const narrow = '-1_456001317';
+    const n = await aiPublished(narrow, 1);
+    await markupOn(narrow, `${narrow}-long`, sp, 200, 500);
+    const under = '-1_456001318';
+    const un = await aiPublished(under, 1, [modelEntry(sp, 30, 70)]);
+    await setAiRow(un.videoId, [modelEntry(sp, 30, 70)], [modelEntry(sp, 100, 130, { reason: 'review' })]);
+    const rejected = await addAiItem('e2e-users-rejected', 'A1', under, un.videoId, 100, 130);
+    await dbQuery(`INSERT INTO prv_review_verdicts (item_id, verdict, reviewer, source) VALUES ($1, 'not_ad', 'bayanovea', 'page')`, [rejected.id]);
+    await markupOn(under, `${under}-u`, sp, 98, 131);
+    const shift = '-1_456001319';
+    const s = await aiPublished(shift, 1);
+    await markupOn(shift, `${shift}-a`, sp, 450, 490);
+    runCalc('prv');
+    runUsers();
+    const [u] = await aiItems(n.videoId);
+    await takeReview(u.batch);
+    const res = await decideBounds(u, 'sponsor', { start: 250, end: 300, source: 'typed' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual(await aiEntries(n.videoId), [[sp, 30, 70, 'ai', undefined], [sp, 250, 300, 'review', undefined]]);
+    assert.deepEqual([await aiEntries(un.videoId), await aiItems(un.videoId).then(is => is.length)], [[[sp, 30, 70, 'ai', undefined]], 1],
+        'a not_ad on the stretch: no entry, no item');
+    await markupOn(shift, `${shift}-b`, sp, 453, 490); // the next 3-s bucket: a second segment, newer, 3 s off
+    runCalc('prv');
+    assert.equal((await prvSegmentRows(s.videoId)).length, 2);
+    runUsers();
+    assert.deepEqual(await aiEntries(n.videoId), [[sp, 30, 70, 'ai', undefined], [sp, 250, 300, 'review', undefined]]);
+    assert.equal((await aiItems(n.videoId)).length, 1, 'no second item for 200–500');
+    assert.deepEqual(await aiEntries(s.videoId), [[sp, 30, 70, 'ai', undefined], [sp, 450, 490, 'user', undefined]], 'still at the item\'s bounds');
+    assert.equal((await aiItems(s.videoId)).length, 1);
+});
+
+test('ai users: the later second opinion leaves a user entry served; ai judge does not count the markup behind a user entry as a conflict', async () => {
+    const sp = cats.prv.sponsor;
+    const vid = '-1_456001310';
+    const [src] = await dbQuery(`SELECT a.data, a.hidden, r.* FROM prv_ai_video_calculateds a JOIN prv_ai_runs r ON r.id = a.run_id
+        WHERE a.native_id = '-1_456001201'`);
+    const [{ id: videoId }] = await dbQuery(`INSERT INTO videos (native_id, duration, "createdAt", "updatedAt") VALUES ($1, 600, NOW(), NOW()) RETURNING id`, [vid]);
+    const [run] = await dbQuery(`INSERT INTO prv_ai_runs (native_id, video_id, prompt_sha, prompt_version, model, transcript, raw_output, track_overrun_s, yt_duration_s)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 600) RETURNING id`,
+    [vid, videoId, src.prompt_sha, src.prompt_version, src.model, JSON.stringify(src.transcript), JSON.stringify(src.raw_output)]);
+    const first = src.data.concat(src.hidden).filter(e => e.reason !== 'short').map(({ reason, rating, ...e }) => e).sort((a, b) => a.start - b.start);
+    const byStart = Object.fromEntries(first.map(e => [e.start, e]));
+    const user = userEntry(byStart[300].category_id, 290, 330);
+    await dbQuery(`INSERT INTO prv_ai_video_calculateds (video_id, native_id, run_id, data) VALUES ($1, $2, $3, $4)`,
+        [videoId, vid, run.id, JSON.stringify([byStart[30], byStart[75], user])]);
+    await dbQuery(`INSERT INTO prv_ai_videos (native_id, status) VALUES ($1, 'published')`, [vid]);
+    const r = runAi(['detect'], budgetEnv(200, 1000));
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout + r.stderr, /ai detect: -1_456001310 confirmed later by claude-haiku-5-5: 1 confirmed, 1 unconfirmed \(0 kept by review\), 1 moved to hidden/);
+    const ai = await aiCalculated(vid);
+    assert.deepEqual(ai.data.map(e => [e.start, e.end, e.source]), [[30, 70, 'ai'], [290, 330, 'user']]);
+    assert.deepEqual(ai.hidden.map(e => [e.start, e.end, e.reason]), [[75, 90, 'unconfirmed']]);
+
+    const judged = '-1_456001320';
+    const { videoId: jId } = await aiPublished(judged, 1);
+    await dbQuery(`UPDATE prv_ai_videos SET judged_at = NOW() - INTERVAL '7 hours' WHERE native_id = $1`, [judged]);
+    await markupOn(judged, `${judged}-u`, sp, 400, 440);
+    runCalc('prv');
+    runUsers();
+    assert.deepEqual(await aiEntries(jId), [[sp, 30, 70, 'ai', undefined], [sp, 400, 440, 'user', undefined]]);
+    const j = runAi(['judge'], { AI_DETECT_ENABLED: undefined, AI_JUDGE_ENABLED: 'on' });
+    assert.doesNotMatch(j.stdout + j.stderr, new RegExp(`ai judge: ${jId} `), 'no conflicting markup: no new evidence, no LLM call');
+    assert.deepEqual(await judgements(jId), []);
+});
+
 test('ai users: switching off removes user entries and un-glues within one tick, kept (review) entries stay, the heartbeat row is gone', async () => {
     const sp = cats.prv.sponsor;
     const vid = '-1_456001309';
