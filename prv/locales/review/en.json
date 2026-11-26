@@ -59,6 +59,7 @@
   "current_legacy_wrong_text": "(legacy \"Wrong text\": re-decide with the track flag)",
   "current_by": "by {reviewer} ({source}), {date}",
   "ai_badge": "AI segment",
+  "ai_user_badge": "User segment",
   "ai_judge_reason": "Judge:",
   "current_flagged_by": "Flagged by:",
   "history_when": "When",
@@ -172,7 +173,7 @@
   "hotkey_bounds": "Go to the start time",
   "rules_bounds_html": "<strong>Times</strong> (optional): the lead-in (\"and now a word from our sponsor\") is part of the ad, the return to the topic is not, \"link in the description\" is part of the ad.",
   "onb_bounds_title": "Start and end times",
-  "onb_bounds_html": "<p>The detector often puts an ad's times slightly inside it: it starts a few seconds late and ends early. If you see that and a viewer would notice, correct the times. It is optional: most items leave the fields empty.</p><ul><li>Select a stretch of text in \"Subtitles around the item\" with the mouse: the start is the first selected word, the end the last one. Or type the time from the player: 1:05, 1:02:30 or plain seconds. Key <kbd>{bounds}</kbd> goes to the Start field.</li><li>Where the edge is: the lead-in (\"and now a word from our sponsor\") is part of the ad; the return to the topic is not; \"link in the description\" is part of the ad.</li><li>Times go only with a Sponsor or Self-promotion verdict.</li><li>Viewers get the corrected times right away. A segment shorter than {seconds} seconds is saved with your times but not served while this limit stands: still set the real times.</li></ul>",
+  "onb_bounds_html": "<p>The detector often puts an ad's times slightly inside it: it starts a few seconds late and ends early. If you see that and a viewer would notice, correct the times. It is optional: most items leave the fields empty.</p><ul><li>Select a stretch of text in \"Subtitles around the item\" with the mouse: the start is the first selected word, the end the last one. Or type the time from the player: 1:05, 1:02:30 or plain seconds. Key <kbd>{bounds}</kbd> goes to the Start field.</li><li>Where the edge is: the lead-in (\"and now a word from our sponsor\") is part of the ad; the return to the topic is not; \"link in the description\" is part of the ad.</li><li>Times go only with a Sponsor or Self-promotion verdict.</li><li>Viewers get the corrected times right away. A segment shorter than {seconds} seconds is saved with your times but not served while this limit stands: still set the real times.</li><li>If the item is longer than the ad (it happens with stretches a viewer marked), give the verdict on the ad and its times. If there is no ad in it at all, Not an ad.</li></ul>",
   "js_bounds_both": "Fill in both start and end (or clear both).",
   "js_saved_bounds": ", times {start} – {end}"
 }

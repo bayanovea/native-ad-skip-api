@@ -199,9 +199,12 @@ function judgeReason(item) {
     return line && line.includes(': ') ? line.slice(line.indexOf(': ') + 2) : null;
 }
 
+// A user segment's item (ai/pipeline/users.go: first flagged_by line "user markup: …"): a viewer marked it, not the model.
+const isUserItem = item => typeof (item.flagged_by || [])[0] === 'string' && item.flagged_by[0].startsWith('user markup:');
+
 function aiJudgeLine(item, t) {
     const reason = judgeReason(item);
-    return `<div class="current ai-judge" style="margin-top:10px"><span class="badge ai-badge">${t('ai_badge')}</span>${reason ? ` <span class="muted">${t('ai_judge_reason')}</span> ${escapeHtml(reason)}` : ''}</div>`;
+    return `<div class="current ai-judge" style="margin-top:10px"><span class="badge ai-badge">${t(isUserItem(item) ? 'ai_user_badge' : 'ai_badge')}</span>${reason ? ` <span class="muted">${t('ai_judge_reason')}</span> ${escapeHtml(reason)}` : ''}</div>`;
 }
 
 // `reviewer`'s latest verdict on a repository item (its history is newest first), or null.

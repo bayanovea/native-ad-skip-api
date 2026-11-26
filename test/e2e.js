@@ -3647,6 +3647,8 @@ test('ai users: a new sponsor markup far from the AI entry is served within a ti
 
     await takeReview(items[0].batch);
     assert.equal((await decideAi(items[0], 'not_ad')).ai_applied, true);
+    const page = (await request('GET', `/admin/review/${items[0].batch}?item=${items[0].item_code}&reviewer=${REVIEWER}&verifyBearerToken=${MOD_AUTH}`, null)).body;
+    assert.ok(page.includes(RU.text('ai_user_badge')) && !page.includes(RU.text('ai_badge')), 'after the verdict: a user segment, not an AI one');
     assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 500, 540]]);
     runUsers();
     assert.deepEqual(await servedBounds(vid), [[sp, 30, 70], [sp, 500, 540]], 'never added again');
